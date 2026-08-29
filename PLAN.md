@@ -105,7 +105,8 @@ to be imported, and `internal/` would make each of these unreachable to anyone
 embedding it — which is the entry point the project exists for.
 
 ```
-cmd/cloudrig/            main: flags, env, wiring, graceful shutdown
+cloudrig.go              package cloudrig: Start, MustStart, Clock, Reset
+cmd/cloudrig/            package main: flags, env, wiring, graceful shutdown
 transport/               h2c mux (gRPC + REST on one port), codecs
 services/
   storage/               GCS: handlers + semantics, no proto/HTTP types leak down
@@ -116,9 +117,19 @@ core/
   events/                in-process event bus (defined, left unsubscribed)
 store/                   Store interface + memory impl + blob tree
 lint/                    stdlib AST check for forbidden time calls
-pkg/emulator/            public library API: Start, MustStart, Clock, Reset
 test/conformance/        one suite, runs against emulator or real GCP by env var
 ```
+
+The public library API is the **module root**, not `pkg/emulator`. The call site
+is the product here — `cloudrig.MustStart(t)` is what spec.md itself writes, and
+it is what a reader of someone else's test has to recognise instantly.
+`emulator.MustStart(t)` reads like a detail of a library rather than the library.
+`pkg/` would also be a second layer of nesting-by-convention immediately after
+removing the first.
+
+`cmd/cloudrig` imports the root package and adds only flags, env and signal
+handling; every behaviour it exposes has to be reachable from the library entry
+point too, or the binary has grown a feature tests cannot use.
 
 This is a deviation from the layout in spec.md, which nested everything under
 `internal/`.
@@ -137,7 +148,7 @@ Each step lands green before the next begins.
 | 5 | blob tree: SHA-256 content-addressed, one-pass TeeReader into crc32c + md5 | 1 GiB through the writer, flat `HeapAlloc` |
 | 6 | `services/storage` semantics, no HTTP types | criteria 3, 4, 5, 6 tested at this layer directly |
 | 7 | `transport`: h2c mux, `EscapedPath()` routing, multipart parse | criterion 2 (`logs/2026/app.log`) |
-| 8 | `pkg/emulator` | criteria 1, 7 |
+| 8 | root `package cloudrig` | criteria 1, 7 |
 | 9 | `test/conformance` + admin endpoints | criteria 9, 10 |
 | 10 | RSS/heap benchmark | criterion 8 |
 

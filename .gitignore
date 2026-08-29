@@ -2,3 +2,4 @@
 # module. Local to this checkout; CI has no parent workspace to shadow.
 go.work
 go.work.sum
+.claude 
