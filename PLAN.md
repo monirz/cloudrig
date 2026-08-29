@@ -14,6 +14,21 @@ claim. Every decision below is downstream of that.
 
 ## Decisions against the spec
 
+### D0 — Go 1.25
+
+spec.md said Go 1.23+. Two things moved it:
+
+- **h2c needs 1.24.** `net/http` gained `Server.Protocols` and
+  `SetUnencryptedHTTP2` in Go 1.24, which serves cleartext HTTP/2 and HTTP/1.1
+  on one listener with no dependency. Before that, the only way to do it was
+  `golang.org/x/net/http2/h2c`. The single-port claim is core to the project, so
+  buying it for free was worth the floor.
+- **1.25 over 1.24** is the current floor by choice, not necessity. Nothing here
+  requires it today.
+
+The practical cost is that anyone importing cloudrig needs 1.25, which is well
+inside Go's own support window.
+
 ### D1 — Upload types: `media` + `multipart` in scope, resumable stays 501
 
 The spec scoped only `uploadType=media`, but the real `cloud.google.com/go/storage`

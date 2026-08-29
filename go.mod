@@ -1,3 +1,3 @@
 module github.com/monirz/cloudrig
 
-go 1.24
+go 1.25
