@@ -15,8 +15,7 @@ import (
 
 var epoch = time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 
-// serve starts a listener speaking both HTTP/1.1 and cleartext HTTP/2, exactly
-// as cmd/cloudrig and the library entry point will.
+// serve starts a listener speaking HTTP/1.1 and h2c, as the real ones do.
 func serve(t *testing.T, cfg transport.Config) *httptest.Server {
 	t.Helper()
 	if cfg.Clock == nil {
@@ -29,9 +28,8 @@ func serve(t *testing.T, cfg transport.Config) *httptest.Server {
 	return srv
 }
 
-// h2cClient speaks cleartext HTTP/2 with prior knowledge, the way a gRPC client
-// does. Without this the gRPC dispatch branch could only be reached with a
-// synthetic request, which is not evidence that a real client reaches it.
+// h2cClient speaks h2c with prior knowledge, as a gRPC client does. Without it
+// the gRPC branch could only be reached by a synthetic request.
 func h2cClient() *http.Client {
 	tr := &http.Transport{Protocols: new(http.Protocols)}
 	tr.Protocols.SetUnencryptedHTTP2(true)
@@ -88,16 +86,15 @@ func TestGRPCDispatch(t *testing.T) {
 			wantReason:  "notImplemented",
 		},
 		{
-			// Real gRPC clients send a subtype, so the discrimination is a
-			// prefix test rather than equality.
+			// Real clients send a subtype, so the test is a prefix, not equality.
 			name:        "application/grpc+proto is still gRPC",
 			contentType: "application/grpc+proto",
 			wantStatus:  http.StatusNotImplemented,
 			wantReason:  "notImplemented",
 		},
 		{
-			// HTTP/2 alone is not gRPC: an ordinary h2 client hitting an
-			// unknown REST path must get the REST 404, not the gRPC 501.
+			// HTTP/2 alone is not gRPC: an h2 client on an unknown REST path
+			// must get the REST 404, not the gRPC 501.
 			name:        "HTTP/2 without the gRPC content type is REST",
 			contentType: "application/json",
 			wantStatus:  http.StatusNotFound,
@@ -153,9 +150,8 @@ func TestGRPC501NamesTheOperation(t *testing.T) {
 	}
 }
 
-// TestPercentEncodedSegment is acceptance criterion 4. An object named
-// logs/2026/app.log arrives as one percent-encoded segment; routing on
-// r.URL.Path would decode it first and split it into three.
+// TestPercentEncodedSegment is acceptance criterion 4: logs/2026/app.log
+// arrives as one encoded segment, and routing on Path would split it in three.
 func TestPercentEncodedSegment(t *testing.T) {
 	t.Parallel()
 
@@ -188,9 +184,7 @@ func TestPercentEncodedSegment(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			got = ""
-			// Build the URL with the escaped path preserved: parsing the string
-			// would be enough here, but Opaque-free construction keeps net/http
-			// from re-encoding it.
+
 			resp, err := http.Get(srv.URL + tc.path)
 			if err != nil {
 				t.Fatal(err)
@@ -255,9 +249,8 @@ func TestHealth(t *testing.T) {
 		Runner:  transport.RunnerInfo{Configured: "auto", Mode: "none"},
 	})
 
-	// Uptime is read from the injected clock, so advancing the fake clock must
-	// move it. That makes health an end-to-end check that the clock really is
-	// injected rather than shadowed by a time.Now somewhere below.
+	// Advancing the fake clock must move uptime: that proves the clock reaches
+	// bottom rather than being shadowed by a time.Now below.
 	fake.Advance(90 * time.Second)
 
 	resp, err := http.Get(srv.URL + "/_emu/health")

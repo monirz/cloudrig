@@ -8,17 +8,13 @@ import (
 	"sync"
 )
 
-// Memory is an in-process Store. Every mutation takes the write lock, which
-// makes compare-and-swap trivially atomic: the compare and the swap happen
-// without releasing it, so two writers racing the same precondition cannot both
-// observe the version they need.
+// Memory is an in-process Store. Every mutation holds the write lock across
+// both the compare and the swap, which is what makes the CAS atomic.
 type Memory struct {
 	mu sync.RWMutex
 	m  map[string]entry
 
-	// keys is the sorted key set, maintained on write so List does not sort the
-	// whole map on every call. Listing is the hot path for object enumeration;
-	// writes are comparatively rare.
+	// keys is sorted on write so List need not sort the map on every call.
 	keys []string
 }
 
@@ -66,8 +62,7 @@ func (s *Memory) Put(ctx context.Context, key string, val []byte, ifVersion uint
 	if !ok {
 		s.insertKey(key)
 	}
-	// Versions start at 1, so a fresh key lands on 1 and 0 stays reserved for
-	// "must not exist" in the precondition arguments.
+	// A fresh key lands on 1, keeping 0 reserved for "must not exist".
 	next := e.version + 1
 	s.m[key] = entry{val: clone(val), version: next}
 	return next, nil
@@ -113,8 +108,7 @@ func (s *Memory) List(ctx context.Context, prefix string, limit int, pageToken s
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	// sort.SearchStrings finds the first key >= after; a page token names the
-	// last key already returned, so skip past an exact match.
+	// A page token names the last key returned, so skip past an exact match.
 	i := sort.SearchStrings(s.keys, after)
 	if pageToken != "" && i < len(s.keys) && s.keys[i] == after {
 		i++
@@ -176,8 +170,7 @@ func (s *Memory) removeKey(key string) {
 	}
 }
 
-// clone defends the map against callers mutating a slice they handed in or got
-// back. Metadata values are small; payload bytes never reach this package.
+// clone stops callers mutating a slice they handed in or got back.
 func clone(b []byte) []byte {
 	if b == nil {
 		return nil
@@ -187,9 +180,8 @@ func clone(b []byte) []byte {
 	return c
 }
 
-// Page tokens are opaque by contract, so they are encoded rather than handed
-// out as raw keys — a caller that parses one is relying on something we do not
-// promise.
+// Page tokens are opaque by contract, so they are encoded rather than raw
+// keys: a caller that parses one relies on something we do not promise.
 func encodeToken(key string) string {
 	return base64.RawURLEncoding.EncodeToString([]byte(key))
 }

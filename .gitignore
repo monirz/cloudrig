@@ -2,4 +2,13 @@
 # module. Local to this checkout; CI has no parent workspace to shadow.
 go.work
 go.work.sum
-.claude 
+
+# Build output
+/cloudrig
+
+# Working notes and briefs, not part of the published module.
+.claude/
+PLAN.md
+spec.md
+UNSUPPORTED.md
+docs/

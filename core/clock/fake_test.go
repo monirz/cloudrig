@@ -110,8 +110,7 @@ func TestCallbackObservesItsOwnDeadline(t *testing.T) {
 func TestAdvanceDrainsTimersScheduledByCallbacks(t *testing.T) {
 	t.Parallel()
 
-	// A callback that reschedules itself must not survive a window wide enough
-	// to cover every repeat: Advance drains past d rather than sweeping once.
+	// Advance drains past d, so a self-rescheduling callback terminates.
 	c := clock.NewFake(epoch)
 	n := 0
 	var tick func()
@@ -224,7 +223,7 @@ func TestAdvanceIsNotReentrant(t *testing.T) {
 func TestConcurrentSchedulingIsSafe(t *testing.T) {
 	t.Parallel()
 
-	// -race guards the queue; the count guards the ordering insert.
+	// -race guards the queue; the count guards the sorted insert.
 	c := clock.NewFake(epoch)
 	var mu sync.Mutex
 	fired := 0
@@ -269,9 +268,8 @@ func TestRealClockSatisfiesTheInterface(t *testing.T) {
 	}
 }
 
-// TestAcceptance3 is acceptance criterion 3 from the step 1 brief, written
-// literally: three callbacks at 1s, 5s and 10s; Advance(6s) runs exactly two,
-// in order, and both have already run by the time Advance returns.
+// TestAcceptance3 is acceptance criterion 3: 1s/5s/10s, Advance(6s) runs
+// exactly two, in order, before returning.
 func TestAcceptance3(t *testing.T) {
 	t.Parallel()
 
@@ -291,8 +289,7 @@ func TestAcceptance3(t *testing.T) {
 
 	c.Advance(6 * time.Second)
 
-	// Read without synchronisation on purpose: if Advance returned before the
-	// callbacks ran, this is a data race and -race says so.
+	// Unsynchronised on purpose: if Advance returned early, -race says so.
 	if got := strings.Join(fired, ","); got != "1s,5s" {
 		t.Errorf("fired = %q, want %q", got, "1s,5s")
 	}

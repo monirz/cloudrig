@@ -1,15 +1,12 @@
-// Package clock is the only place in cloudrig permitted to read wall-clock
-// time or schedule against it. Everything else takes a Clock, so that tests can
-// substitute FakeClock and drive time forward deterministically instead of
-// sleeping. The lint package enforces that.
+// Package clock is the only place permitted to read wall-clock time.
+// Everything else takes a Clock so tests can drive time deterministically.
 package clock
 
 import "time"
 
 // Timer is a scheduled callback that has not necessarily run yet.
 type Timer interface {
-	// Stop cancels the timer, reporting whether it did so before the callback
-	// ran. A second Stop returns false.
+	// Stop cancels the timer, reporting whether it beat the callback.
 	Stop() bool
 }
 
@@ -17,10 +14,8 @@ type Timer interface {
 type Clock interface {
 	Now() time.Time
 
-	// AfterFunc schedules f to run once, d in the future. A non-positive d is
-	// due immediately. The callback runs on an unspecified goroutine for a real
-	// clock, and synchronously inside Advance for a fake one — so f must not
-	// assume it holds any caller's lock.
+	// AfterFunc runs f once, d in the future; a non-positive d is due now.
+	// f runs on an unspecified goroutine, or synchronously inside Advance.
 	AfterFunc(d time.Duration, f func()) Timer
 }
 

@@ -75,7 +75,7 @@ func TestGet(t *testing.T) {
 		t.Errorf("Get = (%q, %d), want (\"v1\", 1)", val, ver)
 	}
 
-	// A caller mutating what Get returned must not reach into the store.
+	// A caller mutating what Get returned must not reach the store.
 	val[0] = 'X'
 	again, _, _ := s.Get(ctx, "k")
 	if string(again) != "v1" {
@@ -285,8 +285,7 @@ func TestReset(t *testing.T) {
 }
 
 // TestConcurrentCASHasExactlyOneWinner is acceptance criterion 4 at the store
-// layer: GCS ifGenerationMatch is built directly on this, so if the compare and
-// the swap can come apart here, no amount of care above will fix it.
+// layer: GCS ifGenerationMatch is built directly on this.
 func TestConcurrentCASHasExactlyOneWinner(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()

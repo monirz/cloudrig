@@ -5,22 +5,17 @@ import (
 	"fmt"
 )
 
-// Error is a canonical error.
-//
-// Reason and Location are first-class rather than entries in a generic detail
-// map: Google's JSON envelope always carries errors[].reason and often
-// errors[].location, clients branch on reason, and it is the field emulators
-// most often drop.
+// Error is a canonical error. Reason and Location are first-class because
+// clients branch on errors[].reason, not on a generic detail map.
 type Error struct {
 	Code    Code
 	Message string
 
-	// Reason is the lowerCamel string clients branch on: "conditionNotMet",
-	// "notFound", "notImplemented".
+	// Reason is the lowerCamel string clients branch on: "conditionNotMet".
 	Reason string
 
-	// Location names the request element at fault — a header, query parameter
-	// or field — and LocationType says which of those it is.
+	// Location names the request element at fault; LocationType says which
+	// kind it is ("header", "parameter").
 	Location     string
 	LocationType string
 
@@ -31,14 +26,12 @@ type Error struct {
 
 	cause error
 
-	// httpStatus is 0 until a caller sets one explicitly. HTTPStatus falls back
-	// to the canonical table, and Explicit reports which happened, so a lint can
-	// fail the build on a service handler that forgot.
+	// httpStatus is 0 until set explicitly; HTTPStatusIsExplicit reports which.
 	httpStatus int
 }
 
-// New returns an error with the canonical HTTP status for code. Service
-// handlers should chain WithHTTPStatus rather than relying on that default.
+// New returns an error carrying the canonical HTTP status for code. Service
+// handlers should chain WithHTTPStatus rather than rely on that default.
 func New(code Code, msg string) *Error {
 	return &Error{Code: code, Message: msg}
 }
@@ -55,9 +48,8 @@ func Wrap(err error, code Code, format string, a ...any) *Error {
 	return e
 }
 
-// From coerces any error into an *Error. An error that is not already one
-// becomes Internal, because an unclassified failure is a bug in the emulator
-// rather than a fault in the request.
+// From coerces any error into an *Error. An unclassified one becomes Internal:
+// a failure we did not classify is our bug, not the caller's.
 func From(err error) *Error {
 	if err == nil {
 		return nil
@@ -69,9 +61,8 @@ func From(err error) *Error {
 	return Wrap(err, Internal, "%s", err.Error())
 }
 
-// NewUnimplemented names the operation, per rule 5 in spec.md: unimplemented
-// must be loud, and a 501 that does not say what was not implemented is not
-// loud.
+// NewUnimplemented names the operation: a 501 that does not say what is
+// missing is not loud enough (spec.md rule 5).
 func NewUnimplemented(op string) *Error {
 	return Newf(Unimplemented, "operation not implemented: %s", op).
 		WithHTTPStatus(501).
@@ -87,7 +78,7 @@ func (e *Error) Error() string {
 
 func (e *Error) Unwrap() error { return e.cause }
 
-// Is lets callers match on code alone: errors.Is(err, gerr.New(gerr.NotFound, "")).
+// Is matches on code alone: errors.Is(err, gerr.New(gerr.NotFound, "")).
 func (e *Error) Is(target error) bool {
 	var t *Error
 	if !errors.As(target, &t) {
@@ -96,8 +87,8 @@ func (e *Error) Is(target error) bool {
 	return e.Code == t.Code
 }
 
-// WithHTTPStatus states the status this error renders as. Service handlers call
-// it at every user-visible construction site; see the note on canonicalHTTP.
+// WithHTTPStatus states the status this error renders as. Service handlers
+// call it at every user-visible construction site.
 func (e *Error) WithHTTPStatus(status int) *Error {
 	e.httpStatus = status
 	return e
@@ -109,8 +100,8 @@ func (e *Error) WithReason(reason string) *Error {
 	return e
 }
 
-// WithLocation names the request element at fault. locationType is "header",
-// "parameter" or "" when it does not apply.
+// WithLocation names the request element at fault; locationType is "header",
+// "parameter" or "".
 func (e *Error) WithLocation(location, locationType string) *Error {
 	e.Location, e.LocationType = location, locationType
 	return e
@@ -128,8 +119,7 @@ func (e *Error) With(details ...Detail) *Error {
 	return e
 }
 
-// HTTPStatus is the explicit status if one was set, otherwise the canonical
-// mapping for the code.
+// HTTPStatus is the explicit status if set, else the canonical mapping.
 func (e *Error) HTTPStatus() int {
 	if e.httpStatus != 0 {
 		return e.httpStatus
@@ -140,7 +130,6 @@ func (e *Error) HTTPStatus() int {
 	return 500
 }
 
-// HTTPStatusIsExplicit reports whether WithHTTPStatus was called. It is the
-// hook for the service-layer check that turns "we forgot the status" into a
-// build failure rather than a wrong status a client discovers later.
+// HTTPStatusIsExplicit reports whether WithHTTPStatus was called, so a
+// service-layer check can fail the build on a handler that forgot.
 func (e *Error) HTTPStatusIsExplicit() bool { return e.httpStatus != 0 }

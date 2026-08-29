@@ -13,11 +13,8 @@ type Health struct {
 	Runner  RunnerInfo `json:"runner"`
 }
 
-// health reports liveness, version and uptime.
-//
-// Uptime comes from the injected clock, not the wall clock, so a test driving a
-// FakeClock sees the uptime it asked for. That also means health is a working
-// end-to-end check that the clock really is injected all the way down.
+// health reports liveness, version and uptime. Uptime comes from the injected
+// clock, which makes this an end-to-end check that the clock reaches bottom.
 func (h *Handler) health(w http.ResponseWriter, r *http.Request, _ Params) error {
 	body := Health{
 		Status:  "ok",

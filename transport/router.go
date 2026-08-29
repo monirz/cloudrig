@@ -11,18 +11,12 @@ import (
 // Params holds the decoded capture values from a matched route.
 type Params map[string]string
 
-// HandlerFunc is a route handler. Returning an error is the normal way to fail:
-// the router renders it through gerr, so no handler has to remember to write an
-// envelope by hand.
+// HandlerFunc is a route handler. Returning an error is the normal failure
+// path: the router renders it through gerr.
 type HandlerFunc func(w http.ResponseWriter, r *http.Request, p Params) error
 
-// router matches on r.URL.EscapedPath(), never r.URL.Path.
-//
-// net/http decodes Path before a handler sees it, which makes a%2Fb and a/b
-// indistinguishable — and GCP resource segments arrive percent-encoded, so an
-// object literally named "logs/app.log" is exactly the case that breaks. We
-// split the escaped path on "/" and unescape each captured segment ourselves,
-// so a %2F inside a segment stays inside that segment.
+// router matches on EscapedPath, never Path: net/http decodes Path first,
+// which makes a%2Fb and a/b indistinguishable. GCS object names need both.
 type router struct {
 	routes []route
 }
@@ -38,10 +32,8 @@ type segment struct {
 	capture string // non-empty when this segment is a {name} capture
 }
 
-// handle registers a route. Pattern segments wrapped in braces capture that one
-// segment; everything else matches literally. There is deliberately no
-// multi-segment wildcard: nothing needs one, and a matcher nothing exercises is
-// a matcher that rots.
+// handle registers a route. Braced segments capture; everything else matches
+// literally. There is no multi-segment wildcard because nothing needs one.
 func (rt *router) handle(method, pattern string, h HandlerFunc) {
 	raw := strings.Split(strings.TrimPrefix(pattern, "/"), "/")
 	segs := make([]segment, len(raw))
@@ -55,9 +47,8 @@ func (rt *router) handle(method, pattern string, h HandlerFunc) {
 	rt.routes = append(rt.routes, route{method: method, segs: segs, h: h})
 }
 
-// match finds a route for the request. It reports pathOK separately so the
-// caller can tell 404 from 405: a path that exists under a different method is
-// a different failure than one that does not exist.
+// match finds a route, reporting pathOK separately so the caller can tell 404
+// from 405.
 func (rt *router) match(method, escapedPath string) (r *route, p Params, pathOK bool) {
 	got := strings.Split(strings.TrimPrefix(escapedPath, "/"), "/")
 
@@ -87,9 +78,7 @@ func (rr *route) matchPath(got []string) (Params, bool) {
 			}
 			continue
 		}
-		// Unescape only here, one segment at a time. PathUnescape leaves an
-		// encoded slash as a literal slash inside this value rather than
-		// letting it split the path.
+		// Unescape one segment at a time, so a %2F stays inside this value.
 		val, err := url.PathUnescape(got[i])
 		if err != nil {
 			return nil, false

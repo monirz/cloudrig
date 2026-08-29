@@ -1,15 +1,9 @@
-// Package gerr is cloudrig's canonical error type. Handlers construct errors
-// here rather than with errors.New, so that every failure carries a canonical
-// code, an explicit HTTP status, and the reason string clients actually branch
-// on.
-//
-// gerr knows nothing about any service. Service packages state their own status
-// and reason at each construction site; the canonical table below is a fallback
-// for internal and unexpected failures, not the primary path. See PLAN.md.
+// Package gerr is cloudrig's canonical error type: a code, an explicit HTTP
+// status, and the reason string clients branch on. It knows of no service.
 package gerr
 
 // Code is a canonical error code. Values match google.rpc.Code numerically, so
-// that adding a gRPC rendering later is a cast rather than a translation.
+// a gRPC rendering is later a cast rather than a translation.
 type Code int32
 
 const (
@@ -32,9 +26,8 @@ const (
 	Unauthenticated    Code = 16
 )
 
-// codeNames are the google.rpc.Code enum names. They appear verbatim as the
-// JSON envelope's "status" field, so the spelling matters — note CANCELLED,
-// which is Google's spelling and not Go's.
+// codeNames appear verbatim as the envelope's "status", so spelling matters —
+// note CANCELLED, Google's spelling and not Go's.
 var codeNames = map[Code]string{
 	OK:                 "OK",
 	Canceled:           "CANCELLED",
@@ -62,14 +55,8 @@ func (c Code) String() string {
 	return "UNKNOWN"
 }
 
-// canonicalHTTP is the gRPC-to-HTTP mapping published for gRPC-first APIs.
-//
-// It is a fallback, deliberately not the primary path. Google's REST surfaces
-// diverge from it constantly — GCS answers a failed precondition with 412 where
-// this table says 400, and returns 404 for a missing generation that also fails
-// one. A service that leans on this table ships wrong statuses by omission, and
-// the symptom is a real client's retry policy misbehaving months later. Service
-// handlers call WithHTTPStatus at every user-visible construction site.
+// canonicalHTTP is a fallback, not the primary path: Google's REST surfaces
+// diverge from it (GCS answers 412 where this says 400). See PLAN.md D-B.
 var canonicalHTTP = map[Code]int{
 	OK:                 200,
 	Canceled:           499,

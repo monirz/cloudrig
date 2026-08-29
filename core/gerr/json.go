@@ -10,15 +10,12 @@ import (
 // Envelope is the GCP JSON error body:
 //
 //	{"error":{"code":412,"message":"...","errors":[...],"status":"FAILED_PRECONDITION"}}
-//
-// It is exported so tests can assert on the structure without going through an
-// HTTP round trip.
 type Envelope struct {
 	Error EnvelopeError `json:"error"`
 }
 
-// EnvelopeError is the "error" object. Code is the HTTP status, not the
-// canonical code — the canonical code appears as Status.
+// EnvelopeError is the "error" object. Code is the HTTP status; the canonical
+// code appears as Status.
 type EnvelopeError struct {
 	Code    int             `json:"code"`
 	Message string          `json:"message"`
@@ -37,13 +34,8 @@ type EnvelopeEntry struct {
 
 const defaultDomain = "global"
 
-// Envelope renders the error into the JSON body shape.
-//
-// The flat errors[] array is where the structured google.rpc details collapse.
-// The first-class Reason and Location produce the primary entry; each detail
-// violation appends another. An ErrorInfo fills in Reason and Domain only when
-// the first-class fields left them empty, so a handler that set both does not
-// get a contradictory duplicate.
+// Envelope renders the error into the JSON body. Reason and Location produce
+// the primary errors[] entry; each detail violation appends another.
 func (e *Error) Envelope() Envelope {
 	domain := e.Domain
 	reason := e.Reason
@@ -52,6 +44,7 @@ func (e *Error) Envelope() Envelope {
 		if !ok {
 			continue
 		}
+		// ErrorInfo only fills gaps, so a handler that set both wins.
 		if reason == "" {
 			reason = lowerCamel(info.Reason)
 		}
@@ -106,9 +99,8 @@ func (e *Error) Envelope() Envelope {
 	}}
 }
 
-// WriteJSON renders err as the GCP JSON error envelope. A nil error, or one
-// that is not a *Error, is coerced through From — a handler must never be able
-// to emit a body that is not this shape.
+// WriteJSON renders err as the GCP JSON error envelope, coercing through From
+// so no handler can emit a body of another shape.
 func WriteJSON(w http.ResponseWriter, err error) {
 	e := From(err)
 	if e == nil {
@@ -117,14 +109,12 @@ func WriteJSON(w http.ResponseWriter, err error) {
 
 	w.Header().Set("Content-Type", "application/json; charset=UTF-8")
 	w.WriteHeader(e.HTTPStatus())
-	// The status line is already committed, so a marshal failure here can only
-	// be logged, not reported. Envelope contains no unmarshalable types.
+	// Status is already committed; Envelope holds no unmarshalable types.
 	_ = json.NewEncoder(w).Encode(e.Envelope())
 }
 
-// lowerCamel converts an UPPER_SNAKE proto reason to the lowerCamel spelling
-// the JSON envelope uses: CONDITION_NOT_MET -> conditionNotMet. A reason that
-// is already lowerCamel passes through untouched.
+// lowerCamel converts CONDITION_NOT_MET to conditionNotMet, passing an already
+// lowerCamel reason through untouched.
 func lowerCamel(s string) string {
 	if s == "" || !strings.ContainsRune(s, '_') {
 		return s

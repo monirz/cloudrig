@@ -1,17 +1,12 @@
 package gerr
 
-// Detail is a google.rpc error detail payload.
-//
-// These mirror the proto containers rather than flattening them — BadRequest
-// holds field violations, it is not itself one — so that swapping in the real
-// generated types later is mechanical. Step 1 ships no gRPC dependency: an
-// unused grpc.NewServer is not a seam, it is a dependency with no test.
+// Detail is a google.rpc error detail payload. These mirror the proto
+// containers so swapping in the generated types later is mechanical.
 type Detail interface{ isDetail() }
 
-// ErrorInfo is google.rpc.ErrorInfo: the machine-readable reason for a failure.
+// ErrorInfo is google.rpc.ErrorInfo: the machine-readable reason.
 type ErrorInfo struct {
-	// Reason is UPPER_SNAKE_CASE here, matching the proto convention, and is
-	// lowerCamel'd when rendered into the JSON envelope.
+	// Reason is UPPER_SNAKE here, lowerCamel'd when rendered.
 	Reason   string
 	Domain   string
 	Metadata map[string]string
@@ -32,16 +27,15 @@ type FieldViolation struct {
 	Description string
 }
 
-// PreconditionFailure is google.rpc.PreconditionFailure: the request was
-// well-formed but the system state did not permit it.
+// PreconditionFailure is google.rpc.PreconditionFailure: well-formed request,
+// state did not permit it.
 type PreconditionFailure struct {
 	Violations []PreconditionViolation
 }
 
 func (PreconditionFailure) isDetail() {}
 
-// PreconditionViolation names one unmet precondition. Type is the kind of
-// precondition, Subject the resource it applied to.
+// PreconditionViolation names one unmet precondition.
 type PreconditionViolation struct {
 	Type        string
 	Subject     string

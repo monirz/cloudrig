@@ -1,5 +1,5 @@
-// Package lint holds build-time invariants that are cheaper to enforce as a
-// test than as a code review habit.
+// Package lint holds build-time invariants cheaper to enforce as a test than
+// as a code review habit.
 package lint
 
 import (
@@ -14,14 +14,8 @@ import (
 	"testing"
 )
 
-// forbidden lists the time package identifiers that would let wall-clock time
-// leak into the emulator. Now, Since and Until all read the real clock; the
-// rest schedule against it. Every one of them must come from core/clock's
-// Clock interface instead, so that FakeClock.Advance can drive them
-// deterministically.
-//
-// go vet has no analyzer for this, and golangci-lint's forbidigo would be a
-// dependency for something go/ast does in eighty lines.
+// forbidden lists the time identifiers that leak wall-clock time in. Now,
+// Since and Until read the real clock; the rest schedule against it.
 var forbidden = map[string]string{
 	"Now":       "use Clock.Now",
 	"Since":     "use Clock.Now().Sub",
@@ -34,8 +28,7 @@ var forbidden = map[string]string{
 	"NewTicker": "use Clock.AfterFunc",
 }
 
-// exempt lists module-relative directories allowed to touch the real clock.
-// core/clock is where the real implementation necessarily lives.
+// exempt lists directories allowed to touch the real clock.
 var exempt = []string{
 	"core/clock",
 }
@@ -60,9 +53,7 @@ func TestNoDirectTimeUse(t *testing.T) {
 		if !strings.HasSuffix(path, ".go") {
 			return nil
 		}
-		// Tests may use real time freely: they are not the thing under
-		// emulation, and forbidding it there would ban time.Sleep in a
-		// benchmark harness for no benefit.
+		// Tests may use real time: they are not the thing under emulation.
 		if strings.HasSuffix(path, "_test.go") {
 			return nil
 		}
@@ -99,8 +90,7 @@ func checkFile(t *testing.T, path, rel string) {
 		return
 	}
 
-	// Resolve the local name of the time import. It is almost always "time",
-	// but an alias would otherwise slip straight past a name-based check.
+	// Resolve the import's local name; an alias would slip a name check.
 	local := ""
 	for _, imp := range f.Imports {
 		p, err := strconv.Unquote(imp.Path.Value)
@@ -125,8 +115,7 @@ func checkFile(t *testing.T, path, rel string) {
 		if !ok || ident.Name != local {
 			return true
 		}
-		// A local variable shadowing the package name resolves to an object;
-		// a package qualifier does not.
+		// A local shadowing the package name resolves to an object.
 		if ident.Obj != nil {
 			return true
 		}
@@ -141,9 +130,7 @@ func checkFile(t *testing.T, path, rel string) {
 	})
 }
 
-// moduleRoot walks up from the test's working directory to the directory
-// holding go.mod, so the check covers the whole module rather than the
-// package it happens to live in.
+// moduleRoot walks up to go.mod, so the check covers the whole module.
 func moduleRoot(t *testing.T) string {
 	t.Helper()
 

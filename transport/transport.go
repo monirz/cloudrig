@@ -1,5 +1,5 @@
-// Package transport is cloudrig's single front door: one handler, one port,
-// serving REST over HTTP/1.1 and gRPC over cleartext HTTP/2 at the same time.
+// Package transport is cloudrig's front door: one handler on one port, serving
+// REST over HTTP/1.1 and gRPC over cleartext HTTP/2 at once.
 package transport
 
 import (
@@ -18,14 +18,12 @@ type Config struct {
 	// Version is reported by /_emu/health. Empty means "dev".
 	Version string
 
-	// Runner describes the function runner. Step 1 ships no runner, so this
-	// reports honestly rather than aspirationally.
+	// Runner describes the function runner. No runner exists yet.
 	Runner RunnerInfo
 }
 
-// RunnerInfo is the runner's configured mode and what it actually resolved to.
-// Configured is what the user asked for ("auto"); Mode is what is really in
-// force ("none", until a runner exists).
+// RunnerInfo separates what was asked for from what is in force, so health
+// stays honest while no runner exists.
 type RunnerInfo struct {
 	Configured string `json:"configured"`
 	Mode       string `json:"mode"`
@@ -40,8 +38,8 @@ type Handler struct {
 	runner  RunnerInfo
 }
 
-// New builds the front door. Routes are registered here so that the set of
-// endpoints is readable in one place.
+// New builds the front door. Routes register here so the endpoint set is
+// readable in one place.
 func New(cfg Config) *Handler {
 	version := cfg.Version
 	if version == "" {
@@ -65,13 +63,8 @@ func New(cfg Config) *Handler {
 	return h
 }
 
-// Protocols is the protocol set every cloudrig listener must use: HTTP/1.1 and
-// cleartext HTTP/2 on the same port.
-//
-// Go 1.24 serves h2c from net/http directly, so this needs no dependency —
-// notably not golang.org/x/net/http2/h2c, which was the only way to do it
-// before. Both cmd/cloudrig and the library entry point call this, so there is
-// exactly one place that decides the port speaks h2c.
+// Protocols is the set every cloudrig listener uses: HTTP/1.1 plus cleartext
+// HTTP/2. Go 1.24 serves h2c from net/http, so this costs no dependency.
 func Protocols() *http.Protocols {
 	p := new(http.Protocols)
 	p.SetHTTP1(true)
@@ -79,9 +72,8 @@ func Protocols() *http.Protocols {
 	return p
 }
 
-// ServeHTTP dispatches gRPC to the gRPC branch and everything else to the REST
-// mux. gRPC is HTTP/2 with an application/grpc content type; the content type
-// carries a subtype in practice (application/grpc+proto), hence the prefix test.
+// ServeHTTP splits gRPC from REST. Real clients send a subtype
+// (application/grpc+proto), hence the prefix test rather than equality.
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.ProtoMajor == 2 && strings.HasPrefix(r.Header.Get("Content-Type"), "application/grpc") {
 		h.serveGRPC(w, r)
@@ -90,17 +82,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	h.rest.serve(w, r)
 }
 
-// serveGRPC answers every gRPC request with 501 until a real service is
-// registered.
-//
-// This is not a stub for a grpc.Server that will be dropped in later — an
-// unused grpc.NewServer would be a dependency with no test. What must survive
-// is the shape: the h2c listener, the content-type discrimination, and this
-// dispatch point. gRPC arrives here together with a service that exercises it.
-//
-// 501 is also the honest answer rather than a placeholder: the gRPC HTTP/2
-// specification maps HTTP status 501 onto the UNIMPLEMENTED code, so a real
-// gRPC client reads this exactly as intended without any trailer handling.
+// serveGRPC answers 501 until a service is registered. Not a placeholder: the
+// gRPC HTTP/2 spec maps 501 onto UNIMPLEMENTED, so real clients read it right.
 func (h *Handler) serveGRPC(w http.ResponseWriter, r *http.Request) {
 	gerr.WriteJSON(w, gerr.NewUnimplemented(
 		"gRPC "+r.URL.EscapedPath()+": no gRPC services are registered"))

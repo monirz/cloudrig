@@ -26,8 +26,7 @@ func TestHTTPStatus(t *testing.T) {
 			want: 404,
 		},
 		{
-			// The case the whole override mechanism exists for: the canonical
-			// table says 400, GCS says 412.
+			// Why the override exists: the table says 400, GCS says 412.
 			name:         "explicit status wins over the canonical table",
 			err:          gerr.New(gerr.FailedPrecondition, "condition not met").WithHTTPStatus(412),
 			want:         412,
@@ -67,8 +66,7 @@ func TestHTTPStatus(t *testing.T) {
 func TestCodeString(t *testing.T) {
 	t.Parallel()
 
-	// The envelope's "status" field is these names verbatim, so the spelling is
-	// load-bearing — note Google's CANCELLED.
+	// The envelope's "status" is these names verbatim; note CANCELLED.
 	tests := map[gerr.Code]string{
 		gerr.OK:                 "OK",
 		gerr.Canceled:           "CANCELLED",
@@ -87,8 +85,7 @@ func TestCodeString(t *testing.T) {
 func TestCodeValuesMatchGoogleRPC(t *testing.T) {
 	t.Parallel()
 
-	// A later gRPC rendering is meant to be a cast, not a translation. If these
-	// drift, that stops being true silently.
+	// A gRPC rendering is meant to be a cast; drift would break that silently.
 	want := map[gerr.Code]int32{
 		gerr.OK: 0, gerr.Canceled: 1, gerr.Unknown: 2, gerr.InvalidArgument: 3,
 		gerr.DeadlineExceeded: 4, gerr.NotFound: 5, gerr.AlreadyExists: 6,
@@ -238,8 +235,7 @@ func TestWriteJSON(t *testing.T) {
 			t.Errorf("Content-Type = %q", ct)
 		}
 
-		// Decode into a generic map to prove the wire keys, not just the Go
-		// struct: a client parses these names.
+		// A generic map proves the wire keys, not just the Go struct.
 		var body map[string]any
 		if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
 			t.Fatalf("body is not JSON: %v", err)
@@ -345,8 +341,7 @@ func TestIsMatchesOnCode(t *testing.T) {
 func TestNewUnimplementedNamesTheOperation(t *testing.T) {
 	t.Parallel()
 
-	// Rule 5 in spec.md: a 501 that does not say what was not implemented is
-	// not loud enough to be useful.
+	// spec.md rule 5: a 501 must say what is missing.
 	err := gerr.NewUnimplemented("storage.objects.compose")
 	if err.Message != "operation not implemented: storage.objects.compose" {
 		t.Errorf("message = %q", err.Message)
