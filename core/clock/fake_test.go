@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/monirz/cloudrig/internal/core/clock"
+	"github.com/monirz/cloudrig/core/clock"
 )
 
 var epoch = time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)

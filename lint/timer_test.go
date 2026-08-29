@@ -37,7 +37,7 @@ var forbidden = map[string]string{
 // exempt lists module-relative directories allowed to touch the real clock.
 // core/clock is where the real implementation necessarily lives.
 var exempt = []string{
-	"internal/core/clock",
+	"core/clock",
 }
 
 func TestNoDirectTimeUse(t *testing.T) {

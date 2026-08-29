@@ -8,7 +8,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/monirz/cloudrig/internal/core/gerr"
+	"github.com/monirz/cloudrig/core/gerr"
 )
 
 func TestHTTPStatus(t *testing.T) {

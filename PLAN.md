@@ -85,12 +85,12 @@ operation against `Store.Reset(ctx, keyPrefix)`. Buckets now live under
 - **CAS losers leave orphans.** A goroutine that loses the live-pointer CAS has
   already written its object metadata and blob. In M1 those are garbage, swept
   only by `Reset`. Recorded in `UNSUPPORTED.md`.
-- **`internal/core/faults` and `internal/core/trace` are omitted**, not stubbed.
+- **`core/faults` and `core/trace` are omitted**, not stubbed.
   The spec listed both in the layout and on the out-of-scope list. Empty packages
   are noise; they arrive in M2 with their implementations.
-- **Timer lint needs no dependency.** A test in `internal/lint` walks the module
+- **Timer lint needs no dependency.** A test in `lint` walks the module
   with stdlib `go/parser` and `go/ast` and fails on any `time` timer call outside
-  `internal/core/clock`. No `x/tools`, no golangci-lint. `go vet` has no such
+  `core/clock`. No `x/tools`, no golangci-lint. `go vet` has no such
   analyzer, so the spec's "go vet-style check" could not have been literal.
 - **The RSS benchmark gates on heap, not RSS.** Go does not return memory to the
   OS promptly enough for a 64 MiB RSS assertion to be anything but flaky. The
@@ -100,21 +100,28 @@ operation against `Store.Reset(ctx, keyPrefix)`. Buckets now live under
 
 ## Package layout
 
+No `internal/` tree: every package sits at the module root. cloudrig is meant
+to be imported, and `internal/` would make each of these unreachable to anyone
+embedding it — which is the entry point the project exists for.
+
 ```
 cmd/cloudrig/            main: flags, env, wiring, graceful shutdown
-internal/transport/      h2c mux (gRPC + REST on one port), codecs
-internal/services/
+transport/               h2c mux (gRPC + REST on one port), codecs
+services/
   storage/               GCS: handlers + semantics, no proto/HTTP types leak down
-internal/core/
+core/
   resource/              GCP resource-name parsing + key codec
   clock/                 Clock interface, real clock, FakeClock with Advance()
   gerr/                  canonical errors -> google.rpc.Status + GCS JSON envelope
   events/                in-process event bus (defined, left unsubscribed)
-internal/store/          Store interface + memory impl + blob tree
-internal/lint/           stdlib AST check for forbidden time calls
+store/                   Store interface + memory impl + blob tree
+lint/                    stdlib AST check for forbidden time calls
 pkg/emulator/            public library API: Start, MustStart, Clock, Reset
 test/conformance/        one suite, runs against emulator or real GCP by env var
 ```
+
+This is a deviation from the layout in spec.md, which nested everything under
+`internal/`.
 
 ## Build order
 
@@ -122,14 +129,14 @@ Each step lands green before the next begins.
 
 | # | Step | Done when |
 |---|------|-----------|
-| 0 | `go.mod`, `internal/lint` AST checker, CI | lint test passes on an empty tree |
+| 0 | `go.mod`, `lint` AST checker, CI | lint test passes on an empty tree |
 | 1 | `core/clock` | `Advance` runs due callbacks synchronously, in timestamp order |
 | 2 | `store` interface + memory impl, real CAS | concurrent CAS: exactly one winner of N |
 | 3 | `core/resource` + key codec (D3/D4) | round-trips names with `#`, `/`, `%`, unicode |
 | 4 | `core/gerr` | 412/`conditionNotMet`, 409, 404, 501 envelopes match real GCS |
 | 5 | blob tree: SHA-256 content-addressed, one-pass TeeReader into crc32c + md5 | 1 GiB through the writer, flat `HeapAlloc` |
 | 6 | `services/storage` semantics, no HTTP types | criteria 3, 4, 5, 6 tested at this layer directly |
-| 7 | `internal/transport`: h2c mux, `EscapedPath()` routing, multipart parse | criterion 2 (`logs/2026/app.log`) |
+| 7 | `transport`: h2c mux, `EscapedPath()` routing, multipart parse | criterion 2 (`logs/2026/app.log`) |
 | 8 | `pkg/emulator` | criteria 1, 7 |
 | 9 | `test/conformance` + admin endpoints | criteria 9, 10 |
 | 10 | RSS/heap benchmark | criterion 8 |
@@ -156,4 +163,4 @@ regression rather than in a sentence in the README.
 7. Two `t.Parallel()` tests, each `MustStart(t)`, same object name, no interference.
 8. 1 GiB upload with `Writer.ChunkSize = 0` (D1) holds `HeapAlloc` flat.
 9. `go test ./...` passes with no Docker daemon running.
-10. `go vet ./...` and the `internal/lint` timer check pass.
+10. `go vet ./...` and the `lint` timer check pass.

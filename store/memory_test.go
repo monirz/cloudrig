@@ -7,7 +7,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/monirz/cloudrig/internal/store"
+	"github.com/monirz/cloudrig/store"
 )
 
 func TestPutPreconditions(t *testing.T) {

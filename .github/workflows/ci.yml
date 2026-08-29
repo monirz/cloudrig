@@ -27,7 +27,7 @@ jobs:
           fi
       - name: vet
         run: go vet ./...
-      # internal/lint carries the timer check, so ./... covers acceptance
+      # The lint package carries the timer check, so ./... covers acceptance
       # criterion 10 without a separate step.
       - name: test
         run: go test -race ./...

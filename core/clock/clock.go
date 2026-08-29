@@ -1,7 +1,7 @@
 // Package clock is the only place in cloudrig permitted to read wall-clock
 // time or schedule against it. Everything else takes a Clock, so that tests can
 // substitute FakeClock and drive time forward deterministically instead of
-// sleeping. internal/lint enforces that.
+// sleeping. The lint package enforces that.
 package clock
 
 import "time"
