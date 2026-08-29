@@ -268,3 +268,35 @@ func TestRealClockSatisfiesTheInterface(t *testing.T) {
 		t.Error("Stop() = true after the timer fired, want false")
 	}
 }
+
+// TestAcceptance3 is acceptance criterion 3 from the step 1 brief, written
+// literally: three callbacks at 1s, 5s and 10s; Advance(6s) runs exactly two,
+// in order, and both have already run by the time Advance returns.
+func TestAcceptance3(t *testing.T) {
+	t.Parallel()
+
+	c := clock.NewFake(epoch)
+	var fired []string
+	for _, tc := range []struct {
+		label string
+		d     time.Duration
+	}{
+		{"1s", time.Second},
+		{"5s", 5 * time.Second},
+		{"10s", 10 * time.Second},
+	} {
+		label := tc.label
+		c.AfterFunc(tc.d, func() { fired = append(fired, label) })
+	}
+
+	c.Advance(6 * time.Second)
+
+	// Read without synchronisation on purpose: if Advance returned before the
+	// callbacks ran, this is a data race and -race says so.
+	if got := strings.Join(fired, ","); got != "1s,5s" {
+		t.Errorf("fired = %q, want %q", got, "1s,5s")
+	}
+	if got := c.Pending(); got != 1 {
+		t.Errorf("pending = %d, want 1 (the 10s timer)", got)
+	}
+}
