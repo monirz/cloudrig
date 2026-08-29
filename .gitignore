@@ -1,0 +1,4 @@
+# Shadows the parent workspace at ../go.work, which does not list this
+# module. Local to this checkout; CI has no parent workspace to shadow.
+go.work
+go.work.sum
