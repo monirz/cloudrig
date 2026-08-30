@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"io"
 	"strconv"
+
+	"github.com/monirz/cloudrig/functions"
 )
 
 // config is everything cloudrig start takes.
@@ -14,9 +16,10 @@ type config struct {
 	runner string
 }
 
-// cmdStart is the only command today. Dispatch is a switch because Cloud
-// Functions will add `cloudrig fn run`.
-const cmdStart = "start"
+const (
+	cmdStart = "start"
+	cmdFn    = "fn"
+)
 
 // runnerModes are the accepted --runner values; all resolve to "none" today.
 var runnerModes = []string{"auto", "subprocess", "none"}
@@ -47,7 +50,7 @@ func parseConfig(args []string, env lookupEnv, out io.Writer) (config, error) {
 		return config{}, flag.ErrHelp
 	case cmdStart:
 	default:
-		return config{}, fmt.Errorf("unknown command %q; try: cloudrig %s", args[0], cmdStart)
+		return config{}, fmt.Errorf("unknown command %q; try: cloudrig %s or cloudrig %s run", args[0], cmdStart, cmdFn)
 	}
 
 	fs := flag.NewFlagSet("cloudrig "+cmdStart, flag.ContinueOnError)
@@ -55,9 +58,9 @@ func parseConfig(args []string, env lookupEnv, out io.Writer) (config, error) {
 
 	port := defaultPort
 	if v, ok := env("CLOUDRIG_PORT"); ok {
-		n, err := strconv.Atoi(v)
+		n, err := atoiEnv("CLOUDRIG_PORT", v)
 		if err != nil {
-			return config{}, fmt.Errorf("CLOUDRIG_PORT=%q: not a number", v)
+			return config{}, err
 		}
 		port = n
 	}
@@ -87,12 +90,39 @@ func usage(out io.Writer) {
 usage:
   cloudrig %s [--port N] [--runner %v]
 
-flags:
-  --port N        port to listen on (default %d, env CLOUDRIG_PORT)
-  --runner MODE   function runner: %v (default %q, env CLOUDRIG_RUNNER)
+  cloudrig %s deploy <name> --source DIR [--runtime R] [--entry-point F]
+  cloudrig %s list
+  cloudrig %s describe <name>
+  cloudrig %s delete <name>
+  cloudrig %s run <dir> [--name N] [--runtime R] [--entry-point F] [--port N]
+
+start flags:
+  --port N          port to listen on (default %d, env CLOUDRIG_PORT)
+  --runner MODE     function runner: %v (default %q, env CLOUDRIG_RUNNER)
+
+fn flags:
+  --source DIR      source directory
+  --runtime R       %v (default: detected from the source)
+  --entry-point F   handler to serve (Go: detected when there is only one)
+  --endpoint URL    emulator to talk to (default %s, env CLOUDRIG_ENDPOINT)
+
+fn deploy, list, describe and delete talk to a running emulator.
+fn run starts its own and needs no daemon.
 
 Every flag has a CLOUDRIG_ environment twin; an explicit flag wins.
-`, cmdStart, runnerModes, defaultPort, runnerModes, defaultRunner)
+`, cmdStart, runnerModes,
+		cmdFn, cmdFn, cmdFn, cmdFn, cmdFn,
+		defaultPort, runnerModes, defaultRunner,
+		functions.KnownRuntimes(), defaultEndpoint)
+}
+
+// atoiEnv keeps the "not a number" wording identical wherever it is reported.
+func atoiEnv(key, val string) (int, error) {
+	n, err := strconv.Atoi(val)
+	if err != nil {
+		return 0, fmt.Errorf("%s=%q: not a number", key, val)
+	}
+	return n, nil
 }
 
 func (c config) validate() error {

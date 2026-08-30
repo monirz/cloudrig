@@ -3,6 +3,7 @@ package cloudrig_test
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"strings"
 	"testing"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/monirz/cloudrig"
 	"github.com/monirz/cloudrig/core/clock"
+	"github.com/monirz/cloudrig/functions"
 )
 
 func health(t *testing.T, emu *cloudrig.Emulator) map[string]any {
@@ -105,7 +107,18 @@ func TestMustStartAcceptsOptions(t *testing.T) {
 	if runner["configured"] != "subprocess" {
 		t.Errorf("runner.configured = %v, want subprocess", runner["configured"])
 	}
-	// No runner exists yet, so whatever was configured must resolve to none.
+	// The runner is in force because the registry can accept a deploy, not
+	// only once something is deployed.
+	if runner["mode"] != "subprocess" {
+		t.Errorf("runner.mode = %v, want subprocess", runner["mode"])
+	}
+}
+
+func TestRunnerCanBeDisabled(t *testing.T) {
+	t.Parallel()
+
+	emu := cloudrig.MustStart(t, cloudrig.Options{Runner: "none"})
+	runner := health(t, emu)["runner"].(map[string]any)
 	if runner["mode"] != "none" {
 		t.Errorf("runner.mode = %v, want none", runner["mode"])
 	}
@@ -197,4 +210,185 @@ func TestBaseURLIsDialable(t *testing.T) {
 	if got := health(t, emu)["status"]; got != "ok" {
 		t.Errorf("status = %v via %s", got, emu.BaseURL())
 	}
+}
+
+// TestFunctionInsideATest is what the project is for: a Cloud Function built,
+// launched and served inside a Go test, with no Docker and no daemon.
+func TestFunctionInsideATest(t *testing.T) {
+	if testing.Short() {
+		t.Skip("compiles a function")
+	}
+	t.Parallel()
+
+	emu := cloudrig.MustStart(t, cloudrig.Options{
+		Functions: []functions.Function{{
+			Name: "hello", Source: "./examples/hello", EntryPoint: "HelloHTTP",
+		}},
+	})
+
+	if got, want := emu.FunctionURL("hello"), emu.BaseURL()+"/hello"; got != want {
+		t.Errorf("FunctionURL = %q, want %q", got, want)
+	}
+	if emu.FunctionURL("absent") != "" {
+		t.Errorf("FunctionURL for an unknown name = %q, want empty", emu.FunctionURL("absent"))
+	}
+
+	tests := []struct {
+		name string
+		path string
+		want string
+	}{
+		{"query reaches the function", "/hello?name=monir", `"greeting":"hello, monir"`},
+		{"root of the mount", "/hello", `"path":"/"`},
+		// A function is a subtree, so it is the root of its own URL space.
+		{"subtree path is rewritten", "/hello/a/b", `"path":"/a/b"`},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			resp, err := http.Get(emu.BaseURL() + tc.path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer resp.Body.Close()
+			body, _ := io.ReadAll(resp.Body)
+			if resp.StatusCode != http.StatusOK {
+				t.Fatalf("status = %d: %s", resp.StatusCode, body)
+			}
+			if !strings.Contains(string(body), tc.want) {
+				t.Errorf("body = %s, want it to contain %s", body, tc.want)
+			}
+		})
+	}
+
+	t.Run("health reports the runner in force", func(t *testing.T) {
+		runner := health(t, emu)["runner"].(map[string]any)
+		if runner["mode"] != "subprocess" {
+			t.Errorf("runner.mode = %v, want subprocess", runner["mode"])
+		}
+	})
+
+	t.Run("emulator routes are unaffected", func(t *testing.T) {
+		if got := health(t, emu)["status"]; got != "ok" {
+			t.Errorf("status = %v", got)
+		}
+	})
+}
+
+func TestFunctionsAreIsolatedPerInstance(t *testing.T) {
+	if testing.Short() {
+		t.Skip("compiles a function")
+	}
+	t.Parallel()
+
+	// Two parallel tests, each with its own function process. A shared runner
+	// would show up as a shared port.
+	urls := make(chan string, 2)
+	for _, name := range []string{"a", "b"} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			emu := cloudrig.MustStart(t, cloudrig.Options{
+				Functions: []functions.Function{{
+					Name: "hello", Source: "./examples/hello", EntryPoint: "HelloHTTP",
+				}},
+			})
+			if _, err := http.Get(emu.FunctionURL("hello")); err != nil {
+				t.Fatal(err)
+			}
+			urls <- emu.BaseURL()
+		})
+	}
+
+	t.Cleanup(func() {
+		close(urls)
+		seen := map[string]bool{}
+		for u := range urls {
+			if seen[u] {
+				t.Errorf("two instances shared %s", u)
+			}
+			seen[u] = true
+		}
+	})
+}
+
+func TestStartReportsAFunctionFailure(t *testing.T) {
+	t.Parallel()
+
+	_, err := cloudrig.Start(context.Background(), cloudrig.Options{
+		Addr: "127.0.0.1:0",
+		Functions: []functions.Function{{
+			Name: "bad", Source: "./examples/hello", EntryPoint: "NotThere",
+		}},
+	})
+	if err == nil {
+		t.Fatal("Start succeeded with a missing entry point")
+	}
+	if !strings.Contains(err.Error(), "NotThere") {
+		t.Errorf("err = %q, want it to name the entry point", err)
+	}
+}
+
+// TestDeployIntoARunningEmulator is the shape the CLI uses: start first, deploy
+// afterwards, over the admin API.
+func TestDeployIntoARunningEmulator(t *testing.T) {
+	if testing.Short() {
+		t.Skip("compiles a function")
+	}
+	t.Parallel()
+
+	emu := cloudrig.MustStart(t)
+	if emu.FunctionURL("hello") != "" {
+		t.Fatal("a fresh emulator reported a function")
+	}
+
+	body := `{"name":"hello","source":"./examples/hello","entryPoint":"HelloHTTP"}`
+	resp, err := http.Post(emu.BaseURL()+functions.AdminPath, "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		out, _ := io.ReadAll(resp.Body)
+		t.Fatalf("deploy status = %d: %s", resp.StatusCode, out)
+	}
+
+	if got := emu.FunctionURL("hello"); got != emu.BaseURL()+"/hello" {
+		t.Errorf("FunctionURL = %q", got)
+	}
+	out := get(t, emu.BaseURL()+"/hello?name=deployed")
+	if !strings.Contains(out, "hello, deployed") {
+		t.Errorf("body = %s", out)
+	}
+}
+
+func TestFunctionsRegistryIsReachable(t *testing.T) {
+	if testing.Short() {
+		t.Skip("compiles a function")
+	}
+	t.Parallel()
+
+	// The library gets the registry directly, so a test can deploy without
+	// going through HTTP.
+	emu := cloudrig.MustStart(t)
+	if _, err := emu.Functions().Deploy(context.Background(), functions.Function{
+		Name: "hello", Source: "./examples/hello", EntryPoint: "HelloHTTP",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(get(t, emu.BaseURL()+"/hello?name=lib"), "hello, lib") {
+		t.Error("function deployed through the registry is not served")
+	}
+}
+
+func get(t *testing.T, url string) string {
+	t.Helper()
+	resp, err := http.Get(url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET %s: status %d: %s", url, resp.StatusCode, body)
+	}
+	return string(body)
 }

@@ -4,6 +4,7 @@ package transport
 
 import (
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -18,8 +19,29 @@ type Config struct {
 	// Version is reported by /_emu/health. Empty means "dev".
 	Version string
 
-	// Runner describes the function runner. No runner exists yet.
+	// Runner describes the function runner.
 	Runner RunnerInfo
+
+	// Functions hosts deployed functions. Nil means none are served.
+	Functions FunctionHost
+
+	// Mounts are service handlers keyed by path prefix, tried before the
+	// built-in mux. Services own their own routing, so the front door needs no
+	// knowledge of their URL grammar.
+	Mounts map[string]http.Handler
+}
+
+// FunctionHost serves deployed functions and their admin API.
+//
+// Route takes the whole path rather than a name so that URL grammar — the
+// project and location prefix among it — stays in the functions package. The
+// front door knows only that something claimed the request.
+type FunctionHost interface {
+	// Route resolves a request path to a function and the path it should see.
+	Route(escapedPath string) (h http.Handler, rest string, ok bool)
+
+	// Admin serves the deploy, list, describe and delete API.
+	Admin() http.Handler
 }
 
 // RunnerInfo separates what was asked for from what is in force, so health
@@ -31,11 +53,13 @@ type RunnerInfo struct {
 
 // Handler is the h2c front door.
 type Handler struct {
-	rest    router
+	rest    Router
 	clk     clock.Clock
 	started time.Time
 	version string
 	runner  RunnerInfo
+	fns     FunctionHost
+	mounts  map[string]http.Handler
 }
 
 // New builds the front door. Routes register here so the endpoint set is
@@ -58,8 +82,10 @@ func New(cfg Config) *Handler {
 		started: cfg.Clock.Now(),
 		version: version,
 		runner:  runner,
+		fns:     cfg.Functions,
+		mounts:  cfg.Mounts,
 	}
-	h.rest.handle(http.MethodGet, "/_emu/health", h.health)
+	h.rest.Handle(http.MethodGet, "/_emu/health", h.health)
 	return h
 }
 
@@ -79,7 +105,48 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.serveGRPC(w, r)
 		return
 	}
-	h.rest.serve(w, r)
+	path := r.URL.EscapedPath()
+	if h.fns != nil && strings.HasPrefix(path, functionAdminPath) {
+		h.fns.Admin().ServeHTTP(w, r)
+		return
+	}
+	for prefix, mount := range h.mounts {
+		if strings.HasPrefix(path, prefix) {
+			mount.ServeHTTP(w, r)
+			return
+		}
+	}
+	if h.fns != nil {
+		if fn, rest, ok := h.fns.Route(path); ok {
+			serveFunction(fn, rest, w, r)
+			return
+		}
+	}
+	h.rest.ServeHTTP(w, r)
+}
+
+// functionAdminPath duplicates functions.AdminPath rather than importing it,
+// so the front door does not depend on a service package.
+const functionAdminPath = "/_emu/functions"
+
+// serveFunction rewrites the path to what the function sees: a function
+// deployed as "hello" is the root of its own URL space, so /hello/a reaches it
+// as /a, matching how Cloud Functions presents it.
+func serveFunction(fn http.Handler, rest string, w http.ResponseWriter, r *http.Request) {
+	sub := r.Clone(r.Context())
+	sub.URL = new(url.URL)
+	*sub.URL = *r.URL
+	sub.URL.Path = mustUnescape(rest)
+	sub.URL.RawPath = rest
+	fn.ServeHTTP(w, sub)
+}
+
+func mustUnescape(p string) string {
+	unescaped, err := url.PathUnescape(p)
+	if err != nil {
+		return p
+	}
+	return unescaped
 }
 
 // serveGRPC answers 501 until a service is registered. Not a placeholder: the

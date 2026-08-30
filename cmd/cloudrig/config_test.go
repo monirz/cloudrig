@@ -161,3 +161,105 @@ func TestConfigAddr(t *testing.T) {
 		t.Errorf("addr() = %q, want %q", got, ":4599")
 	}
 }
+
+func TestParseFnRun(t *testing.T) {
+	t.Parallel()
+
+	const hello = "../../examples/hello"
+
+	tests := []struct {
+		name       string
+		args       []string
+		env        map[string]string
+		wantSource string
+		wantName   string
+		wantEntry  string
+		wantPort   int
+		wantErr    string
+	}{
+		{
+			name:       "dir before flags",
+			args:       []string{"run", hello, "--entry-point", "HelloHTTP", "--port", "5000"},
+			wantSource: hello,
+			wantName:   "hello",
+			wantEntry:  "HelloHTTP",
+			wantPort:   5000,
+		},
+		{
+			// flag stops at the first non-flag argument, so this ordering is
+			// the one that used to swallow every flag after the directory.
+			name:       "dir after flags",
+			args:       []string{"run", "--entry-point", "HelloHTTP", hello},
+			wantSource: hello,
+			wantName:   "hello",
+			wantEntry:  "HelloHTTP",
+			wantPort:   4599,
+		},
+		{
+			name:       "explicit name",
+			args:       []string{"run", hello, "--entry-point", "Echo", "--name", "greeter"},
+			wantSource: hello,
+			wantName:   "greeter",
+			wantEntry:  "Echo",
+			wantPort:   4599,
+		},
+		{
+			name:       "port from the environment",
+			args:       []string{"run", hello, "--entry-point", "Echo"},
+			env:        map[string]string{"CLOUDRIG_PORT": "6000"},
+			wantSource: hello,
+			wantName:   "hello",
+			wantEntry:  "Echo",
+			wantPort:   6000,
+		},
+		{
+			// Runtime and entry point now resolve in the functions package, so
+			// the CLI passes them through untouched.
+			name:       "entry point left for the runtime to resolve",
+			args:       []string{"run", hello},
+			wantSource: hello,
+			wantName:   "hello",
+			wantPort:   4599,
+		},
+		{name: "no source", args: []string{"run"}, wantErr: "needs a source directory"},
+		{name: "not the run subcommand", args: []string{"deploy"}, wantErr: "usage: cloudrig fn run"},
+		{name: "no subcommand", args: nil, wantErr: "usage: cloudrig fn run"},
+		{
+			name:    "unexpected extra argument",
+			args:    []string{"run", hello, "extra", "--entry-point", "Echo"},
+			wantErr: `unexpected argument "extra"`,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, err := parseFnRun(tc.args, env(tc.env), io.Discard)
+			if tc.wantErr != "" {
+				if err == nil {
+					t.Fatalf("got %+v, want error containing %q", got, tc.wantErr)
+				}
+				if !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("error = %q, want it to contain %q", err, tc.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if got.source != tc.wantSource {
+				t.Errorf("source = %q, want %q", got.source, tc.wantSource)
+			}
+			if got.name != tc.wantName {
+				t.Errorf("name = %q, want %q", got.name, tc.wantName)
+			}
+			if got.entryPoint != tc.wantEntry {
+				t.Errorf("entryPoint = %q, want %q", got.entryPoint, tc.wantEntry)
+			}
+			if got.port != tc.wantPort {
+				t.Errorf("port = %d, want %d", got.port, tc.wantPort)
+			}
+		})
+	}
+}

@@ -15,11 +15,17 @@ type Params map[string]string
 // path: the router renders it through gerr.
 type HandlerFunc func(w http.ResponseWriter, r *http.Request, p Params) error
 
-// router matches on EscapedPath, never Path: net/http decodes Path first,
-// which makes a%2Fb and a/b indistinguishable. GCS object names need both.
-type router struct {
+// Router matches on EscapedPath, never Path: net/http decodes Path first,
+// which makes a%2Fb and a/b indistinguishable. GCP resource names need both.
+//
+// It is exported so service packages can declare their own routes without the
+// front door having to know about them.
+type Router struct {
 	routes []route
 }
+
+// NewRouter returns an empty Router.
+func NewRouter() *Router { return &Router{} }
 
 type route struct {
 	method string
@@ -32,9 +38,9 @@ type segment struct {
 	capture string // non-empty when this segment is a {name} capture
 }
 
-// handle registers a route. Braced segments capture; everything else matches
+// Handle registers a route. Braced segments capture; everything else matches
 // literally. There is no multi-segment wildcard because nothing needs one.
-func (rt *router) handle(method, pattern string, h HandlerFunc) {
+func (rt *Router) Handle(method, pattern string, h HandlerFunc) {
 	raw := strings.Split(strings.TrimPrefix(pattern, "/"), "/")
 	segs := make([]segment, len(raw))
 	for i, s := range raw {
@@ -49,7 +55,7 @@ func (rt *router) handle(method, pattern string, h HandlerFunc) {
 
 // match finds a route, reporting pathOK separately so the caller can tell 404
 // from 405.
-func (rt *router) match(method, escapedPath string) (r *route, p Params, pathOK bool) {
+func (rt *Router) match(method, escapedPath string) (r *route, p Params, pathOK bool) {
 	got := strings.Split(strings.TrimPrefix(escapedPath, "/"), "/")
 
 	for i := range rt.routes {
@@ -91,7 +97,9 @@ func (rr *route) matchPath(got []string) (Params, bool) {
 	return p, true
 }
 
-func (rt *router) serve(w http.ResponseWriter, r *http.Request) {
+// ServeHTTP dispatches to a matching route, rendering a handler's error and
+// distinguishing 404 from 405.
+func (rt *Router) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	rr, params, pathOK := rt.match(r.Method, r.URL.EscapedPath())
 	switch {
 	case rr != nil:

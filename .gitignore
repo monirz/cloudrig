@@ -12,3 +12,6 @@ PLAN.md
 spec.md
 UNSUPPORTED.md
 docs/
+
+# Node fixtures install their own dependencies.
+testdata/**/node_modules/

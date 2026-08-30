@@ -291,7 +291,7 @@ func TestHealthDefaults(t *testing.T) {
 	if got.Version != "dev" {
 		t.Errorf("version = %q, want %q", got.Version, "dev")
 	}
-	// No runner exists yet, so health must not claim one does.
+	// transport is told the mode; with no host configured it stays none.
 	if got.Runner.Mode != "none" {
 		t.Errorf("runner.mode = %q, want %q", got.Runner.Mode, "none")
 	}

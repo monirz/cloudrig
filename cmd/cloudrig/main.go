@@ -38,6 +38,10 @@ func main() {
 
 // run is main with its dependencies injected, so startup is testable.
 func run(args []string, env lookupEnv, stdout, stderr *os.File) error {
+	if len(args) > 0 && args[0] == cmdFn {
+		return runFnCommand(args[1:], env, stdout, stderr)
+	}
+
 	cfg, err := parseConfig(args, env, stderr)
 	if err != nil {
 		return err

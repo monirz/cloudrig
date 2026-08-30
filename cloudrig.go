@@ -15,12 +15,15 @@ package cloudrig
 import (
 	"context"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
 	"github.com/monirz/cloudrig/core/clock"
+	"github.com/monirz/cloudrig/functions"
+	"github.com/monirz/cloudrig/services/cloudfunctions"
 	"github.com/monirz/cloudrig/transport"
 )
 
@@ -41,9 +44,15 @@ type Options struct {
 	// Version is reported by /_emu/health. Empty means "dev".
 	Version string
 
-	// Runner is "auto", "subprocess" or "none". Every value resolves to "none"
-	// until a runner exists, and health reports both.
+	// Runner is "auto", "subprocess" or "none". "auto" resolves to
+	// "subprocess" when Functions is non-empty, else "none".
 	Runner string
+
+	// Functions are built and launched at Start, and stopped at Shutdown.
+	Functions []functions.Function
+
+	// FunctionLog receives function output. Nil discards it.
+	FunctionLog io.Writer
 }
 
 // Emulator is a running instance.
@@ -51,6 +60,7 @@ type Emulator struct {
 	clk      clock.Clock
 	addr     string
 	shutdown func(context.Context) error
+	fns      *functions.Registry
 }
 
 // Start runs the emulator on a real listener; the caller owns shutdown. ctx
@@ -69,13 +79,19 @@ func Start(ctx context.Context, o Options) (*Emulator, error) {
 		clk = clock.Real()
 	}
 
+	reg, err := newRegistry(ctx, clk, o)
+	if err != nil {
+		return nil, err
+	}
+
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
-		return nil, fmt.Errorf("cloudrig: listen on %s: %w", addr, err)
+		reg.StopAll()
+		return nil, fmt.Errorf("listen on %s: %w", addr, err)
 	}
 
 	srv := &http.Server{
-		Handler:   newHandler(clk, o),
+		Handler:   newHandler(clk, o, reg),
 		Protocols: transport.Protocols(), // HTTP/1.1 and h2c on one port
 	}
 	go func() {
@@ -83,10 +99,28 @@ func Start(ctx context.Context, o Options) (*Emulator, error) {
 	}()
 
 	return &Emulator{
-		clk:      clk,
-		addr:     dialable(ln.Addr().String()),
-		shutdown: srv.Shutdown,
+		clk:  clk,
+		addr: dialable(ln.Addr().String()),
+		fns:  reg,
+		shutdown: func(ctx context.Context) error {
+			err := srv.Shutdown(ctx)
+			reg.StopAll()
+			return err
+		},
 	}, nil
+}
+
+// newRegistry deploys everything configured up front, tearing down whatever
+// came up if a later one fails.
+func newRegistry(ctx context.Context, clk clock.Clock, o Options) (*functions.Registry, error) {
+	reg := functions.NewRegistry(clk, functions.Options{Stderr: o.FunctionLog})
+	for _, f := range o.Functions {
+		if _, err := reg.Deploy(ctx, f); err != nil {
+			reg.StopAll()
+			return nil, err
+		}
+	}
+	return reg, nil
 }
 
 // MustStart runs the emulator in-process for one test, on a random free port
@@ -110,7 +144,13 @@ func MustStart(t testing.TB, opts ...Options) *Emulator {
 		t.Fatalf("cloudrig: MustStart binds its own port; Options.Addr must be empty, got %q", o.Addr)
 	}
 
-	srv := httptest.NewUnstartedServer(newHandler(o.Clock, o))
+	reg, err := newRegistry(context.Background(), o.Clock, o)
+	if err != nil {
+		t.Fatalf("%v", err)
+	}
+	t.Cleanup(reg.StopAll)
+
+	srv := httptest.NewUnstartedServer(newHandler(o.Clock, o, reg))
 	srv.Config.Protocols = transport.Protocols()
 	srv.Start()
 	t.Cleanup(srv.Close)
@@ -118,25 +158,58 @@ func MustStart(t testing.TB, opts ...Options) *Emulator {
 	return &Emulator{
 		clk:  o.Clock,
 		addr: srv.Listener.Addr().String(),
+		fns:  reg,
 		shutdown: func(context.Context) error {
 			srv.Close()
+			reg.StopAll()
 			return nil
 		},
 	}
 }
 
-func newHandler(clk clock.Clock, o Options) http.Handler {
+func newHandler(clk clock.Clock, o Options, reg *functions.Registry) http.Handler {
 	configured := o.Runner
 	if configured == "" {
 		configured = "auto"
 	}
+	// The runner is in force whenever a registry can accept a deploy, not only
+	// once something is deployed: functions can arrive at any time.
+	mode := "none"
+	if configured != "none" {
+		mode = "subprocess"
+	}
+
+	// The v1 API is a view over the same registry the runner uses, never a
+	// second store: an API that keeps its own copy is how an emulator ends up
+	// reporting a deploy that runs nothing.
+	api := cloudfunctions.New(reg, clk)
+	mounts := make(map[string]http.Handler, len(cloudfunctions.Prefixes))
+	for _, prefix := range cloudfunctions.Prefixes {
+		mounts[prefix] = api
+	}
+
 	return transport.New(transport.Config{
 		Clock:   clk,
 		Version: o.Version,
-		// Mode is reported separately from Configured so health stays honest
-		// while no runner exists.
-		Runner: transport.RunnerInfo{Configured: configured, Mode: "none"},
+		// Mode is what is in force, Configured what was asked for.
+		Runner:    transport.RunnerInfo{Configured: configured, Mode: mode},
+		Functions: reg,
+		Mounts:    mounts,
 	})
+}
+
+// Functions is the registry backing this emulator, so a test can deploy into a
+// running instance rather than only at Start.
+func (e *Emulator) Functions() *functions.Registry { return e.fns }
+
+// FunctionURL is where the named function is served, or "" if it is not
+// deployed. It returns the short form, valid for the default project and
+// location; the prefixed form is also served.
+func (e *Emulator) FunctionURL(name string) string {
+	if _, ok := e.fns.Get("", "", name); !ok {
+		return ""
+	}
+	return e.BaseURL() + "/" + name
 }
 
 // Endpoint is the host:port a client should dial, e.g. "127.0.0.1:53412".

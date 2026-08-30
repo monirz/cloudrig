@@ -1,11 +1,13 @@
 GO ?= go
+VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 
 .PHONY: all build test vet lint fmt check clean
 
 all: check
 
+# Stamps the version from git so `cloudrig start` reports something real.
 build:
-	$(GO) build ./...
+	$(GO) build -ldflags "-X main.version=$(VERSION)" -o cloudrig ./cmd/cloudrig
 
 test:
 	$(GO) test -race ./...
@@ -25,7 +27,10 @@ fmt:
 
 # check is what CI runs. gofmt is enforced rather than applied, so a formatting
 # fix is a commit the author made, not a diff CI leaves behind.
-check: build vet lint
+# Builds the binary too: a stale ./cloudrig is an easy way to test the wrong
+# code by hand.
+check: vet lint build
+	$(GO) build ./...
 	@unformatted=$$(gofmt -l .); \
 	if [ -n "$$unformatted" ]; then \
 		echo "not gofmt'd:"; echo "$$unformatted"; exit 1; \
@@ -33,4 +38,5 @@ check: build vet lint
 	$(GO) test -race ./...
 
 clean:
+	rm -f cloudrig
 	$(GO) clean -testcache
