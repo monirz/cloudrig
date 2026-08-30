@@ -210,3 +210,29 @@ func parse(t *testing.T, key string) (object, project, bucket string, generation
 	}
 	return object, project, bucket, generation, nil
 }
+
+// TestBucketsPrefixExcludesContents guards a listing bug: the project prefix
+// also covers every object and live pointer, so listing buckets under it
+// returned nothing usable.
+func TestBucketsPrefixExcludesContents(t *testing.T) {
+	t.Parallel()
+
+	prefix := resource.BucketsPrefix("p")
+	bucket := resource.Bucket("p", "bkt")
+
+	if !strings.HasPrefix(bucket, prefix) {
+		t.Fatalf("prefix %q does not cover the bucket key %q", prefix, bucket)
+	}
+	// A bucket's own key has no further slash; its contents do.
+	if strings.Contains(strings.TrimPrefix(bucket, prefix), "/") {
+		t.Errorf("bucket key %q looks like a nested key under %q", bucket, prefix)
+	}
+	for _, key := range []string{
+		resource.Live("p", "bkt", "obj"),
+		resource.Object("p", "bkt", "obj", 1),
+	} {
+		if !strings.Contains(strings.TrimPrefix(key, prefix), "/") {
+			t.Errorf("contents key %q is indistinguishable from a bucket key", key)
+		}
+	}
+}

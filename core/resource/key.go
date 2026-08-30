@@ -42,6 +42,12 @@ func ProjectPrefix(project string) string {
 	return "p/" + project + "/"
 }
 
+// BucketsPrefix covers a project's bucket metadata keys. A key under it holding
+// a further slash belongs to a bucket's contents, not to the bucket itself.
+func BucketsPrefix(project string) string {
+	return "p/" + project + "/b/"
+}
+
 // Live is the key of the pointer to an object's current generation.
 //
 //	p/{project}/b/{bucket}/live/{name}
