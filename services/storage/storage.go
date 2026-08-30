@@ -14,6 +14,10 @@ import (
 	"github.com/monirz/cloudrig/store/blob"
 )
 
+// blobRef is blob.Ref, aliased so this package's signatures do not spell the
+// blob package in every line.
+type blobRef = blob.Ref
+
 // Service holds the metadata store, the blob tree and the clock.
 type Service struct {
 	kv    store.Store

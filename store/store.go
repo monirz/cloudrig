@@ -20,6 +20,11 @@ var (
 	ErrInvalidPageToken = errors.New("store: invalid page token")
 )
 
+// PageToken builds a token that resumes a List after key. Callers that stop
+// part-way through a page need to name where they stopped, and the token format
+// belongs to the store rather than to them.
+func PageToken(key string) string { return encodeToken(key) }
+
 // KV is one entry. List returns keys with values because GCS delimiter rollup
 // synthesizes prefixes[] from key structure.
 type KV struct {
