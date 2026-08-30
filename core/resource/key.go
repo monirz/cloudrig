@@ -32,6 +32,15 @@ func BucketIndex(bucket string) string {
 	return "bx/" + bucket
 }
 
+// BlobRefs is the key counting how many generations reference a blob.
+//
+// Blobs are content-addressed, so two objects with identical bytes share one
+// file. Dropping a generation may not remove it until nothing else points at
+// it, and a count is what says so.
+func BlobRefs(sha string) string {
+	return "rc/" + sha
+}
+
 // Bucket is the key holding a bucket's metadata.
 //
 //	p/{project}/b/{bucket}

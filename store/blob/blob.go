@@ -152,6 +152,17 @@ func (s *Store) Delete(sha256hex string) error {
 	return nil
 }
 
+// Reset removes every blob, leaving the tree usable.
+func (s *Store) Reset() error {
+	if err := os.RemoveAll(filepath.Join(s.root, "blobs")); err != nil {
+		return fmt.Errorf("blob: clearing content: %w", err)
+	}
+	if err := os.MkdirAll(s.tmpDir(), 0o750); err != nil {
+		return fmt.Errorf("blob: %w", err)
+	}
+	return nil
+}
+
 // Close removes the tree if the store created it.
 func (s *Store) Close() error {
 	if !s.owned {

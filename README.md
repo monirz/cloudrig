@@ -304,6 +304,174 @@ Builds and serves one function, then exits on Ctrl-C:
 ./cloudrig fn run ./examples/hello --entry-point HelloHTTP
 ```
 
+## Cloud Storage, step by step
+
+Complete walkthrough from an empty shell. Every command below is exercised by
+the test suite.
+
+### 1. Start the emulator
+
+```sh
+make build
+./cloudrig start
+```
+
+Listens on `:4599`. Leave it running; use a second terminal from here.
+
+### 2. Create a bucket
+
+```sh
+curl -X POST "localhost:4599/storage/v1/b?project=my-project" \
+  -H 'Content-Type: application/json' \
+  -d '{"name":"my-bucket"}'
+```
+
+```json
+{"kind":"storage#bucket","id":"my-bucket","name":"my-bucket",
+ "location":"US","storageClass":"STANDARD","metageneration":"1", ...}
+```
+
+Bucket names are globally unique, as in GCS: creating one twice is a 409.
+
+### 3. Upload an object
+
+```sh
+curl -X POST \
+  "localhost:4599/upload/storage/v1/b/my-bucket/o?uploadType=media&name=logs%2F2026%2Fapp.log" \
+  -H 'Content-Type: text/plain' \
+  --data 'hello from curl'
+```
+
+```json
+{"name":"logs/2026/app.log","size":"15","generation":"1788089802392614",
+ "crc32c":"ZwCg5A==","md5Hash":"6aIFUMrHsLhJ/T69b9cMPQ=="}
+```
+
+The name is percent-encoded, `logs%2F2026%2Fapp.log`. Object names contain
+slashes, and routing decodes one segment at a time so a `%2F` stays inside its
+segment rather than splitting the path.
+
+`generation`, `metageneration` and `size` come back as **strings**. That is the
+GCS wire format, not a quirk here — Google's own client declares them
+`json:",string"`, and emitting them as numbers makes it decode zeroes.
+
+### 4. Download it
+
+```sh
+curl "localhost:4599/storage/v1/b/my-bucket/o/logs%2F2026%2Fapp.log?alt=media"
+# hello from curl
+```
+
+Without `?alt=media` the same URL returns the metadata instead.
+
+### 5. List with a delimiter
+
+```sh
+curl "localhost:4599/storage/v1/b/my-bucket/o?delimiter=/"
+```
+
+```json
+{"kind":"storage#objects","prefixes":["logs/"]}
+```
+
+`prefix`, `delimiter`, `maxResults` and `pageToken` all work. Objects and
+rollups share the `maxResults` budget, as GCS counts them.
+
+### 6. Preconditions
+
+```sh
+# write only if the object does not exist
+curl -X POST \
+  "localhost:4599/upload/storage/v1/b/my-bucket/o?uploadType=media&name=once&ifGenerationMatch=0" \
+  --data 'first'
+
+# the same request again is 412 conditionNotMet
+```
+
+`ifGenerationMatch` and `ifMetagenerationMatch` are supported on upload, PATCH
+and delete.
+
+### 7. Clear state
+
+```sh
+curl -X POST localhost:4599/_emu/reset                       # everything
+curl -X POST "localhost:4599/_emu/reset?project=my-project"  # one project
+```
+
+Returns 204. State is in memory, so a restart clears it too.
+
+## Cloud Storage from Go
+
+Point the real client at the emulator — no Docker, no daemon, one instance per
+test:
+
+```go
+func TestUpload(t *testing.T) {
+	t.Parallel()
+	emu := cloudrig.MustStart(t)
+	ctx := context.Background()
+
+	c, err := storage.NewClient(ctx,
+		option.WithEndpoint(emu.BaseURL()+"/storage/v1/"),
+		option.WithoutAuthentication(),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+
+	b := c.Bucket("my-bucket")
+	if err := b.Create(ctx, "my-project", nil); err != nil {
+		t.Fatal(err)
+	}
+
+	w := b.Object("logs/2026/app.log").NewWriter(ctx)
+	w.Write([]byte("hello"))
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	r, _ := b.Object("logs/2026/app.log").NewReader(ctx)
+	defer r.Close()
+	io.ReadAll(r)
+}
+```
+
+Working examples: `test/conformance/storage_test.go`.
+
+### Large objects
+
+Payload bytes never enter the heap in full. Uploads stream from the request body
+through the checksums to a content-addressed file in one pass; downloads are
+served with `http.ServeContent`. Measured through the whole HTTP stack with the
+real client:
+
+```
+uploaded 1024 MiB: retained 90 KiB, allocated 2 MiB in total
+downloaded 1024 MiB: retained 4 KiB, allocated 0 MiB in total
+```
+
+Two MiB of total allocation to move a gibibyte, and nothing retained after it.
+
+Set `Writer.ChunkSize = 0` for large uploads. The client buffers a chunk at a
+time by default and switches to resumable above 16 MiB; zero disables chunking
+and streams the object as one request.
+
+### What is supported
+
+Buckets: create, get, list, delete (409 while not empty).
+Objects: upload (`media`, `multipart`), download, metadata, PATCH, delete,
+listing with `prefix` / `delimiter` / `maxResults` / `pageToken`, and the
+`ifGenerationMatch` / `ifMetagenerationMatch` preconditions.
+
+Not supported: resumable uploads (501), the XML API beyond the media download
+path the Go client's reader needs, compose, rewrite, versioning reads, ACLs,
+notifications and signed URLs. See [UNSUPPORTED.md](UNSUPPORTED.md).
+
+`gcloud storage` and `gsutil` are **untested** — they need
+`CLOUDSDK_API_ENDPOINT_OVERRIDES_STORAGE` and may reach XML API endpoints that
+are not served. The Go client is the verified path.
+
 ## Run the emulator
 
 ```sh
@@ -364,7 +532,8 @@ Everything, the way CI runs it:
 make check
 ```
 
-Build, vet, the timer lint rule, gofmt, then `go test -race ./...`.
+Build, vet, the timer lint rule, gofmt, then `go test -race ./...`. About 40
+seconds cold, most of it the gibibyte streaming test.
 
 ### Plain go test
 
@@ -381,6 +550,10 @@ go test -count=1 ./...           # ignore the cache and really re-run
 ```sh
 go test -v ./functions/                  # the runner: build, launch, proxy, registry
 go test -v ./services/cloudfunctions/    # the gcloud API: v1, v2, :call
+go test -v ./services/storage/           # GCS semantics: generations, preconditions, listing
+go test -v ./store/blob/                 # content addressing, checksums, flat memory
+go test -v ./core/resource/              # the GCS key codec
+go test -v ./test/conformance/           # the real cloud.google.com/go/storage client
 go test -v ./transport/                  # h2c, escaped-path routing, health
 go test -v ./core/clock/                 # FakeClock ordering and draining
 go test -v ./core/gerr/                  # error envelopes and status codes
@@ -397,6 +570,7 @@ go test -v -run TestGcloudCompatibility ./services/cloudfunctions/
 go test -v -run TestCall ./services/cloudfunctions/
 go test -v -run TestNodeFunction ./functions/
 go test -v -run 'TestRoute$' ./functions/
+go test -v -run TestLargeObjectMemory ./test/conformance/   # 1 GiB, prints heap growth
 ```
 
 `-run` takes a regular expression, so `TestCall` also matches
@@ -407,8 +581,8 @@ go test -v -run 'TestRoute$' ./functions/
 - `TestGcloudCompatibility` drives the **real gcloud binary** against a live
   emulator. It skips itself when gcloud is not installed, so CI stays green
   without it.
-- Tests that compile a function or spawn `node` are the slow ones; `-short`
-  skips them and takes the suite from ~15s to ~2s (~40s under -race).
+- Tests that compile a function, spawn `node`, or stream a gibibyte are the slow
+  ones. `-short` skips them all, taking a cold run from ~40s to ~3s.
 - Everything runs in parallel with its own emulator instance, so the suite needs
   no ports reserved and no cleanup between runs.
 

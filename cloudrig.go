@@ -68,6 +68,7 @@ type Emulator struct {
 	addr     string
 	shutdown func(context.Context) error
 	fns      *functions.Registry
+	storage  *storage.Service
 }
 
 // Start runs the emulator on a real listener; the caller owns shutdown. ctx
@@ -112,9 +113,10 @@ func Start(ctx context.Context, o Options) (*Emulator, error) {
 	}()
 
 	return &Emulator{
-		clk:  clk,
-		addr: dialable(ln.Addr().String()),
-		fns:  reg,
+		clk:     clk,
+		addr:    dialable(ln.Addr().String()),
+		fns:     reg,
+		storage: gcs,
 		shutdown: func(ctx context.Context) error {
 			err := srv.Shutdown(ctx)
 			reg.StopAll()
@@ -126,12 +128,12 @@ func Start(ctx context.Context, o Options) (*Emulator, error) {
 
 // newStorage builds the Cloud Storage service and the blob tree it streams
 // payloads into.
-func newStorage(clk clock.Clock) (http.Handler, *blob.Store, error) {
+func newStorage(clk clock.Clock) (*storage.Service, *blob.Store, error) {
 	blobs, err := blob.NewTemp()
 	if err != nil {
 		return nil, nil, fmt.Errorf("cloudrig: %w", err)
 	}
-	return storage.NewAPI(storage.New(store.NewMemory(), blobs, clk)), blobs, nil
+	return storage.New(store.NewMemory(), blobs, clk), blobs, nil
 }
 
 // newRegistry deploys everything configured up front, tearing down whatever
@@ -189,9 +191,10 @@ func MustStart(t testing.TB, opts ...Options) *Emulator {
 	t.Cleanup(srv.Close)
 
 	return &Emulator{
-		clk:  o.Clock,
-		addr: srv.Listener.Addr().String(),
-		fns:  reg,
+		clk:     o.Clock,
+		addr:    srv.Listener.Addr().String(),
+		fns:     reg,
+		storage: gcs,
 		shutdown: func(context.Context) error {
 			srv.Close()
 			reg.StopAll()
@@ -200,7 +203,7 @@ func MustStart(t testing.TB, opts ...Options) *Emulator {
 	}
 }
 
-func newHandler(clk clock.Clock, o Options, reg *functions.Registry, gcs http.Handler) http.Handler {
+func newHandler(clk clock.Clock, o Options, reg *functions.Registry, gcs *storage.Service) http.Handler {
 	configured := o.Runner
 	if configured == "" {
 		configured = "auto"
@@ -221,21 +224,37 @@ func newHandler(clk clock.Clock, o Options, reg *functions.Registry, gcs http.Ha
 	for _, prefix := range cloudfunctions.Prefixes {
 		mounts[prefix] = api
 	}
+	var gcsAPI http.Handler
 	if gcs != nil {
+		gcsAPI = storage.NewAPI(gcs)
 		for _, prefix := range storage.Prefixes {
-			mounts[prefix] = gcs
+			mounts[prefix] = gcsAPI
 		}
 	}
 
 	return transport.New(transport.Config{
 		Clock:    clk,
 		Version:  o.Version,
-		Fallback: gcs,
+		Fallback: gcsAPI,
 		// Mode is what is in force, Configured what was asked for.
 		Runner:    transport.RunnerInfo{Configured: configured, Mode: mode},
 		Functions: reg,
 		Mounts:    mounts,
+		Reset: func(ctx context.Context, project string) error {
+			if gcs == nil {
+				return nil
+			}
+			return gcs.Reset(ctx, project)
+		},
 	})
+}
+
+// Reset clears emulator state. An empty project clears everything.
+func (e *Emulator) Reset(ctx context.Context, project string) error {
+	if e.storage == nil {
+		return nil
+	}
+	return e.storage.Reset(ctx, project)
 }
 
 // Functions is the registry backing this emulator, so a test can deploy into a

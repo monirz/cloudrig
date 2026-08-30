@@ -11,15 +11,16 @@ import (
 // below are separate from the stored ones rather than reusing them.
 
 type apiBucket struct {
-	Kind           string `json:"kind"`
-	ID             string `json:"id"`
-	Name           string `json:"name"`
-	Location       string `json:"location"`
-	StorageClass   string `json:"storageClass"`
-	Metageneration string `json:"metageneration"`
-	TimeCreated    string `json:"timeCreated"`
-	Updated        string `json:"updated"`
-	SelfLink       string `json:"selfLink,omitempty"`
+	Kind           string         `json:"kind"`
+	ID             string         `json:"id"`
+	Name           string         `json:"name"`
+	Location       string         `json:"location"`
+	StorageClass   string         `json:"storageClass"`
+	Versioning     *apiVersioning `json:"versioning,omitempty"`
+	Metageneration string         `json:"metageneration"`
+	TimeCreated    string         `json:"timeCreated"`
+	Updated        string         `json:"updated"`
+	SelfLink       string         `json:"selfLink,omitempty"`
 }
 
 type apiObject struct {
@@ -49,11 +50,17 @@ type objectRequest struct {
 	Metadata    map[string]string `json:"metadata,omitempty"`
 }
 
+// apiVersioning is the nested object GCS reports versioning under.
+type apiVersioning struct {
+	Enabled bool `json:"enabled"`
+}
+
 // bucketRequest is the body of a bucket create.
 type bucketRequest struct {
-	Name         string `json:"name,omitempty"`
-	Location     string `json:"location,omitempty"`
-	StorageClass string `json:"storageClass,omitempty"`
+	Name         string         `json:"name,omitempty"`
+	Location     string         `json:"location,omitempty"`
+	StorageClass string         `json:"storageClass,omitempty"`
+	Versioning   *apiVersioning `json:"versioning,omitempty"`
 }
 
 func toAPIBucket(b Bucket, base string) apiBucket {
@@ -63,6 +70,7 @@ func toAPIBucket(b Bucket, base string) apiBucket {
 		Name:           b.Name,
 		Location:       b.Location,
 		StorageClass:   b.StorageClass,
+		Versioning:     &apiVersioning{Enabled: b.Versioning},
 		Metageneration: strconv.FormatInt(b.Metageneration, 10),
 		TimeCreated:    rfc3339(b.Created),
 		Updated:        rfc3339(b.Updated),

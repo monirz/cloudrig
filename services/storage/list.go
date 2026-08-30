@@ -87,6 +87,12 @@ func (s *Service) ListObjects(ctx context.Context, project string, req ListReque
 			} else {
 				obj, err := s.objectFor(ctx, project, req.Bucket, name, kv.Val)
 				if err != nil {
+					// An object overwritten or deleted mid-scan takes its
+					// generation with it. Skipping is what a listing of a
+					// changing bucket means; failing the page is not.
+					if isNotFound(err) {
+						continue
+					}
 					return ListResult{}, err
 				}
 				result.Objects = append(result.Objects, obj)

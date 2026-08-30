@@ -98,13 +98,10 @@ func TestOverwriteBumpsGeneration(t *testing.T) {
 		t.Errorf("Metageneration = %d after an overwrite, want 1", second.Metageneration)
 	}
 
-	// The old generation is still addressable.
-	old, err := s.GetObject(context.Background(), "p", "bkt", "obj", gen(first.Generation))
-	if err != nil {
-		t.Fatalf("the previous generation is gone: %v", err)
-	}
-	if old.Size != 3 {
-		t.Errorf("old generation size = %d", old.Size)
+	// Versioning is off by default, so the superseded generation is gone —
+	// as in GCS, and as fake-gcs-server does with versioning disabled.
+	if _, err := s.GetObject(context.Background(), "p", "bkt", "obj", gen(first.Generation)); status(t, err) != 404 {
+		t.Errorf("status = %d reading a superseded generation, want 404", status(t, err))
 	}
 }
 
@@ -337,9 +334,9 @@ func TestDeleteObject(t *testing.T) {
 		if _, err := s.GetObject(ctx, "p", "bkt", "obj", nil); status(t, err) != 404 {
 			t.Error("object still live after delete")
 		}
-		// The generation remains addressable: only the live pointer went.
-		if _, err := s.GetObject(ctx, "p", "bkt", "obj", gen(obj.Generation)); err != nil {
-			t.Errorf("the deleted generation is unreadable: %v", err)
+		// Unversioned, so the generation went with it.
+		if _, err := s.GetObject(ctx, "p", "bkt", "obj", gen(obj.Generation)); status(t, err) != 404 {
+			t.Error("the deleted generation is still readable in an unversioned bucket")
 		}
 	})
 
@@ -432,10 +429,13 @@ func TestConcurrentWritesAllocateDistinctGenerations(t *testing.T) {
 		}
 	}
 
-	// Every generation must still be readable: each claimed its own key.
-	for generation := range seen {
-		if _, err := s.GetObject(ctx, "p", "bkt", "obj", &generation); err != nil {
-			t.Errorf("generation %d is unreadable: %v", generation, err)
-		}
+	// Exactly one survives: the winner's. The rest were superseded and
+	// dropped, because the bucket is not versioned.
+	live, err := s.GetObject(ctx, "p", "bkt", "obj", nil)
+	if err != nil {
+		t.Fatalf("no live object after %d writes: %v", racers, err)
+	}
+	if seen[live.Generation] != 1 {
+		t.Errorf("the live generation %d was never handed out", live.Generation)
 	}
 }

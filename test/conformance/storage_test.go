@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"net/http"
 	"testing"
 
 	"cloud.google.com/go/storage"
@@ -286,5 +287,73 @@ func TestParallelInstancesAreIsolated(t *testing.T) {
 				t.Errorf("read %q, want %q — the instances share state", got, name)
 			}
 		})
+	}
+}
+
+// clientB is client for a benchmark, which has no *testing.T to hang cleanup
+// on.
+func clientB(b *testing.B) (*storage.Client, context.Context) {
+	b.Helper()
+
+	emu, err := cloudrig.Start(context.Background(), cloudrig.Options{Addr: "127.0.0.1:0"})
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.Cleanup(func() { _ = emu.Shutdown(context.Background()) })
+
+	ctx := context.Background()
+	c, err := storage.NewClient(ctx,
+		option.WithEndpoint(emu.BaseURL()+"/storage/v1/"),
+		option.WithoutAuthentication(),
+	)
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.Cleanup(func() { _ = c.Close() })
+	return c, ctx
+}
+
+// TestResetClearsState covers the admin endpoint a test suite uses between
+// cases when it shares one emulator rather than starting its own.
+func TestResetClearsState(t *testing.T) {
+	t.Parallel()
+
+	emu := cloudrig.MustStart(t)
+	ctx := context.Background()
+
+	c, err := storage.NewClient(ctx,
+		option.WithEndpoint(emu.BaseURL()+"/storage/v1/"),
+		option.WithoutAuthentication(),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = c.Close() })
+
+	b := c.Bucket("resettable")
+	if err := b.Create(ctx, "p", nil); err != nil {
+		t.Fatal(err)
+	}
+	w := b.Object("obj").NewWriter(ctx)
+	w.Write([]byte("x"))
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	resp, err := http.Post(emu.BaseURL()+"/_emu/reset", "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("reset status = %d, want 204", resp.StatusCode)
+	}
+
+	if _, err := b.Attrs(ctx); !errors.Is(err, storage.ErrBucketNotExist) {
+		t.Errorf("err = %v, want ErrBucketNotExist after a reset", err)
+	}
+	// The name is reusable, so a suite can start the next case cleanly.
+	if err := b.Create(ctx, "p", nil); err != nil {
+		t.Errorf("recreating the bucket after a reset: %v", err)
 	}
 }

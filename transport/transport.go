@@ -3,6 +3,7 @@
 package transport
 
 import (
+	"context"
 	"net/http"
 	"net/url"
 	"strings"
@@ -34,6 +35,9 @@ type Config struct {
 	// client downloads from /{bucket}/{object}, which has no prefix to mount
 	// on and is only distinguishable from anything else by asking.
 	Fallback http.Handler
+
+	// Reset clears emulator state. An empty project clears everything.
+	Reset func(ctx context.Context, project string) error
 }
 
 // FunctionHost serves deployed functions and their admin API.
@@ -66,6 +70,7 @@ type Handler struct {
 	fns      FunctionHost
 	mounts   map[string]http.Handler
 	fallback http.Handler
+	reset    func(context.Context, string) error
 }
 
 // New builds the front door. Routes register here so the endpoint set is
@@ -93,6 +98,10 @@ func New(cfg Config) *Handler {
 		fallback: cfg.Fallback,
 	}
 	h.rest.Handle(http.MethodGet, "/_emu/health", h.health)
+	if cfg.Reset != nil {
+		h.reset = cfg.Reset
+		h.rest.Handle(http.MethodPost, "/_emu/reset", h.handleReset)
+	}
 	return h
 }
 
@@ -134,6 +143,15 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.rest.ServeHTTP(w, r)
+}
+
+// handleReset clears state, optionally scoped to one project.
+func (h *Handler) handleReset(w http.ResponseWriter, r *http.Request, _ Params) error {
+	if err := h.reset(r.Context(), r.URL.Query().Get("project")); err != nil {
+		return err
+	}
+	w.WriteHeader(http.StatusNoContent)
+	return nil
 }
 
 // functionAdminPath duplicates functions.AdminPath rather than importing it,

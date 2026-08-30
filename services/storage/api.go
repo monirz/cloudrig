@@ -67,6 +67,7 @@ func (a *API) createBucket(w http.ResponseWriter, r *http.Request, p transport.P
 		Project:      project,
 		Location:     body.Location,
 		StorageClass: body.StorageClass,
+		Versioning:   body.Versioning != nil && body.Versioning.Enabled,
 	})
 	if err != nil {
 		return err

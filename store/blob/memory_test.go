@@ -31,8 +31,14 @@ func source(size int64) io.Reader {
 }
 
 // TestMemoryStaysFlat is spec rule 3: payload bytes never enter the heap in
-// full. It is asserted on HeapAlloc rather than RSS because Go does not return
-// memory to the OS promptly enough for an RSS bound to be anything but flaky.
+// full.
+//
+// The gate is memory still held after a GC, not RSS and not mid-flight
+// HeapAlloc. Go does not return memory to the OS promptly enough for an RSS
+// bound to hold, and HeapAlloc counts allocated-but-uncollected objects, so it
+// measures how recently the collector ran as much as what the code did. Churn
+// is reported but not gated: streaming through a 32 KiB buffer allocates, and
+// that is fine — retaining the object is not.
 //
 // fake-gcs-server is the counterexample this exists to avoid: a 2 GB object has
 // driven its RSS past 12 GB, because upload reads the body whole.
@@ -58,18 +64,21 @@ func TestMemoryStaysFlat(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	runtime.GC()
 	runtime.ReadMemStats(&after)
 
 	if ref.Size != size {
 		t.Fatalf("stored %d bytes, want %d", ref.Size, size)
 	}
 
-	growth := int64(after.HeapAlloc) - int64(before.HeapAlloc)
-	if growth > ceiling {
-		t.Errorf("heap grew %d bytes streaming %d; want under %d",
-			growth, int64(size), int64(ceiling))
+	retained := int64(after.HeapAlloc) - int64(before.HeapAlloc)
+	churn := int64(after.TotalAlloc) - int64(before.TotalAlloc)
+	t.Logf("streamed %d MiB: retained %d KiB, allocated %d KiB in total",
+		size>>20, retained>>10, churn>>10)
+	if retained > ceiling {
+		t.Errorf("streaming %d bytes retained %d; want under %d",
+			int64(size), retained, int64(ceiling))
 	}
-	t.Logf("streamed %d MiB, heap grew %d KiB", size>>20, growth>>10)
 
 	// Reading it back must be constant too: a download that buffers is the
 	// same bug on the way out.
@@ -85,17 +94,18 @@ func TestMemoryStaysFlat(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	runtime.GC()
 	runtime.ReadMemStats(&after)
 
 	if n != size {
 		t.Fatalf("read %d bytes, want %d", n, size)
 	}
-	growth = int64(after.HeapAlloc) - int64(before.HeapAlloc)
-	if growth > ceiling {
-		t.Errorf("heap grew %d bytes reading %d back; want under %d",
-			growth, int64(size), int64(ceiling))
+	retained = int64(after.HeapAlloc) - int64(before.HeapAlloc)
+	t.Logf("read back %d MiB: retained %d KiB", size>>20, retained>>10)
+	if retained > ceiling {
+		t.Errorf("reading %d bytes back retained %d; want under %d",
+			int64(size), retained, int64(ceiling))
 	}
-	t.Logf("read back %d MiB, heap grew %d KiB", size>>20, growth>>10)
 }
 
 // BenchmarkPut reports throughput and allocations per byte stored.

@@ -82,7 +82,8 @@ const maxGenerationProbes = 1024
 // alternative is holding the bytes until the outcome is known, which is exactly
 // the memory behaviour this project exists to avoid. Reclaimed by Reset.
 func (s *Service) WriteObject(ctx context.Context, project string, w Write, r io.Reader) (Object, error) {
-	if _, _, err := s.bucket(ctx, project, w.Bucket); err != nil {
+	bkt, _, err := s.bucket(ctx, project, w.Bucket)
+	if err != nil {
 		return Object{}, err
 	}
 	if w.Name == "" {
@@ -98,7 +99,7 @@ func (s *Service) WriteObject(ctx context.Context, project string, w Write, r io
 
 	conditional := w.Preconditions.IfGenerationMatch != nil || w.Preconditions.IfMetagenerationMatch != nil
 	for attempt := 0; ; attempt++ {
-		obj, err := s.publish(ctx, project, w, ref)
+		obj, err := s.publish(ctx, project, w, ref, bkt.Versioning)
 		if err == nil {
 			return obj, nil
 		}
@@ -121,7 +122,7 @@ func (s *Service) WriteObject(ctx context.Context, project string, w Write, r io
 // errRaceLost signals that the live pointer moved between read and write.
 var errRaceLost = errors.New("storage: live pointer moved")
 
-func (s *Service) publish(ctx context.Context, project string, w Write, ref blobRef) (Object, error) {
+func (s *Service) publish(ctx context.Context, project string, w Write, ref blobRef, versioning bool) (Object, error) {
 	current, version, err := s.readLive(ctx, project, w.Bucket, w.Name)
 	if err != nil {
 		return Object{}, err
@@ -131,6 +132,11 @@ func (s *Service) publish(ctx context.Context, project string, w Write, ref blob
 	if version != 0 {
 		obj, err := s.readGeneration(ctx, project, w.Bucket, w.Name, current.Generation)
 		if err != nil {
+			// The generation went with a pointer that moved under us, so this
+			// read is stale rather than the object missing.
+			if isNotFound(err) {
+				return Object{}, errRaceLost
+			}
 			return Object{}, err
 		}
 		existing = &obj
@@ -163,11 +169,38 @@ func (s *Service) publish(ctx context.Context, project string, w Write, ref blob
 	obj.Generation = generation
 	obj.ETag = etag(obj)
 
-	next := live{Generation: generation, Highest: generation}
-	if err := s.casLive(ctx, project, w.Bucket, w.Name, next, version); err != nil {
+	if err := s.retainBlob(ctx, ref.SHA256); err != nil {
 		return Object{}, err
 	}
+
+	next := live{Generation: generation, Highest: generation}
+	if err := s.casLive(ctx, project, w.Bucket, w.Name, next, version); err != nil {
+		// The pointer never moved, so this generation is unreachable: undo the
+		// reference rather than leaving content nothing can reach.
+		_ = s.releaseBlob(ctx, ref.SHA256)
+		return Object{}, err
+	}
+
+	// Only once the pointer has moved is the previous generation safe to drop;
+	// until then it is still what readers see.
+	if !versioning && existing != nil {
+		if err := s.dropGeneration(ctx, project, *existing); err != nil {
+			return Object{}, err
+		}
+	}
 	return obj, nil
+}
+
+// dropGeneration removes a generation's metadata and releases its content.
+//
+// Without versioning GCS keeps no previous generation, so keeping one here
+// would grow without limit for a behaviour nothing asked for.
+func (s *Service) dropGeneration(ctx context.Context, project string, o Object) error {
+	key := resource.Object(project, o.Bucket, o.Name, o.Generation)
+	if err := s.kv.Delete(ctx, key, 0); err != nil && !errors.Is(err, store.ErrNotFound) {
+		return gerr.Wrap(err, gerr.Internal, "removing a superseded generation")
+	}
+	return s.releaseBlob(ctx, o.Blob)
 }
 
 // claimGeneration writes the metadata under the first free generation at or
@@ -236,10 +269,50 @@ func preconditionFailed(bucket, name string) error {
 		WithReason("conditionNotMet")
 }
 
+// isNotFound reports whether err is our own not-found, so a caller can tell a
+// stale read from a genuinely missing object.
+func isNotFound(err error) bool {
+	var g *gerr.Error
+	return errors.As(err, &g) && g.Code == gerr.NotFound
+}
+
 func notFoundObject(bucket, name string) error {
 	return gerr.Newf(gerr.NotFound, "No such object: %s/%s", bucket, name).
 		WithHTTPStatus(http.StatusNotFound).
 		WithReason("notFound")
+}
+
+// maxResolveAttempts bounds the retry when a generation is dropped between
+// reading the live pointer and reading what it names.
+const maxResolveAttempts = 8
+
+// resolveLive reads the live pointer and the generation it names, together.
+//
+// Without versioning an overwrite removes the superseded generation as soon as
+// the pointer moves, so a reader holding the old pointer finds nothing. That is
+// a stale read, not a missing object: re-read and take the new pointer.
+//
+// It returns a zero version when the object does not exist.
+func (s *Service) resolveLive(ctx context.Context, project, bucket, name string) (Object, uint64, error) {
+	for attempt := 0; attempt < maxResolveAttempts; attempt++ {
+		current, version, err := s.readLive(ctx, project, bucket, name)
+		if err != nil || version == 0 {
+			return Object{}, 0, err
+		}
+
+		obj, err := s.readGeneration(ctx, project, bucket, name, current.Generation)
+		if err == nil {
+			return obj, version, nil
+		}
+		var g *gerr.Error
+		if !errors.As(err, &g) || g.Code != gerr.NotFound {
+			return Object{}, 0, err
+		}
+		// The pointer moved and took its generation with it.
+	}
+	return Object{}, 0, gerr.New(gerr.Aborted, "the object changed faster than it could be read").
+		WithHTTPStatus(http.StatusConflict).
+		WithReason("conflict")
 }
 
 // readLive returns the live pointer and the store version it is at. A version
@@ -330,14 +403,14 @@ func (s *Service) GetObject(ctx context.Context, project, bucket, name string, g
 		return s.readGeneration(ctx, project, bucket, name, *generation)
 	}
 
-	current, version, err := s.readLive(ctx, project, bucket, name)
+	obj, version, err := s.resolveLive(ctx, project, bucket, name)
 	if err != nil {
 		return Object{}, err
 	}
 	if version == 0 {
 		return Object{}, notFoundObject(bucket, name)
 	}
-	return s.readGeneration(ctx, project, bucket, name, current.Generation)
+	return obj, nil
 }
 
 // OpenObject returns metadata and an open file of the content. The caller
@@ -370,6 +443,9 @@ func (s *Service) UpdateObject(ctx context.Context, project, bucket, name string
 
 	obj, objVersion, err := s.readGenerationVersion(ctx, project, bucket, name, current.Generation)
 	if err != nil {
+		if isNotFound(err) {
+			return Object{}, preconditionFailed(bucket, name)
+		}
 		return Object{}, err
 	}
 	if err := checkPreconditions(patch.Preconditions, &obj, bucket, name); err != nil {
@@ -404,19 +480,19 @@ func (s *Service) UpdateObject(ctx context.Context, project, bucket, name string
 
 // DeleteObject removes the live generation.
 func (s *Service) DeleteObject(ctx context.Context, project, bucket, name string, p Preconditions) error {
-	current, version, err := s.readLive(ctx, project, bucket, name)
+	obj, version, err := s.resolveLive(ctx, project, bucket, name)
 	if err != nil {
 		return err
 	}
 	if version == 0 {
 		return notFoundObject(bucket, name)
 	}
-
-	obj, err := s.readGeneration(ctx, project, bucket, name, current.Generation)
-	if err != nil {
+	if err := checkPreconditions(p, &obj, bucket, name); err != nil {
 		return err
 	}
-	if err := checkPreconditions(p, &obj, bucket, name); err != nil {
+
+	bkt, _, err := s.bucket(ctx, project, bucket)
+	if err != nil {
 		return err
 	}
 
@@ -426,7 +502,10 @@ func (s *Service) DeleteObject(ctx context.Context, project, bucket, name string
 		}
 		return gerr.Wrap(err, gerr.Internal, "deleting the live pointer")
 	}
-	// The generation's metadata and its blob stay: a later read by explicit
-	// generation still resolves, and Reset reclaims both.
-	return nil
+
+	if bkt.Versioning {
+		// Archived: a read by explicit generation still resolves.
+		return nil
+	}
+	return s.dropGeneration(ctx, project, obj)
 }

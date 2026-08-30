@@ -226,3 +226,46 @@ func TestDeleteBucket(t *testing.T) {
 		t.Errorf("status = %d deleting a missing bucket, want 404", status(t, err))
 	}
 }
+
+func TestReset(t *testing.T) {
+	t.Parallel()
+	s, ctx := withBucket(t)
+
+	if _, err := s.CreateBucket(ctx, storage.Bucket{Name: "other-bkt", Project: "other"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := write(t, s, "obj", "content", storage.Preconditions{}); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Run("scoped to a project", func(t *testing.T) {
+		if err := s.Reset(ctx, "p"); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.GetBucket(ctx, "p", "bkt"); status(t, err) != 404 {
+			t.Error("the project's bucket survived its reset")
+		}
+		// Another project is untouched.
+		if _, err := s.GetBucket(ctx, "other", "other-bkt"); err != nil {
+			t.Errorf("another project's bucket was cleared: %v", err)
+		}
+		// The name claim was released, so the name is reusable.
+		if _, err := s.CreateBucket(ctx, storage.Bucket{Name: "bkt", Project: "p"}); err != nil {
+			t.Errorf("the bucket name was not released: %v", err)
+		}
+	})
+
+	t.Run("everything", func(t *testing.T) {
+		if err := s.Reset(ctx, ""); err != nil {
+			t.Fatal(err)
+		}
+		for _, b := range []struct{ project, name string }{{"p", "bkt"}, {"other", "other-bkt"}} {
+			if _, err := s.GetBucket(ctx, b.project, b.name); status(t, err) != 404 {
+				t.Errorf("%s/%s survived a full reset", b.project, b.name)
+			}
+		}
+		if got, err := s.ListBuckets(ctx, "p"); err != nil || len(got) != 0 {
+			t.Errorf("ListBuckets = %v, %v after a full reset", got, err)
+		}
+	})
+}
