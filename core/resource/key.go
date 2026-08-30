@@ -23,6 +23,15 @@ const sep = "\x00"
 // int64.
 const genDigits = 20
 
+// BucketIndex maps a bucket name to its project.
+//
+// GCS bucket names are globally unique and object URLs carry no project, so a
+// request naming only a bucket has to resolve one. The index lives outside the
+// per-project tree because that is exactly what it exists to look up.
+func BucketIndex(bucket string) string {
+	return "bx/" + bucket
+}
+
 // Bucket is the key holding a bucket's metadata.
 //
 //	p/{project}/b/{bucket}

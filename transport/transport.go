@@ -29,6 +29,11 @@ type Config struct {
 	// built-in mux. Services own their own routing, so the front door needs no
 	// knowledge of their URL grammar.
 	Mounts map[string]http.Handler
+
+	// Fallback handles paths no route claimed. Cloud Storage needs it: the Go
+	// client downloads from /{bucket}/{object}, which has no prefix to mount
+	// on and is only distinguishable from anything else by asking.
+	Fallback http.Handler
 }
 
 // FunctionHost serves deployed functions and their admin API.
@@ -53,13 +58,14 @@ type RunnerInfo struct {
 
 // Handler is the h2c front door.
 type Handler struct {
-	rest    Router
-	clk     clock.Clock
-	started time.Time
-	version string
-	runner  RunnerInfo
-	fns     FunctionHost
-	mounts  map[string]http.Handler
+	rest     Router
+	clk      clock.Clock
+	started  time.Time
+	version  string
+	runner   RunnerInfo
+	fns      FunctionHost
+	mounts   map[string]http.Handler
+	fallback http.Handler
 }
 
 // New builds the front door. Routes register here so the endpoint set is
@@ -78,12 +84,13 @@ func New(cfg Config) *Handler {
 	}
 
 	h := &Handler{
-		clk:     cfg.Clock,
-		started: cfg.Clock.Now(),
-		version: version,
-		runner:  runner,
-		fns:     cfg.Functions,
-		mounts:  cfg.Mounts,
+		clk:      cfg.Clock,
+		started:  cfg.Clock.Now(),
+		version:  version,
+		runner:   runner,
+		fns:      cfg.Functions,
+		mounts:   cfg.Mounts,
+		fallback: cfg.Fallback,
 	}
 	h.rest.Handle(http.MethodGet, "/_emu/health", h.health)
 	return h
@@ -121,6 +128,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			serveFunction(fn, rest, w, r)
 			return
 		}
+	}
+	if h.fallback != nil && !h.rest.Matches(r.Method, path) {
+		h.fallback.ServeHTTP(w, r)
+		return
 	}
 	h.rest.ServeHTTP(w, r)
 }

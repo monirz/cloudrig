@@ -97,6 +97,13 @@ func (rr *route) matchPath(got []string) (Params, bool) {
 	return p, true
 }
 
+// Matches reports whether any route would handle this request, so a caller can
+// try something else before the mux answers 404.
+func (rt *Router) Matches(method, escapedPath string) bool {
+	r, _, pathOK := rt.match(method, escapedPath)
+	return r != nil || pathOK
+}
+
 // ServeHTTP dispatches to a matching route, rendering a handler's error and
 // distinguishing 404 from 405.
 func (rt *Router) ServeHTTP(w http.ResponseWriter, r *http.Request) {

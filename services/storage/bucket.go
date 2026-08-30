@@ -34,15 +34,35 @@ func (s *Service) CreateBucket(ctx context.Context, b Bucket) (Bucket, error) {
 		return Bucket{}, gerr.Wrap(err, gerr.Internal, "encoding bucket metadata")
 	}
 
-	// ifVersion 0 is "must not exist", so the duplicate check and the write are
-	// one step: two concurrent creates cannot both win.
-	if _, err := s.kv.Put(ctx, resource.Bucket(b.Project, b.Name), encoded, 0); err != nil {
+	// The index is claimed first, and ifVersion 0 makes the claim and the
+	// uniqueness check one step: two concurrent creates cannot both win. It
+	// also enforces the global namespace, so a name taken in one project is
+	// taken everywhere, as in GCS.
+	if _, err := s.kv.Put(ctx, resource.BucketIndex(b.Name), []byte(b.Project), 0); err != nil {
 		if errors.Is(err, store.ErrVersionMismatch) {
 			return Bucket{}, conflict("You already own this bucket. Please select another name.", b.Name)
 		}
+		return Bucket{}, gerr.Wrap(err, gerr.Internal, "claiming the bucket name")
+	}
+
+	if _, err := s.kv.Put(ctx, resource.Bucket(b.Project, b.Name), encoded, 0); err != nil {
+		_ = s.kv.Delete(ctx, resource.BucketIndex(b.Name), 0)
 		return Bucket{}, gerr.Wrap(err, gerr.Internal, "storing bucket metadata")
 	}
 	return b, nil
+}
+
+// ProjectOf resolves a bucket name to the project holding it, for the object
+// endpoints, whose URLs name no project.
+func (s *Service) ProjectOf(ctx context.Context, bucket string) (string, error) {
+	raw, _, err := s.kv.Get(ctx, resource.BucketIndex(bucket))
+	if errors.Is(err, store.ErrNotFound) {
+		return "", notFoundBucket(bucket)
+	}
+	if err != nil {
+		return "", gerr.Wrap(err, gerr.Internal, "resolving the bucket's project")
+	}
+	return string(raw), nil
 }
 
 // GetBucket returns a bucket's metadata.
@@ -114,6 +134,11 @@ func (s *Service) DeleteBucket(ctx context.Context, project, name string) error 
 			return notFoundBucket(name)
 		}
 		return gerr.Wrap(err, gerr.Internal, "deleting bucket metadata")
+	}
+	// The name is released last: while the metadata exists the claim must
+	// stand, or a concurrent create could take a name still in use.
+	if err := s.kv.Delete(ctx, resource.BucketIndex(name), 0); err != nil && !errors.Is(err, store.ErrNotFound) {
+		return gerr.Wrap(err, gerr.Internal, "releasing the bucket name")
 	}
 	return nil
 }

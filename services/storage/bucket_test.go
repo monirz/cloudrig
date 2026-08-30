@@ -80,10 +80,12 @@ func TestCreateBucketRejectsDuplicates(t *testing.T) {
 		t.Errorf("status = %d, want 409", got)
 	}
 
-	// Buckets are namespaced by project here, unlike real GCS's global
-	// namespace: an emulator has no shared world to collide with.
-	if _, err := s.CreateBucket(ctx, storage.Bucket{Name: "taken", Project: "other"}); err != nil {
-		t.Errorf("the same name in another project was refused: %v", err)
+	// The namespace is global, as in GCS: a name taken in one project is taken
+	// everywhere. Per-test isolation comes from each MustStart being its own
+	// emulator, not from partitioning names by project.
+	_, err = s.CreateBucket(ctx, storage.Bucket{Name: "taken", Project: "other"})
+	if got := status(t, err); got != 409 {
+		t.Errorf("status = %d for the same name in another project, want 409", got)
 	}
 }
 
@@ -184,6 +186,9 @@ func TestListBuckets(t *testing.T) {
 	}
 	if _, err := s.CreateBucket(ctx, storage.Bucket{Name: "elsewhere", Project: "other"}); err != nil {
 		t.Fatal(err)
+	}
+	if got, err := s.ProjectOf(ctx, "elsewhere"); err != nil || got != "other" {
+		t.Errorf("ProjectOf = %q, %v; want other", got, err)
 	}
 
 	got, err := s.ListBuckets(ctx, "p")

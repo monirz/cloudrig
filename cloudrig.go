@@ -24,6 +24,9 @@ import (
 	"github.com/monirz/cloudrig/core/clock"
 	"github.com/monirz/cloudrig/functions"
 	"github.com/monirz/cloudrig/services/cloudfunctions"
+	"github.com/monirz/cloudrig/services/storage"
+	"github.com/monirz/cloudrig/store"
+	"github.com/monirz/cloudrig/store/blob"
 	"github.com/monirz/cloudrig/transport"
 )
 
@@ -87,15 +90,21 @@ func Start(ctx context.Context, o Options) (*Emulator, error) {
 	if err != nil {
 		return nil, err
 	}
+	gcs, blobs, err := newStorage(clk)
+	if err != nil {
+		reg.StopAll()
+		return nil, err
+	}
 
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
 		reg.StopAll()
+		_ = blobs.Close()
 		return nil, fmt.Errorf("listen on %s: %w", addr, err)
 	}
 
 	srv := &http.Server{
-		Handler:   newHandler(clk, o, reg),
+		Handler:   newHandler(clk, o, reg, gcs),
 		Protocols: transport.Protocols(), // HTTP/1.1 and h2c on one port
 	}
 	go func() {
@@ -109,9 +118,20 @@ func Start(ctx context.Context, o Options) (*Emulator, error) {
 		shutdown: func(ctx context.Context) error {
 			err := srv.Shutdown(ctx)
 			reg.StopAll()
+			_ = blobs.Close()
 			return err
 		},
 	}, nil
+}
+
+// newStorage builds the Cloud Storage service and the blob tree it streams
+// payloads into.
+func newStorage(clk clock.Clock) (http.Handler, *blob.Store, error) {
+	blobs, err := blob.NewTemp()
+	if err != nil {
+		return nil, nil, fmt.Errorf("cloudrig: %w", err)
+	}
+	return storage.NewAPI(storage.New(store.NewMemory(), blobs, clk)), blobs, nil
 }
 
 // newRegistry deploys everything configured up front, tearing down whatever
@@ -157,7 +177,13 @@ func MustStart(t testing.TB, opts ...Options) *Emulator {
 	}
 	t.Cleanup(reg.StopAll)
 
-	srv := httptest.NewUnstartedServer(newHandler(o.Clock, o, reg))
+	gcs, blobs, err := newStorage(o.Clock)
+	if err != nil {
+		t.Fatalf("%v", err)
+	}
+	t.Cleanup(func() { _ = blobs.Close() })
+
+	srv := httptest.NewUnstartedServer(newHandler(o.Clock, o, reg, gcs))
 	srv.Config.Protocols = transport.Protocols()
 	srv.Start()
 	t.Cleanup(srv.Close)
@@ -174,7 +200,7 @@ func MustStart(t testing.TB, opts ...Options) *Emulator {
 	}
 }
 
-func newHandler(clk clock.Clock, o Options, reg *functions.Registry) http.Handler {
+func newHandler(clk clock.Clock, o Options, reg *functions.Registry, gcs http.Handler) http.Handler {
 	configured := o.Runner
 	if configured == "" {
 		configured = "auto"
@@ -189,15 +215,22 @@ func newHandler(clk clock.Clock, o Options, reg *functions.Registry) http.Handle
 	// The v1 API is a view over the same registry the runner uses, never a
 	// second store: an API that keeps its own copy is how an emulator ends up
 	// reporting a deploy that runs nothing.
+	mounts := map[string]http.Handler{}
+
 	api := cloudfunctions.New(reg, clk, o.EventLog)
-	mounts := make(map[string]http.Handler, len(cloudfunctions.Prefixes))
 	for _, prefix := range cloudfunctions.Prefixes {
 		mounts[prefix] = api
 	}
+	if gcs != nil {
+		for _, prefix := range storage.Prefixes {
+			mounts[prefix] = gcs
+		}
+	}
 
 	return transport.New(transport.Config{
-		Clock:   clk,
-		Version: o.Version,
+		Clock:    clk,
+		Version:  o.Version,
+		Fallback: gcs,
 		// Mode is what is in force, Configured what was asked for.
 		Runner:    transport.RunnerInfo{Configured: configured, Mode: mode},
 		Functions: reg,
