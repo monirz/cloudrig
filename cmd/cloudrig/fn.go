@@ -16,6 +16,7 @@ import (
 
 	"github.com/monirz/cloudrig"
 	"github.com/monirz/cloudrig/functions"
+	"github.com/monirz/cloudrig/services/storage"
 )
 
 // fnConfig is everything `cloudrig fn run` takes.
@@ -123,14 +124,16 @@ func runFnCommand(args []string, env lookupEnv, stdout, stderr *os.File) error {
 
 // deployFlags is the shape shared by every client subcommand.
 type deployFlags struct {
-	name       string
-	source     string
-	runtime    string
-	entryPoint string
-	project    string
-	location   string
-	endpoint   string
-	watch      bool
+	name          string
+	source        string
+	runtime       string
+	entryPoint    string
+	project       string
+	location      string
+	endpoint      string
+	watch         bool
+	triggerEvent  string
+	triggerBucket string
 }
 
 // fnDeploy sends a function to a running emulator.
@@ -146,6 +149,10 @@ func fnDeploy(args []string, env lookupEnv, stdout, stderr *os.File) error {
 	fs.StringVar(&f.location, "region", "", "GCP location (default "+functions.DefaultLocation+")")
 	fs.StringVar(&f.endpoint, "endpoint", "", "emulator endpoint (env CLOUDRIG_ENDPOINT)")
 	fs.BoolVar(&f.watch, "watch", false, "redeploy when the source changes")
+	fs.StringVar(&f.triggerBucket, "trigger-bucket", "",
+		"run on changes to this Cloud Storage bucket")
+	fs.StringVar(&f.triggerEvent, "trigger-event", "",
+		"the event type to run on (default: "+storage.EventFinalized+")")
 
 	name, rest := splitPositional(args)
 	if err := fs.Parse(rest); err != nil {
@@ -176,6 +183,7 @@ func fnDeploy(args []string, env lookupEnv, stdout, stderr *os.File) error {
 		Runtime:    functions.Runtime(f.runtime),
 		EntryPoint: f.entryPoint,
 		Watch:      f.watch,
+		Trigger:    trigger(f),
 	})
 	if err != nil {
 		return err
@@ -185,6 +193,9 @@ func fnDeploy(args []string, env lookupEnv, stdout, stderr *os.File) error {
 	fmt.Fprintf(stdout, "url: %s/%s-%s/%s\n", c.endpoint, desc.Location, desc.Project, desc.Name)
 	if desc.Watch {
 		fmt.Fprintf(stdout, "watching %s; edit and save to redeploy\n", f.source)
+	}
+	if desc.Trigger.IsSet() {
+		fmt.Fprintf(stdout, "trigger: %s on %s\n", desc.Trigger.EventType, desc.Trigger.Resource)
 	}
 	return nil
 }
@@ -232,6 +243,20 @@ func fnInvoke(args []string, env lookupEnv, stdout, stderr *os.File) error {
 	}
 	fmt.Fprintln(stdout, strings.TrimRight(out.Result, "\n"))
 	return nil
+}
+
+// trigger builds the event trigger from the deploy flags. Naming a bucket is
+// enough: the common case is an object being written, so that is the default
+// event.
+func trigger(f deployFlags) functions.EventTrigger {
+	if f.triggerBucket == "" && f.triggerEvent == "" {
+		return functions.EventTrigger{}
+	}
+	eventType := f.triggerEvent
+	if eventType == "" {
+		eventType = storage.EventFinalized
+	}
+	return functions.EventTrigger{EventType: eventType, Resource: f.triggerBucket}
 }
 
 // fnLogs prints a function's output, following it with -f until interrupted.

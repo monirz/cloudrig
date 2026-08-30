@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"github.com/monirz/cloudrig/core/clock"
+	"github.com/monirz/cloudrig/core/events"
 	"github.com/monirz/cloudrig/functions"
 )
 
@@ -18,7 +20,7 @@ var epoch = time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 
 func newRegistry(t *testing.T) *functions.Registry {
 	t.Helper()
-	r := functions.NewRegistry(clock.NewFake(epoch), functions.Options{})
+	r := functions.NewRegistry(clock.NewFake(epoch), nil, functions.Options{})
 	t.Cleanup(r.StopAll)
 	return r
 }
@@ -462,7 +464,7 @@ func Handler(w http.ResponseWriter, r *http.Request) { w.Write([]byte("` + reply
 
 	clk := clock.NewFake(epoch)
 	var events strings.Builder
-	r := functions.NewRegistry(clk, functions.Options{EventLog: &events})
+	r := functions.NewRegistry(clk, nil, functions.Options{EventLog: &events})
 	t.Cleanup(r.StopAll)
 
 	if _, err := r.Deploy(context.Background(), functions.Function{
@@ -538,7 +540,7 @@ func TestRedeployDoesNotLeaveTwoWatchers(t *testing.T) {
 	t.Parallel()
 
 	clk := clock.NewFake(epoch)
-	r := functions.NewRegistry(clk, functions.Options{})
+	r := functions.NewRegistry(clk, nil, functions.Options{})
 	t.Cleanup(r.StopAll)
 
 	f := goFn("hello")
@@ -550,5 +552,205 @@ func TestRedeployDoesNotLeaveTwoWatchers(t *testing.T) {
 	}
 	if got := clk.Pending(); got != 1 {
 		t.Errorf("pending timers = %d after three deploys, want 1", got)
+	}
+}
+
+// triggerFn writes a Go function that records every delivery and can be made
+// to fail, so a test can watch the retry.
+func triggerFn(t *testing.T, failTimes int) string {
+	t.Helper()
+
+	dir := t.TempDir()
+	write(t, dir, "go.mod", "module example.com/trig\n\ngo 1.25\n")
+	write(t, dir, "fn.go", fmt.Sprintf(`package trig
+
+import (
+	"fmt"
+	"net/http"
+	"sync/atomic"
+)
+
+var seen atomic.Int32
+
+func Handler(w http.ResponseWriter, r *http.Request) {
+	n := seen.Add(1)
+	fmt.Printf("DELIVERY %%d\n", n)
+	if int(n) <= %d {
+		http.Error(w, "not yet", http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+`, failTimes))
+	return dir
+}
+
+// TestTriggerFires is the demo: an event published on the bus reaches a
+// function that subscribed to it.
+func TestTriggerFires(t *testing.T) {
+	if testing.Short() {
+		t.Skip("compiles a function")
+	}
+	t.Parallel()
+
+	bus := events.New()
+	clk := clock.NewFake(epoch)
+	r := functions.NewRegistry(clk, bus, functions.Options{})
+	t.Cleanup(r.StopAll)
+
+	if _, err := r.Deploy(context.Background(), functions.Function{
+		Name:   "on-upload",
+		Source: triggerFn(t, 0),
+		Trigger: functions.EventTrigger{
+			EventType: "google.storage.object.finalize",
+			Resource:  "uploads",
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	inst, _ := r.Instance("", "", "on-upload")
+
+	bus.Publish(context.Background(), events.Event{
+		Type:     "google.storage.object.finalize",
+		Source:   "//storage.googleapis.com/projects/_/buckets/uploads",
+		Resource: "projects/_/buckets/uploads/objects/x",
+		Service:  "storage.googleapis.com",
+		Time:     epoch,
+		Data:     map[string]any{"name": "x"},
+	})
+	bus.Sync()
+
+	if got := strings.Join(inst.LogSnapshot(), "\n"); !strings.Contains(got, "DELIVERY 1") {
+		t.Errorf("the function was not delivered to; its log:\n%s", got)
+	}
+}
+
+// TestTriggerIgnoresOtherBuckets holds the other half: a trigger scoped to one
+// bucket must not run for another.
+func TestTriggerIgnoresOtherBuckets(t *testing.T) {
+	if testing.Short() {
+		t.Skip("compiles a function")
+	}
+	t.Parallel()
+
+	bus := events.New()
+	r := functions.NewRegistry(clock.NewFake(epoch), bus, functions.Options{})
+	t.Cleanup(r.StopAll)
+
+	if _, err := r.Deploy(context.Background(), functions.Function{
+		Name:   "scoped",
+		Source: triggerFn(t, 0),
+		Trigger: functions.EventTrigger{
+			EventType: "google.storage.object.finalize",
+			Resource:  "wanted",
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	inst, _ := r.Instance("", "", "scoped")
+
+	bus.Publish(context.Background(), events.Event{
+		Type:   "google.storage.object.finalize",
+		Source: "//storage.googleapis.com/projects/_/buckets/unwanted",
+		Time:   epoch,
+	})
+	bus.Sync()
+
+	if got := strings.Join(inst.LogSnapshot(), "\n"); strings.Contains(got, "DELIVERY") {
+		t.Errorf("a trigger scoped to one bucket ran for another:\n%s", got)
+	}
+}
+
+// TestTriggerRetries watches the backoff. The wait is on the injected clock, so
+// the test advances time rather than waiting.
+func TestTriggerRetries(t *testing.T) {
+	if testing.Short() {
+		t.Skip("compiles a function")
+	}
+	t.Parallel()
+
+	bus := events.New()
+	clk := clock.NewFake(epoch)
+	var log strings.Builder
+	r := functions.NewRegistry(clk, bus, functions.Options{EventLog: &log})
+	t.Cleanup(r.StopAll)
+
+	// Fails twice, then succeeds.
+	if _, err := r.Deploy(context.Background(), functions.Function{
+		Name:    "flaky",
+		Source:  triggerFn(t, 2),
+		Trigger: functions.EventTrigger{EventType: "e"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	inst, _ := r.Instance("", "", "flaky")
+
+	bus.Publish(context.Background(), events.Event{Type: "e", Time: epoch})
+	drain(t, bus, clk)
+
+	deliveries := strings.Count(strings.Join(inst.LogSnapshot(), "\n"), "DELIVERY")
+	if deliveries != 3 {
+		t.Errorf("the function saw %d deliveries, want 3 (two failures then success)", deliveries)
+	}
+	if !strings.Contains(log.String(), "delivered on attempt 3") {
+		t.Errorf("the emulator log does not report the recovery:\n%s", log.String())
+	}
+}
+
+func TestTriggerGivesUp(t *testing.T) {
+	if testing.Short() {
+		t.Skip("compiles a function")
+	}
+	t.Parallel()
+
+	bus := events.New()
+	clk := clock.NewFake(epoch)
+	var log strings.Builder
+	r := functions.NewRegistry(clk, bus, functions.Options{EventLog: &log})
+	t.Cleanup(r.StopAll)
+
+	if _, err := r.Deploy(context.Background(), functions.Function{
+		Name:    "broken",
+		Source:  triggerFn(t, 99),
+		Trigger: functions.EventTrigger{EventType: "e"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	inst, _ := r.Instance("", "", "broken")
+
+	bus.Publish(context.Background(), events.Event{Type: "e", Time: epoch})
+	drain(t, bus, clk)
+
+	// Bounded: an event that never succeeds must not be retried forever.
+	if got := strings.Count(strings.Join(inst.LogSnapshot(), "\n"), "DELIVERY"); got != functions.MaxDeliveryAttempts {
+		t.Errorf("the function saw %d deliveries, want %d", got, functions.MaxDeliveryAttempts)
+	}
+	if !strings.Contains(log.String(), "giving up") {
+		t.Errorf("the emulator log does not report giving up:\n%s", log.String())
+	}
+}
+
+// drain advances the fake clock until every published event has settled.
+// Delivery waits on the clock, so nothing progresses unless time does.
+func drain(t *testing.T, bus *events.Bus, clk *clock.FakeClock) {
+	t.Helper()
+
+	done := make(chan struct{})
+	go func() {
+		bus.Sync()
+		close(done)
+	}()
+
+	deadline := time.After(30 * time.Second)
+	for {
+		select {
+		case <-done:
+			return
+		case <-deadline:
+			t.Fatal("events never settled")
+		default:
+			clk.Advance(functions.RetryBackoff * 64)
+			time.Sleep(time.Millisecond)
+		}
 	}
 }

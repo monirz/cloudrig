@@ -170,6 +170,42 @@ func (s *Memory) removeKey(key string) {
 	}
 }
 
+// Entry is one key's stored state, for a snapshot. Version travels with it:
+// restoring without it would reset every compare-and-swap baseline, so a
+// precondition that held before a restart would fail after one.
+type Entry struct {
+	Key     string `json:"key"`
+	Val     []byte `json:"val"`
+	Version uint64 `json:"version"`
+}
+
+// Snapshot returns every entry, in key order.
+func (s *Memory) Snapshot() []Entry {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	out := make([]Entry, 0, len(s.keys))
+	for _, k := range s.keys {
+		e := s.m[k]
+		out = append(out, Entry{Key: k, Val: clone(e.val), Version: e.version})
+	}
+	return out
+}
+
+// Restore replaces the contents with entries.
+func (s *Memory) Restore(entries []Entry) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.m = make(map[string]entry, len(entries))
+	s.keys = make([]string, 0, len(entries))
+	for _, e := range entries {
+		s.m[e.Key] = entry{val: clone(e.Val), version: e.Version}
+		s.keys = append(s.keys, e.Key)
+	}
+	sort.Strings(s.keys)
+}
+
 // clone stops callers mutating a slice they handed in or got back.
 func clone(b []byte) []byte {
 	if b == nil {

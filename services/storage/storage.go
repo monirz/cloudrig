@@ -10,7 +10,10 @@ import (
 	"context"
 	"time"
 
+	"strconv"
+
 	"github.com/monirz/cloudrig/core/clock"
+	"github.com/monirz/cloudrig/core/events"
 	"github.com/monirz/cloudrig/core/gerr"
 	"github.com/monirz/cloudrig/core/resource"
 	"github.com/monirz/cloudrig/store"
@@ -26,12 +29,16 @@ type Service struct {
 	kv    store.Store
 	blobs *blob.Store
 	clk   clock.Clock
+	bus   *events.Bus
 }
 
 // New wires a service. The blob tree holds payloads; kv holds only metadata.
-func New(kv store.Store, blobs *blob.Store, clk clock.Clock) *Service {
-	return &Service{kv: kv, blobs: blobs, clk: clk}
+// A nil bus publishes nothing.
+func New(kv store.Store, blobs *blob.Store, clk clock.Clock, bus *events.Bus) *Service {
+	return &Service{kv: kv, blobs: blobs, clk: clk, bus: bus}
 }
+
+func itoa(n int64) string { return strconv.FormatInt(n, 10) }
 
 // Bucket is a bucket's metadata.
 type Bucket struct {

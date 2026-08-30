@@ -24,7 +24,7 @@ func serviceWithBlobs(t *testing.T, versioning bool) (*storage.Service, *blob.St
 	}
 	t.Cleanup(func() { _ = blobs.Close() })
 
-	s := storage.New(store.NewMemory(), blobs, clock.NewFake(epoch))
+	s := storage.New(store.NewMemory(), blobs, clock.NewFake(epoch), nil)
 	ctx := context.Background()
 	if _, err := s.CreateBucket(ctx, storage.Bucket{
 		Name: "bkt", Project: "p", Versioning: versioning,

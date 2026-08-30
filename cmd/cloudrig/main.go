@@ -56,6 +56,7 @@ func run(args []string, env lookupEnv, stdout, stderr *os.File) error {
 		Addr:     cfg.addr(),
 		Version:  version,
 		Runner:   cfg.runner,
+		DataDir:  cfg.dataDir,
 		EventLog: stdout,
 	})
 	if err != nil {
@@ -63,6 +64,9 @@ func run(args []string, env lookupEnv, stdout, stderr *os.File) error {
 	}
 
 	fmt.Fprintf(stdout, "cloudrig %s listening on %s\n", version, emu.BaseURL())
+	if cfg.dataDir != "" {
+		fmt.Fprintf(stdout, "persisting storage under %s\n", cfg.dataDir)
+	}
 	fmt.Fprintf(stdout, "health: %s/_emu/health\n", emu.BaseURL())
 
 	<-ctx.Done()

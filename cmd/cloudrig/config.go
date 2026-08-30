@@ -12,8 +12,9 @@ import (
 
 // config is everything cloudrig start takes.
 type config struct {
-	port   int
-	runner string
+	port    int
+	runner  string
+	dataDir string
 }
 
 const (
@@ -73,6 +74,13 @@ func parseConfig(args []string, env lookupEnv, out io.Writer) (config, error) {
 	fs.StringVar(&runner, "runner", runner,
 		fmt.Sprintf("function runner: %v (env CLOUDRIG_RUNNER)", runnerModes))
 
+	dataDir := ""
+	if v, ok := env("CLOUDRIG_DATA_DIR"); ok {
+		dataDir = v
+	}
+	fs.StringVar(&dataDir, "data-dir", dataDir,
+		"persist Cloud Storage under this directory (env CLOUDRIG_DATA_DIR)")
+
 	if err := fs.Parse(args[1:]); err != nil {
 		return config{}, err
 	}
@@ -80,7 +88,7 @@ func parseConfig(args []string, env lookupEnv, out io.Writer) (config, error) {
 		return config{}, fmt.Errorf("unexpected argument %q", rest[0])
 	}
 
-	c := config{port: port, runner: runner}
+	c := config{port: port, runner: runner, dataDir: dataDir}
 	return c, c.validate()
 }
 
@@ -90,7 +98,8 @@ func usage(out io.Writer) {
 usage:
   cloudrig %s [--port N] [--runner %v]
 
-  cloudrig %s deploy <name> --source DIR [--runtime R] [--entry-point F] [--watch]
+  cloudrig %s deploy <name> --source DIR [--runtime R] [--entry-point F]
+                            [--watch] [--trigger-bucket B]
   cloudrig %s list
   cloudrig %s describe <name>
   cloudrig %s delete <name>
@@ -99,12 +108,14 @@ usage:
 start flags:
   --port N          port to listen on (default %d, env CLOUDRIG_PORT)
   --runner MODE     function runner: %v (default %q, env CLOUDRIG_RUNNER)
+  --data-dir DIR    persist Cloud Storage here (default: in memory)
 
 fn flags:
   --source DIR      source directory
   --runtime R       %v (default: detected from the source)
   --entry-point F   handler to serve (Go: detected when there is only one)
   --watch           redeploy when the source changes
+  --trigger-bucket B  run on changes to a Cloud Storage bucket
   --endpoint URL    emulator to talk to (default %s, env CLOUDRIG_ENDPOINT)
 
 fn deploy, list, describe and delete talk to a running emulator.

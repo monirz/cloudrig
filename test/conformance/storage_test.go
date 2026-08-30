@@ -4,14 +4,18 @@
 package conformance
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
 	"net/http"
+	"strings"
 	"testing"
 
 	"cloud.google.com/go/storage"
 	"github.com/monirz/cloudrig"
+	"github.com/monirz/cloudrig/functions"
+	storage2 "github.com/monirz/cloudrig/services/storage"
 	"google.golang.org/api/googleapi"
 	"google.golang.org/api/option"
 )
@@ -355,5 +359,157 @@ func TestResetClearsState(t *testing.T) {
 	// The name is reusable, so a suite can start the next case cleanly.
 	if err := b.Create(ctx, "p", nil); err != nil {
 		t.Errorf("recreating the bucket after a reset: %v", err)
+	}
+}
+
+// TestUploadFiresAFunction is the whole point of the event bus: an object
+// written through the real client runs a function, in one process, with no
+// Docker and no Pub/Sub.
+func TestUploadFiresAFunction(t *testing.T) {
+	if testing.Short() {
+		t.Skip("compiles a function")
+	}
+	t.Parallel()
+
+	emu := cloudrig.MustStart(t)
+	ctx := context.Background()
+
+	if _, err := emu.Functions().Deploy(ctx, functions.Function{
+		Name:   "on-upload",
+		Source: "../../testdata/go-trigger",
+		Trigger: functions.EventTrigger{
+			EventType: storage2.EventFinalized,
+			Resource:  "uploads",
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	c, err := storage.NewClient(ctx,
+		option.WithEndpoint(emu.BaseURL()+"/storage/v1/"),
+		option.WithoutAuthentication(),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = c.Close() })
+
+	b := c.Bucket("uploads")
+	if err := b.Create(ctx, "p", nil); err != nil {
+		t.Fatal(err)
+	}
+	w := b.Object("report.csv").NewWriter(ctx)
+	w.Write([]byte("a,b,c"))
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Delivery is asynchronous so the upload never waits on it.
+	emu.SyncEvents()
+
+	inst, ok := emu.Functions().Instance("", "", "on-upload")
+	if !ok {
+		t.Fatal("the function is not deployed")
+	}
+	logged := strings.Join(inst.LogSnapshot(), "\n")
+	for _, want := range []string{
+		"FIRED",
+		storage2.EventFinalized,
+		"gs://uploads/report.csv",
+		"storage.googleapis.com",
+	} {
+		if !strings.Contains(logged, want) {
+			t.Errorf("the function log is missing %q:\n%s", want, logged)
+		}
+	}
+}
+
+// TestResumableUpload covers the client's default path. Writer.ChunkSize is
+// left alone: the client chunks at 16 MiB and switches to resumable above it,
+// so this is what a user gets without knowing the protocol exists.
+func TestResumableUpload(t *testing.T) {
+	if testing.Short() {
+		t.Skip("uploads tens of megabytes")
+	}
+
+	c, ctx := client(t)
+	b := bucket(t, c, ctx, "resumable")
+
+	const size = 40 << 20 // over the default chunk, so several chunks
+
+	w := b.Object("big.bin").NewWriter(ctx)
+	if _, err := io.Copy(w, source(size)); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("the default upload path failed: %v", err)
+	}
+
+	attrs, err := b.Object("big.bin").Attrs(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if attrs.Size != size {
+		t.Fatalf("stored %d bytes, want %d", attrs.Size, size)
+	}
+
+	// Read it back and compare against the same generator, so the whole object
+	// is never held to check it.
+	r, err := b.Object("big.bin").NewReader(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+
+	want := source(size)
+	got, expect := make([]byte, 64<<10), make([]byte, 64<<10)
+	var read int64
+	for {
+		n, err := io.ReadFull(r, got)
+		if n == 0 {
+			break
+		}
+		_, _ = io.ReadFull(want, expect[:n])
+		if !bytes.Equal(got[:n], expect[:n]) {
+			t.Fatalf("content differs at offset %d", read)
+		}
+		read += int64(n)
+		if err != nil {
+			break
+		}
+	}
+	if read != size {
+		t.Errorf("read back %d bytes, want %d", read, size)
+	}
+}
+
+// TestResumableWithPreconditions checks the conditions travel with the session
+// rather than being forgotten when the first chunk lands.
+func TestResumableWithPreconditions(t *testing.T) {
+	if testing.Short() {
+		t.Skip("uploads tens of megabytes")
+	}
+
+	c, ctx := client(t)
+	b := bucket(t, c, ctx, "resumable-conditions")
+
+	const size = 20 << 20
+
+	first := b.Object("once").If(storage.Conditions{DoesNotExist: true}).NewWriter(ctx)
+	if _, err := io.Copy(first, source(size)); err != nil {
+		t.Fatal(err)
+	}
+	if err := first.Close(); err != nil {
+		t.Fatalf("the first conditional resumable upload failed: %v", err)
+	}
+
+	second := b.Object("once").If(storage.Conditions{DoesNotExist: true}).NewWriter(ctx)
+	if _, err := io.Copy(second, source(size)); err != nil {
+		t.Fatal(err)
+	}
+	if err := second.Close(); err == nil {
+		t.Fatal("the second conditional upload succeeded")
+	} else if statusOf(t, err) != 412 {
+		t.Errorf("status = %d, want 412", statusOf(t, err))
 	}
 }

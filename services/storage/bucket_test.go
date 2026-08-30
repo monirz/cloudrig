@@ -27,7 +27,7 @@ func newService(t *testing.T) (*storage.Service, *clock.FakeClock) {
 	t.Cleanup(func() { _ = blobs.Close() })
 
 	clk := clock.NewFake(epoch)
-	return storage.New(store.NewMemory(), blobs, clk), clk
+	return storage.New(store.NewMemory(), blobs, clk, nil), clk
 }
 
 // status is the HTTP status a semantics error renders as. Asserting on it here

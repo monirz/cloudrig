@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/monirz/cloudrig/core/clock"
+	"github.com/monirz/cloudrig/core/events"
 )
 
 // Descriptor is a deployed function.
@@ -17,15 +18,16 @@ import (
 // facts both are projections of. Storing a wire shape would make the second API
 // a translation of the first rather than a second view of the truth.
 type Descriptor struct {
-	Project    string    `json:"project"`
-	Location   string    `json:"location"`
-	Name       string    `json:"name"`
-	Source     string    `json:"source"`
-	Runtime    Runtime   `json:"runtime"`
-	EntryPoint string    `json:"entryPoint"`
-	Watch      bool      `json:"watch,omitempty"`
-	State      string    `json:"state"`
-	UpdateTime time.Time `json:"updateTime"`
+	Project    string       `json:"project"`
+	Location   string       `json:"location"`
+	Name       string       `json:"name"`
+	Source     string       `json:"source"`
+	Runtime    Runtime      `json:"runtime"`
+	EntryPoint string       `json:"entryPoint"`
+	Watch      bool         `json:"watch,omitempty"`
+	Trigger    EventTrigger `json:"trigger,omitempty"`
+	State      string       `json:"state"`
+	UpdateTime time.Time    `json:"updateTime"`
 }
 
 // ResourceName is projects/P/locations/L/functions/F.
@@ -38,6 +40,7 @@ func (d Descriptor) ResourceName() string {
 // work.
 type Registry struct {
 	clk  clock.Clock
+	bus  *events.Bus
 	opts Options
 
 	mu      sync.RWMutex
@@ -45,14 +48,16 @@ type Registry struct {
 }
 
 type entry struct {
-	inst      *Instance
-	desc      Descriptor
-	stopWatch func()
+	inst        *Instance
+	desc        Descriptor
+	stopWatch   func()
+	unsubscribe func()
 }
 
 // NewRegistry returns an empty registry. opts apply to every function it runs.
-func NewRegistry(clk clock.Clock, opts Options) *Registry {
-	return &Registry{clk: clk, opts: opts, entries: map[string]*entry{}}
+// A nil bus means event triggers never fire.
+func NewRegistry(clk clock.Clock, bus *events.Bus, opts Options) *Registry {
+	return &Registry{clk: clk, bus: bus, opts: opts, entries: map[string]*entry{}}
 }
 
 // Deploy builds and starts f, replacing any function of the same name.
@@ -73,6 +78,7 @@ func (r *Registry) Deploy(ctx context.Context, f Function) (Descriptor, error) {
 		Runtime:    inst.Runtime(),
 		EntryPoint: inst.EntryPoint(),
 		Watch:      f.Watch,
+		Trigger:    f.Trigger,
 		State:      "ACTIVE",
 		UpdateTime: r.clk.Now(),
 	}
@@ -91,8 +97,13 @@ func (r *Registry) Deploy(ctx context.Context, f Function) (Descriptor, error) {
 		if old.stopWatch != nil {
 			old.stopWatch()
 		}
+		if old.unsubscribe != nil {
+			old.unsubscribe()
+		}
 		_ = old.inst.Stop()
 	}
+
+	e.unsubscribe = r.subscribe(inst, f.Trigger)
 
 	if f.Watch {
 		e.stopWatch = watch(r.clk, f.Source, WatchInterval, func() { r.redeploy(f) })
@@ -200,6 +211,9 @@ func (r *Registry) Delete(project, location, name string) error {
 	if e.stopWatch != nil {
 		e.stopWatch()
 	}
+	if e.unsubscribe != nil {
+		e.unsubscribe()
+	}
 	return e.inst.Stop()
 }
 
@@ -213,6 +227,9 @@ func (r *Registry) StopAll() {
 	for _, e := range entries {
 		if e.stopWatch != nil {
 			e.stopWatch()
+		}
+		if e.unsubscribe != nil {
+			e.unsubscribe()
 		}
 		_ = e.inst.Stop()
 	}

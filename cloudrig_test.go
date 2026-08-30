@@ -392,3 +392,65 @@ func get(t *testing.T, url string) string {
 	}
 	return string(body)
 }
+
+// TestDataDirSurvivesRestart is the point of persistence: stop the emulator,
+// start it again on the same directory, and the objects are still there.
+func TestDataDirSurvivesRestart(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	ctx := context.Background()
+
+	first, err := cloudrig.Start(ctx, cloudrig.Options{Addr: "127.0.0.1:0", DataDir: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	post(t, first.BaseURL()+"/storage/v1/b?project=p", `{"name":"kept"}`)
+	post(t, first.BaseURL()+"/upload/storage/v1/b/kept/o?uploadType=media&name=obj.txt", "content")
+	if err := first.Shutdown(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	second, err := cloudrig.Start(ctx, cloudrig.Options{Addr: "127.0.0.1:0", DataDir: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = second.Shutdown(ctx) })
+
+	if got := get(t, second.BaseURL()+"/storage/v1/b/kept/o/obj.txt?alt=media"); got != "content" {
+		t.Errorf("content = %q after a restart, want %q", got, "content")
+	}
+}
+
+// TestMustStartNeverPersists holds the other half: a test's state must not
+// outlive it, whatever the daemon does.
+func TestMustStartNeverPersists(t *testing.T) {
+	t.Parallel()
+
+	emu := cloudrig.MustStart(t, cloudrig.Options{DataDir: t.TempDir()})
+	post(t, emu.BaseURL()+"/storage/v1/b?project=p", `{"name":"ephemeral"}`)
+
+	// A second instance on the same options starts clean.
+	other := cloudrig.MustStart(t, cloudrig.Options{DataDir: t.TempDir()})
+	resp, err := http.Get(other.BaseURL() + "/storage/v1/b/ephemeral")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Errorf("status = %d; a MustStart instance saw another's state", resp.StatusCode)
+	}
+}
+
+func post(t *testing.T, url, body string) {
+	t.Helper()
+	resp, err := http.Post(url, "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		out, _ := io.ReadAll(resp.Body)
+		t.Fatalf("POST %s: %d %s", url, resp.StatusCode, out)
+	}
+}

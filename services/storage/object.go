@@ -188,6 +188,10 @@ func (s *Service) publish(ctx context.Context, project string, w Write, ref blob
 			return Object{}, err
 		}
 	}
+
+	// Published after the write is durable, so a subscriber that reads the
+	// object finds it there.
+	s.notify(ctx, EventFinalized, obj)
 	return obj, nil
 }
 
@@ -475,6 +479,7 @@ func (s *Service) UpdateObject(ctx context.Context, project, bucket, name string
 		}
 		return Object{}, gerr.Wrap(err, gerr.Internal, "storing object metadata")
 	}
+	s.notify(ctx, EventUpdated, obj)
 	return obj, nil
 }
 
@@ -505,7 +510,12 @@ func (s *Service) DeleteObject(ctx context.Context, project, bucket, name string
 
 	if bkt.Versioning {
 		// Archived: a read by explicit generation still resolves.
+		s.notify(ctx, EventArchived, obj)
 		return nil
 	}
-	return s.dropGeneration(ctx, project, obj)
+	if err := s.dropGeneration(ctx, project, obj); err != nil {
+		return err
+	}
+	s.notify(ctx, EventDeleted, obj)
+	return nil
 }

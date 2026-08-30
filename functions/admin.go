@@ -16,13 +16,14 @@ const AdminPath = "/_emu/functions"
 // running the emulator, not an uploaded archive: the emulator and the CLI share
 // a filesystem, and pretending otherwise would buy nothing.
 type DeployRequest struct {
-	Project    string  `json:"project,omitempty"`
-	Location   string  `json:"location,omitempty"`
-	Name       string  `json:"name"`
-	Source     string  `json:"source"`
-	Runtime    Runtime `json:"runtime,omitempty"`
-	EntryPoint string  `json:"entryPoint,omitempty"`
-	Watch      bool    `json:"watch,omitempty"`
+	Project    string       `json:"project,omitempty"`
+	Location   string       `json:"location,omitempty"`
+	Name       string       `json:"name"`
+	Source     string       `json:"source"`
+	Runtime    Runtime      `json:"runtime,omitempty"`
+	EntryPoint string       `json:"entryPoint,omitempty"`
+	Watch      bool         `json:"watch,omitempty"`
+	Trigger    EventTrigger `json:"trigger,omitempty"`
 }
 
 // Admin serves deploy, list, describe and delete.
@@ -76,6 +77,7 @@ func (r *Registry) handleDeploy(w http.ResponseWriter, req *http.Request) error 
 		Runtime:    body.Runtime,
 		EntryPoint: body.EntryPoint,
 		Watch:      body.Watch,
+		Trigger:    body.Trigger,
 	})
 	if err != nil {
 		// A deploy that fails to build is the caller's problem, not ours, so

@@ -19,9 +19,11 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"testing"
 
 	"github.com/monirz/cloudrig/core/clock"
+	"github.com/monirz/cloudrig/core/events"
 	"github.com/monirz/cloudrig/functions"
 	"github.com/monirz/cloudrig/services/cloudfunctions"
 	"github.com/monirz/cloudrig/services/storage"
@@ -60,6 +62,12 @@ type Options struct {
 	// EventLog receives the emulator's own messages, such as a watched
 	// function redeploying. Nil discards them.
 	EventLog io.Writer
+
+	// DataDir persists Cloud Storage across restarts: metadata snapshots and
+	// object content live under it. Empty keeps everything in memory and a
+	// temp directory, which is what a test wants — state surviving a test is a
+	// bug, not a feature.
+	DataDir string
 }
 
 // Emulator is a running instance.
@@ -69,6 +77,7 @@ type Emulator struct {
 	shutdown func(context.Context) error
 	fns      *functions.Registry
 	storage  *storage.Service
+	bus      *events.Bus
 }
 
 // Start runs the emulator on a real listener; the caller owns shutdown. ctx
@@ -87,11 +96,14 @@ func Start(ctx context.Context, o Options) (*Emulator, error) {
 		clk = clock.Real()
 	}
 
-	reg, err := newRegistry(ctx, clk, o)
+	// One bus for the whole emulator: it is the only path between services.
+	bus := events.New()
+
+	reg, err := newRegistry(ctx, clk, bus, o)
 	if err != nil {
 		return nil, err
 	}
-	gcs, blobs, err := newStorage(clk)
+	stack, err := newStorage(clk, bus, o.DataDir)
 	if err != nil {
 		reg.StopAll()
 		return nil, err
@@ -100,12 +112,12 @@ func Start(ctx context.Context, o Options) (*Emulator, error) {
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
 		reg.StopAll()
-		_ = blobs.Close()
+		stack.close()
 		return nil, fmt.Errorf("listen on %s: %w", addr, err)
 	}
 
 	srv := &http.Server{
-		Handler:   newHandler(clk, o, reg, gcs),
+		Handler:   newHandler(clk, o, reg, stack.svc),
 		Protocols: transport.Protocols(), // HTTP/1.1 and h2c on one port
 	}
 	go func() {
@@ -116,30 +128,60 @@ func Start(ctx context.Context, o Options) (*Emulator, error) {
 		clk:     clk,
 		addr:    dialable(ln.Addr().String()),
 		fns:     reg,
-		storage: gcs,
+		storage: stack.svc,
+		bus:     bus,
 		shutdown: func(ctx context.Context) error {
 			err := srv.Shutdown(ctx)
 			reg.StopAll()
-			_ = blobs.Close()
+			stack.close()
 			return err
 		},
 	}, nil
 }
 
-// newStorage builds the Cloud Storage service and the blob tree it streams
-// payloads into.
-func newStorage(clk clock.Clock) (*storage.Service, *blob.Store, error) {
-	blobs, err := blob.NewTemp()
-	if err != nil {
-		return nil, nil, fmt.Errorf("cloudrig: %w", err)
+// storageStack is the Cloud Storage service and what it must tear down.
+type storageStack struct {
+	svc   *storage.Service
+	blobs *blob.Store
+	kv    io.Closer // non-nil only when persisting
+}
+
+func (s storageStack) close() {
+	if s.kv != nil {
+		_ = s.kv.Close()
 	}
-	return storage.New(store.NewMemory(), blobs, clk), blobs, nil
+	if s.blobs != nil {
+		_ = s.blobs.Close()
+	}
+}
+
+// newStorage builds the Cloud Storage service and the blob tree it streams
+// payloads into. A DataDir makes both survive a restart.
+func newStorage(clk clock.Clock, bus *events.Bus, dataDir string) (storageStack, error) {
+	if dataDir == "" {
+		blobs, err := blob.NewTemp()
+		if err != nil {
+			return storageStack{}, fmt.Errorf("cloudrig: %w", err)
+		}
+		return storageStack{svc: storage.New(store.NewMemory(), blobs, clk, bus), blobs: blobs}, nil
+	}
+
+	blobs, err := blob.New(filepath.Join(dataDir, "storage"))
+	if err != nil {
+		return storageStack{}, fmt.Errorf("cloudrig: %w", err)
+	}
+	kv, err := store.OpenPersistent(filepath.Join(dataDir, "storage", "metadata.json"), clk)
+	if err != nil {
+		_ = blobs.Close()
+		return storageStack{}, fmt.Errorf("cloudrig: %w", err)
+	}
+	return storageStack{svc: storage.New(kv, blobs, clk, bus), blobs: blobs, kv: kv}, nil
 }
 
 // newRegistry deploys everything configured up front, tearing down whatever
 // came up if a later one fails.
-func newRegistry(ctx context.Context, clk clock.Clock, o Options) (*functions.Registry, error) {
-	reg := functions.NewRegistry(clk, functions.Options{
+func newRegistry(ctx context.Context, clk clock.Clock, bus *events.Bus, o Options) (*functions.Registry, error) {
+	reg := functions.NewRegistry(clk, bus, functions.Options{
 		Stderr:   o.FunctionLog,
 		EventLog: o.EventLog,
 	})
@@ -173,19 +215,22 @@ func MustStart(t testing.TB, opts ...Options) *Emulator {
 		t.Fatalf("cloudrig: MustStart binds its own port; Options.Addr must be empty, got %q", o.Addr)
 	}
 
-	reg, err := newRegistry(context.Background(), o.Clock, o)
+	bus := events.New()
+
+	reg, err := newRegistry(context.Background(), o.Clock, bus, o)
 	if err != nil {
 		t.Fatalf("%v", err)
 	}
 	t.Cleanup(reg.StopAll)
 
-	gcs, blobs, err := newStorage(o.Clock)
+	// Never persisted: state surviving a test is a bug, not a feature.
+	stack, err := newStorage(o.Clock, bus, "")
 	if err != nil {
 		t.Fatalf("%v", err)
 	}
-	t.Cleanup(func() { _ = blobs.Close() })
+	t.Cleanup(stack.close)
 
-	srv := httptest.NewUnstartedServer(newHandler(o.Clock, o, reg, gcs))
+	srv := httptest.NewUnstartedServer(newHandler(o.Clock, o, reg, stack.svc))
 	srv.Config.Protocols = transport.Protocols()
 	srv.Start()
 	t.Cleanup(srv.Close)
@@ -194,10 +239,12 @@ func MustStart(t testing.TB, opts ...Options) *Emulator {
 		clk:     o.Clock,
 		addr:    srv.Listener.Addr().String(),
 		fns:     reg,
-		storage: gcs,
+		storage: stack.svc,
+		bus:     bus,
 		shutdown: func(context.Context) error {
 			srv.Close()
 			reg.StopAll()
+			stack.close()
 			return nil
 		},
 	}
@@ -255,6 +302,17 @@ func (e *Emulator) Reset(ctx context.Context, project string) error {
 		return nil
 	}
 	return e.storage.Reset(ctx, project)
+}
+
+// SyncEvents waits for every event published so far to reach its subscribers.
+//
+// Delivery is asynchronous so a write never waits on a trigger. A test that
+// uploads an object and then asserts a function ran needs this, or it would
+// have to poll.
+func (e *Emulator) SyncEvents() {
+	if e.bus != nil {
+		e.bus.Sync()
+	}
 }
 
 // Functions is the registry backing this emulator, so a test can deploy into a

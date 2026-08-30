@@ -19,13 +19,20 @@ var Prefixes = []string{"/storage/v1/", "/upload/storage/v1/", "/download/storag
 
 // API is the Cloud Storage JSON API over a Service.
 type API struct {
-	svc    *Service
-	router *transport.Router
+	svc      *Service
+	router   *transport.Router
+	sessions *sessions
 }
 
 // NewAPI wires the handlers.
 func NewAPI(svc *Service) *API {
 	a := &API{svc: svc, router: transport.NewRouter()}
+
+	// A failure here leaves resumable uploads unavailable rather than the
+	// whole service; every other upload type still works.
+	if s, err := newSessions(); err == nil {
+		a.sessions = s
+	}
 
 	a.router.Handle(http.MethodPost, "/storage/v1/b", a.createBucket)
 	a.router.Handle(http.MethodGet, "/storage/v1/b", a.listBuckets)
@@ -40,6 +47,9 @@ func NewAPI(svc *Service) *API {
 	a.router.Handle(http.MethodDelete, "/storage/v1/b/{bucket}/o/{object}", a.deleteObject)
 
 	a.router.Handle(http.MethodPost, "/upload/storage/v1/b/{bucket}/o", a.upload)
+	// A chunk may arrive as PUT from clients that prefer it; the Go client
+	// POSTs to the session URI.
+	a.router.Handle(http.MethodPut, "/upload/storage/v1/b/{bucket}/o", a.upload)
 
 	// The download path the Go client's reader uses. It is the one piece of the
 	// XML API surface that cannot be skipped: NewReader goes here, not to the
@@ -50,6 +60,14 @@ func NewAPI(svc *Service) *API {
 }
 
 func (a *API) ServeHTTP(w http.ResponseWriter, r *http.Request) { a.router.ServeHTTP(w, r) }
+
+// Close removes any in-progress upload staging.
+func (a *API) Close() error {
+	if a.sessions != nil {
+		a.sessions.cleanup()
+	}
+	return nil
+}
 
 func (a *API) createBucket(w http.ResponseWriter, r *http.Request, p transport.Params) error {
 	project := r.URL.Query().Get("project")
@@ -273,6 +291,16 @@ func (a *API) upload(w http.ResponseWriter, r *http.Request, p transport.Params)
 	write := Write{Bucket: p["bucket"], Name: q.Get("name"), Preconditions: pre}
 	body := r.Body
 
+	// A chunk names the session it belongs to; only the first request in a
+	// resumable upload has no id.
+	if id := q.Get("upload_id"); id != "" {
+		if a.sessions == nil {
+			return gerr.New(gerr.Internal, "no temporary directory for resumable uploads").
+				WithHTTPStatus(http.StatusInternalServerError)
+		}
+		return a.resumableChunk(w, r, id)
+	}
+
 	switch uploadType := q.Get("uploadType"); uploadType {
 	case "media", "":
 		write.ContentType = r.Header.Get("Content-Type")
@@ -291,7 +319,11 @@ func (a *API) upload(w http.ResponseWriter, r *http.Request, p transport.Params)
 		defer media.Close()
 
 	case "resumable":
-		return gerr.NewUnimplemented("storage.objects.insert with uploadType=resumable")
+		if a.sessions == nil {
+			return gerr.New(gerr.Internal, "no temporary directory for resumable uploads").
+				WithHTTPStatus(http.StatusInternalServerError)
+		}
+		return a.startResumable(w, r, p, write)
 
 	default:
 		return gerr.Newf(gerr.InvalidArgument, "unknown uploadType %q", uploadType).

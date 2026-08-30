@@ -43,6 +43,9 @@ type Function struct {
 
 	// Watch redeploys the function when its source changes.
 	Watch bool
+
+	// Trigger runs the function on an event instead of an HTTP request.
+	Trigger EventTrigger
 }
 
 // ResourceName is projects/P/locations/L/functions/F, the identity both API

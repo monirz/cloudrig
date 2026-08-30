@@ -32,7 +32,7 @@ func serve(t *testing.T, fns ...functions.Function) *httptest.Server {
 		t.Skip("compiles a function")
 	}
 
-	reg := functions.NewRegistry(clock.NewFake(epoch), functions.Options{})
+	reg := functions.NewRegistry(clock.NewFake(epoch), nil, functions.Options{})
 	t.Cleanup(reg.StopAll)
 	for _, f := range fns {
 		if _, err := reg.Deploy(context.Background(), f); err != nil {

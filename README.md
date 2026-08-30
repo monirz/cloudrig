@@ -296,6 +296,75 @@ them elsewhere with `--endpoint` or `CLOUDRIG_ENDPOINT`.
 A function is the root of its own URL space, so `/hello/a/b` reaches it as
 `/a/b`.
 
+## Event triggers
+
+Run a function when an object changes, in one process — no Pub/Sub, no Docker.
+
+```sh
+./cloudrig fn deploy on-upload \
+  --source ./testdata/go-trigger \
+  --trigger-bucket uploads
+```
+
+```
+trigger: google.storage.object.finalize on uploads
+```
+
+Then write an object and watch it fire:
+
+```sh
+curl -X POST "http://localhost:4599/storage/v1/b?project=p" \
+  -H 'Content-Type: application/json' -d '{"name":"uploads"}'
+
+curl -X POST "http://localhost:4599/upload/storage/v1/b/uploads/o?uploadType=media&name=report.csv" \
+  -H 'Content-Type: text/csv' --data 'a,b,c'
+
+./cloudrig fn logs on-upload
+# FIRED google.storage.object.finalize gs://uploads/report.csv (5 bytes) via storage.googleapis.com
+```
+
+`--trigger-bucket` defaults the event to `finalize`; `--trigger-event`
+overrides it. The types are the first-generation names:
+
+| Event | When |
+|---|---|
+| `google.storage.object.finalize` | an object is written |
+| `google.storage.object.delete` | an object is deleted |
+| `google.storage.object.archive` | a version is archived (versioned buckets) |
+| `google.storage.object.metadataUpdate` | metadata changes |
+
+### What the function receives
+
+The first-generation envelope, not CloudEvents:
+
+```json
+{
+  "data": { "bucket": "uploads", "name": "report.csv", "size": "5", ... },
+  "context": {
+    "eventId":   "…",
+    "timestamp": "2026-08-30T12:49:25.146Z",
+    "eventType": "google.storage.object.finalize",
+    "resource": {
+      "name":    "projects/_/buckets/uploads/objects/report.csv#1788094165146185",
+      "service": "storage.googleapis.com",
+      "type":    "storage#object"
+    }
+  }
+}
+```
+
+`data` is the object resource, the same shape the JSON API returns.
+
+### Delivery
+
+Publishing is asynchronous, so an upload never waits on a function. A failed
+delivery is retried up to five times with doubling backoff, and the event id
+stays the same across retries so a handler can tell a repeat from a new event.
+Giving up is reported in the emulator's output.
+
+In a test, `emu.SyncEvents()` waits for every published event to be delivered —
+so an assertion needs no polling and no sleeping.
+
 ## Without a daemon
 
 Builds and serves one function, then exits on Ctrl-C:
@@ -398,7 +467,30 @@ curl -X POST localhost:4599/_emu/reset                       # everything
 curl -X POST "localhost:4599/_emu/reset?project=my-project"  # one project
 ```
 
-Returns 204. State is in memory, so a restart clears it too.
+Returns 204.
+
+### 8. Keep state across restarts
+
+By default everything is in memory, so a restart clears it. Point the emulator
+at a directory to keep it:
+
+```sh
+./cloudrig start --data-dir ./cloudrig-data
+# or: CLOUDRIG_DATA_DIR=./cloudrig-data ./cloudrig start
+```
+
+```
+cloudrig-data/storage/metadata.json
+cloudrig-data/storage/blobs/c8/c87d583c20ab9e...
+```
+
+Metadata is snapshotted about a second after a write, coalescing a burst into
+one rewrite, and written to a temp file then renamed so a crash leaves the
+previous snapshot whole. Object content is already files, so it is simply
+written there instead of a temp directory.
+
+`MustStart` never persists, whatever you pass it: state outliving a test is a
+bug, not a feature.
 
 ## Cloud Storage from Go
 
@@ -453,20 +545,26 @@ downloaded 1024 MiB: retained 4 KiB, allocated 0 MiB in total
 
 Two MiB of total allocation to move a gibibyte, and nothing retained after it.
 
-Set `Writer.ChunkSize = 0` for large uploads. The client buffers a chunk at a
-time by default and switches to resumable above 16 MiB; zero disables chunking
-and streams the object as one request.
+All three upload types work — `media`, `multipart` and `resumable` — so the
+client's default path needs no configuration. It chunks at 16 MiB and switches
+to resumable above that on its own.
+
+Setting `Writer.ChunkSize = 0` disables chunking and streams the object as one
+request, which is measurably cheaper: 1 GiB unchunked allocates about 2 MiB in
+total, where the same object through the default 16 MiB chunks allocates about
+21 MiB, since the client buffers each chunk before sending it. Neither retains
+the object.
 
 ### What is supported
 
 Buckets: create, get, list, delete (409 while not empty).
-Objects: upload (`media`, `multipart`), download, metadata, PATCH, delete,
+Objects: upload (`media`, `multipart`, `resumable`), download, metadata, PATCH, delete,
 listing with `prefix` / `delimiter` / `maxResults` / `pageToken`, and the
 `ifGenerationMatch` / `ifMetagenerationMatch` preconditions.
 
-Not supported: resumable uploads (501), the XML API beyond the media download
-path the Go client's reader needs, compose, rewrite, versioning reads, ACLs,
-notifications and signed URLs. See [UNSUPPORTED.md](UNSUPPORTED.md).
+Not supported: the XML API beyond the media download path the Go client's reader
+needs, compose, rewrite, copy, ACLs, notifications, signed URLs, lifecycle and
+CORS. See [UNSUPPORTED.md](UNSUPPORTED.md).
 
 `gcloud storage` and `gsutil` are **untested** — they need
 `CLOUDSDK_API_ENDPOINT_OVERRIDES_STORAGE` and may reach XML API endpoints that
