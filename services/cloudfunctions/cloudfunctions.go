@@ -109,7 +109,7 @@ func (s *Service) getFunctionV2(w http.ResponseWriter, r *http.Request, p transp
 	name, _ := splitVerb(p["name"])
 	desc, ok := s.reg.Get(p["project"], p["location"], name)
 	if !ok {
-		return notFound(p["project"], p["location"], name)
+		return s.notFound(p["project"], p["location"], name)
 	}
 	return writeJSON(w, http.StatusOK, toV2(desc, r))
 }
@@ -127,7 +127,7 @@ func (s *Service) getFunction(w http.ResponseWriter, r *http.Request, p transpor
 	name, _ := splitVerb(p["name"])
 	desc, ok := s.reg.Get(p["project"], p["location"], name)
 	if !ok {
-		return notFound(p["project"], p["location"], name)
+		return s.notFound(p["project"], p["location"], name)
 	}
 	return writeJSON(w, http.StatusOK, toV1(desc, r))
 }
@@ -171,7 +171,7 @@ func deployUnimplemented(op string) error {
 func (s *Service) deleteFunction(w http.ResponseWriter, r *http.Request, p transport.Params) error {
 	name, _ := splitVerb(p["name"])
 	if err := s.reg.Delete(p["project"], p["location"], name); err != nil {
-		return notFound(p["project"], p["location"], name)
+		return s.notFound(p["project"], p["location"], name)
 	}
 	op := s.ops.complete(s.clk.Now(), map[string]any{})
 	return writeJSON(w, http.StatusOK, op)
@@ -236,9 +236,28 @@ func splitVerb(segment string) (name, verb string) {
 	return name, verb
 }
 
-func notFound(project, location, name string) error {
-	return gerr.Newf(gerr.NotFound, "Function %s does not exist",
-		functions.ResourceName(project, location, name)).
+// notFound reports a missing function, and says where a function of that name
+// actually lives if one does. Deploying to one project and invoking from
+// another is the easiest mistake to make, and "does not exist" alone sends you
+// looking for the wrong problem.
+func (s *Service) notFound(project, location, name string) error {
+	msg := "Function " + functions.ResourceName(project, location, name) + " does not exist"
+
+	var elsewhere []string
+	for _, d := range s.reg.List("", "") {
+		if d.Name == name {
+			elsewhere = append(elsewhere, d.ResourceName())
+		}
+	}
+	switch len(elsewhere) {
+	case 0:
+	case 1:
+		msg += "; a function of that name is deployed at " + elsewhere[0]
+	default:
+		msg += "; functions of that name are deployed at " + strings.Join(elsewhere, ", ")
+	}
+
+	return gerr.New(gerr.NotFound, msg).
 		WithHTTPStatus(http.StatusNotFound).
 		WithReason("notFound")
 }

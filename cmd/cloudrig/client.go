@@ -49,14 +49,71 @@ func (c client) describe(ctx context.Context, scope scope, name string) (functio
 	return desc, err
 }
 
+// callResult is v1's CallFunctionResponse.
+type callResult struct {
+	ExecutionID string `json:"executionId"`
+	Result      string `json:"result"`
+	Error       string `json:"error"`
+}
+
+// call invokes a function through the same v1 :call endpoint gcloud uses, so
+// the CLI exercises the compatibility surface rather than a private shortcut.
+func (c client) call(ctx context.Context, sc scope, name, data string) (callResult, error) {
+	project, location := sc.project, sc.location
+	if project == "" {
+		project = functions.DefaultProject
+	}
+	if location == "" {
+		location = functions.DefaultLocation
+	}
+	path := "/v1/projects/" + project + "/locations/" + location + "/functions/" + name + ":call"
+
+	var out callResult
+	err := c.do(ctx, http.MethodPost, path, map[string]string{"data": data}, &out)
+	return out, err
+}
+
 func (c client) delete(ctx context.Context, scope scope, name string) error {
 	return c.do(ctx, http.MethodDelete, functions.AdminPath+"/"+name+scope.query(), nil, nil)
+}
+
+// logs streams a function's output to out, following until the context ends.
+func (c client) logs(ctx context.Context, sc scope, name string, follow bool, out io.Writer) error {
+	path := functions.AdminPath + "/" + name + "/logs"
+	q := sc.values()
+	if follow {
+		q.Set("follow", "true")
+	}
+	if len(q) > 0 {
+		path += "?" + q.Encode()
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.endpoint+path, nil)
+	if err != nil {
+		return err
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("%s: is the emulator running? (cloudrig start)", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 300 {
+		return fmt.Errorf("%s", envelopeMessage(resp))
+	}
+	// Copied rather than buffered, so a followed stream reaches the terminal as
+	// the function writes it.
+	_, err = io.Copy(out, resp.Body)
+	if err != nil && ctx.Err() == nil {
+		return err
+	}
+	return nil
 }
 
 // scope narrows a request to a project and location.
 type scope struct{ project, location string }
 
-func (s scope) query() string {
+func (s scope) values() url.Values {
 	q := url.Values{}
 	if s.project != "" {
 		q.Set("project", s.project)
@@ -64,6 +121,11 @@ func (s scope) query() string {
 	if s.location != "" {
 		q.Set("location", s.location)
 	}
+	return q
+}
+
+func (s scope) query() string {
+	q := s.values()
 	if len(q) == 0 {
 		return ""
 	}

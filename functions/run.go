@@ -24,13 +24,20 @@ type Instance struct {
 	proxy    *httputil.ReverseProxy
 	cmd      *exec.Cmd
 	cleanup  func()
+	logs     *logRing
 	stopped  sync.Once
 }
 
 // Options configures Start.
 type Options struct {
-	// Stderr receives the function's own output. Nil discards it.
+	// Stderr receives the function's own output. Nil discards it, which is the
+	// daemon's default: fn logs is where that output belongs.
 	Stderr io.Writer
+
+	// EventLog receives the registry's own messages — a watch redeploying, or
+	// failing to. Distinct from Stderr so a daemon can report what it did
+	// without echoing every line the function writes.
+	EventLog io.Writer
 
 	// Env is extra environment for the child, as KEY=VALUE.
 	Env []string
@@ -52,14 +59,14 @@ func Start(ctx context.Context, f Function, o Options) (*Instance, error) {
 	}
 	cleanup := sp.cleanup
 
-	// A child that dies during startup has usually already said why on stderr,
-	// so keep the tail of it to attach to the error.
-	tail := newTailWriter(4 << 10)
+	// One buffer serves both purposes: it is the function's log, and the tail
+	// of it explains a child that dies before it ever listens.
+	logs := newLogRing(defaultLogLines)
 	cmd := sp.cmd
 	cmd.Env = append(cmd.Environ(), o.Env...)
-	cmd.Stderr = tail
+	cmd.Stderr = io.Writer(logs)
 	if o.Stderr != nil {
-		cmd.Stderr = io.MultiWriter(tail, o.Stderr)
+		cmd.Stderr = io.MultiWriter(logs, o.Stderr)
 	}
 
 	stdout, err := cmd.StdoutPipe()
@@ -72,12 +79,12 @@ func Start(ctx context.Context, f Function, o Options) (*Instance, error) {
 		return nil, fmt.Errorf("starting %s: %w", f.Name, err)
 	}
 
-	addr, err := awaitListen(ctx, stdout, tail, o.Stderr, sp.ready)
+	addr, err := awaitListen(ctx, stdout, logs, o.Stderr, sp.ready)
 	if err != nil {
 		_ = cmd.Process.Kill()
 		_ = cmd.Wait()
 		cleanup()
-		if out := strings.TrimSpace(tail.String()); out != "" {
+		if out := strings.TrimSpace(logs.Tail(20)); out != "" {
 			return nil, fmt.Errorf("function %s: %w:\n%s", f.Name, err, out)
 		}
 		return nil, fmt.Errorf("function %s: %w", f.Name, err)
@@ -103,12 +110,13 @@ func Start(ctx context.Context, f Function, o Options) (*Instance, error) {
 		proxy:   httputil.NewSingleHostReverseProxy(target),
 		cmd:     cmd,
 		cleanup: cleanup,
+		logs:    logs,
 	}, nil
 }
 
 // awaitListen waits for the runtime's readiness line, then keeps draining
 // stdout so the child never blocks on a full pipe.
-func awaitListen(ctx context.Context, stdout io.ReadCloser, tail io.Writer, logTo io.Writer, ready func(string) (string, bool)) (string, error) {
+func awaitListen(ctx context.Context, stdout io.ReadCloser, logs io.Writer, logTo io.Writer, ready func(string) (string, bool)) (string, error) {
 	type result struct {
 		addr string
 		err  error
@@ -127,7 +135,7 @@ func awaitListen(ctx context.Context, stdout io.ReadCloser, tail io.Writer, logT
 					continue
 				}
 			}
-			fmt.Fprintln(tail, line)
+			fmt.Fprintln(logs, line)
 			if logTo != nil {
 				fmt.Fprintln(logTo, line)
 			}
@@ -153,6 +161,12 @@ func (i *Instance) Runtime() Runtime { return i.runtime }
 
 // EntryPoint is the resolved handler being served.
 func (i *Instance) EntryPoint() string { return i.entry }
+
+// LogSnapshot returns the function's recent output.
+func (i *Instance) LogSnapshot() []string { return i.logs.Snapshot() }
+
+// FollowLogs streams lines written from now on, and returns a stop function.
+func (i *Instance) FollowLogs() (<-chan string, func()) { return i.logs.Follow() }
 
 // Project and Location are the resolved identity of the function.
 func (i *Instance) Project() string  { return i.project }

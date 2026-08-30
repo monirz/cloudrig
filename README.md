@@ -156,7 +156,14 @@ deploy with: cloudrig fn deploy NAME --source DIR]
 Real gcloud uploads a source zip, which the emulator cannot accept yet. Deploy
 with `cloudrig fn deploy` (step 4); every other gcloud command then works.
 
-### Calling the API without gcloud
+### Without gcloud
+
+```sh
+./cloudrig fn invoke hello --data '{"name":"Monir"}'
+# Hello, Monir!
+```
+
+### Calling the API with curl
 
 ```sh
 curl -X POST \
@@ -177,11 +184,42 @@ Served surface: v1 `get`, `list`, `delete`, `call`, `operations`, and
 
 ```sh
 ./cloudrig fn deploy NAME --source DIR [--runtime R] [--entry-point F]
-                          [--project P] [--region L]
+                          [--project P] [--region L] [--watch]
+./cloudrig fn invoke NAME [--data JSON]
+./cloudrig fn logs   NAME [-f]
 ./cloudrig fn list        [--project P] [--region L]
 ./cloudrig fn describe NAME
 ./cloudrig fn delete NAME
 ```
+
+`fn invoke` runs a function and prints what it returned:
+
+```sh
+./cloudrig fn invoke hello --data '{"name":"Monir"}'   # Hello, Monir!
+echo '{"name":"piped"}' | ./cloudrig fn invoke hello --data -
+```
+
+It goes through the same v1 `:call` endpoint gcloud uses, so it exercises the
+compatibility surface rather than a private shortcut. A function that returns an
+error status prints it on stderr and exits non-zero.
+
+`fn logs` shows what a function wrote, and follows it with `-f`:
+
+```sh
+./cloudrig fn logs hello
+./cloudrig fn logs hello -f          # streams until Ctrl-C
+```
+
+```
+Function: handler
+Signature type: http
+POST / -> Monir
+GET /?name=curled -> curled
+```
+
+The last 1000 lines of each function's stdout and stderr are kept, merged in the
+order the process produced them. Output is not persisted: it lives as long as
+the function does.
 
 Go needs no flags at all when the source is a module:
 
@@ -198,6 +236,31 @@ curl "localhost:4599/gohello?name=Monir"      # {"hello":"Monir"}
 
 Redeploying a name replaces it in place. A deploy that fails to build leaves the
 previous version serving.
+
+### Hot reload
+
+```sh
+./cloudrig fn deploy hello --source ./testdata/node-hello \
+  --entry-point handler --watch
+```
+
+Edit a file, save, and the next request runs the new code — no redeploy:
+
+```
+watch: hello redeployed
+```
+
+The source tree is rescanned every 300ms (`node_modules`, `.git`, `vendor`,
+`dist` and `build` are skipped). A save that does not build is reported and the
+previous version keeps serving:
+
+```
+watch: hello: function hello: exited before it started listening:
+SyntaxError: Unexpected end of input
+```
+
+Under `MustStart` the watcher runs on the test's `FakeClock`, so a rescan
+happens when the test advances time and never on its own.
 
 These commands are HTTP clients of a running emulator (`/_emu/functions`). Point
 them elsewhere with `--endpoint` or `CLOUDRIG_ENDPOINT`.
@@ -340,8 +403,7 @@ Working: transport, injected clock, canonical errors, the library entry point,
 HTTP Cloud Functions on Go and Node, and the Cloud Functions v1 API driven by
 real gcloud.
 
-Not yet: `gcloud functions deploy`, `fn invoke`, `fn logs`, `--watch` hot
-reload, event triggers (HTTP only), runtimes beyond Go and Node, and any other
+Not yet: `gcloud functions deploy`, event triggers (HTTP only), runtimes beyond Go and Node, and any other
 GCP service. gRPC returns 501.
 
 ## Troubleshooting

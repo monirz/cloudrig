@@ -90,7 +90,7 @@ func usage(out io.Writer) {
 usage:
   cloudrig %s [--port N] [--runner %v]
 
-  cloudrig %s deploy <name> --source DIR [--runtime R] [--entry-point F]
+  cloudrig %s deploy <name> --source DIR [--runtime R] [--entry-point F] [--watch]
   cloudrig %s list
   cloudrig %s describe <name>
   cloudrig %s delete <name>
@@ -104,6 +104,7 @@ fn flags:
   --source DIR      source directory
   --runtime R       %v (default: detected from the source)
   --entry-point F   handler to serve (Go: detected when there is only one)
+  --watch           redeploy when the source changes
   --endpoint URL    emulator to talk to (default %s, env CLOUDRIG_ENDPOINT)
 
 fn deploy, list, describe and delete talk to a running emulator.

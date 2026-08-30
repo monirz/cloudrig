@@ -1,3 +1,5 @@
 exports.handler = (req, res) => {
-  res.send(`Hello, ${req.query.name || req.body?.name || 'cloudrig'}!`);
+  const name = req.query.name || req.body?.name || 'cloudrig';
+  console.log(`${req.method} ${req.url} -> ${name}`);
+  res.send(`Hello, ${name}!`);
 };

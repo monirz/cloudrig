@@ -51,8 +51,12 @@ type Options struct {
 	// Functions are built and launched at Start, and stopped at Shutdown.
 	Functions []functions.Function
 
-	// FunctionLog receives function output. Nil discards it.
+	// FunctionLog receives function output. Nil discards it; use fn logs.
 	FunctionLog io.Writer
+
+	// EventLog receives the emulator's own messages, such as a watched
+	// function redeploying. Nil discards them.
+	EventLog io.Writer
 }
 
 // Emulator is a running instance.
@@ -113,7 +117,10 @@ func Start(ctx context.Context, o Options) (*Emulator, error) {
 // newRegistry deploys everything configured up front, tearing down whatever
 // came up if a later one fails.
 func newRegistry(ctx context.Context, clk clock.Clock, o Options) (*functions.Registry, error) {
-	reg := functions.NewRegistry(clk, functions.Options{Stderr: o.FunctionLog})
+	reg := functions.NewRegistry(clk, functions.Options{
+		Stderr:   o.FunctionLog,
+		EventLog: o.EventLog,
+	})
 	for _, f := range o.Functions {
 		if _, err := reg.Deploy(ctx, f); err != nil {
 			reg.StopAll()

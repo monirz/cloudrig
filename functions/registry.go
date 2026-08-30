@@ -23,6 +23,7 @@ type Descriptor struct {
 	Source     string    `json:"source"`
 	Runtime    Runtime   `json:"runtime"`
 	EntryPoint string    `json:"entryPoint"`
+	Watch      bool      `json:"watch,omitempty"`
 	State      string    `json:"state"`
 	UpdateTime time.Time `json:"updateTime"`
 }
@@ -44,8 +45,9 @@ type Registry struct {
 }
 
 type entry struct {
-	inst *Instance
-	desc Descriptor
+	inst      *Instance
+	desc      Descriptor
+	stopWatch func()
 }
 
 // NewRegistry returns an empty registry. opts apply to every function it runs.
@@ -70,21 +72,50 @@ func (r *Registry) Deploy(ctx context.Context, f Function) (Descriptor, error) {
 		Source:     f.Source,
 		Runtime:    inst.Runtime(),
 		EntryPoint: inst.EntryPoint(),
+		Watch:      f.Watch,
 		State:      "ACTIVE",
 		UpdateTime: r.clk.Now(),
 	}
 
 	key := desc.ResourceName()
+	e := &entry{inst: inst, desc: desc}
 
 	r.mu.Lock()
 	old := r.entries[key]
-	r.entries[key] = &entry{inst: inst, desc: desc}
+	r.entries[key] = e
 	r.mu.Unlock()
 
+	// The incumbent's watcher goes with it, so a redeploy does not leave two
+	// watchers racing to rebuild the same source.
 	if old != nil {
+		if old.stopWatch != nil {
+			old.stopWatch()
+		}
 		_ = old.inst.Stop()
 	}
+
+	if f.Watch {
+		e.stopWatch = watch(r.clk, f.Source, WatchInterval, func() { r.redeploy(f) })
+	}
 	return desc, nil
+}
+
+// redeploy rebuilds a watched function after its source changed. A failure is
+// left in the log rather than returned: nothing is waiting on it, and Deploy
+// keeps the previous version serving.
+func (r *Registry) redeploy(f Function) {
+	if _, err := r.Deploy(context.Background(), f); err != nil {
+		r.logf("watch: %s: %v", f.Name, err)
+		return
+	}
+	r.logf("watch: %s redeployed", f.Name)
+}
+
+func (r *Registry) logf(format string, args ...any) {
+	if r.opts.EventLog == nil {
+		return
+	}
+	fmt.Fprintf(r.opts.EventLog, format+"\n", args...)
 }
 
 // lookup returns an entry by resource name.
@@ -112,6 +143,16 @@ func (r *Registry) GetByResource(resource string) (Descriptor, bool) {
 		return Descriptor{}, false
 	}
 	return e.desc, true
+}
+
+// Instance returns the running function, for callers that need more than its
+// handler — its logs, say.
+func (r *Registry) Instance(project, location, name string) (*Instance, bool) {
+	e, ok := r.lookup(ResourceName(project, location, name))
+	if !ok {
+		return nil, false
+	}
+	return e.inst, true
 }
 
 // Handler returns the handler serving a function, for callers that invoke it
@@ -156,6 +197,9 @@ func (r *Registry) Delete(project, location, name string) error {
 	if !ok {
 		return fmt.Errorf("no function %q is deployed", name)
 	}
+	if e.stopWatch != nil {
+		e.stopWatch()
+	}
 	return e.inst.Stop()
 }
 
@@ -167,6 +211,9 @@ func (r *Registry) StopAll() {
 	r.mu.Unlock()
 
 	for _, e := range entries {
+		if e.stopWatch != nil {
+			e.stopWatch()
+		}
 		_ = e.inst.Stop()
 	}
 }

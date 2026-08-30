@@ -1,6 +1,7 @@
 package functions_test
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"net/http"
@@ -323,5 +324,231 @@ func Handler(w http.ResponseWriter, r *http.Request) { w.Write([]byte("ok")) }
 	}
 	if desc.EntryPoint != "Handler" {
 		t.Errorf("EntryPoint = %q, want Handler", desc.EntryPoint)
+	}
+}
+
+func TestLogsEndpoint(t *testing.T) {
+	if testing.Short() {
+		t.Skip("compiles a function")
+	}
+	t.Parallel()
+
+	r := newRegistry(t)
+	if _, err := r.Deploy(context.Background(), goFn("hello")); err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(r.Admin())
+	t.Cleanup(srv.Close)
+
+	t.Run("a snapshot returns plain text", func(t *testing.T) {
+		resp, err := http.Get(srv.URL + functions.AdminPath + "/hello/logs")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("status = %d", resp.StatusCode)
+		}
+		if ct := resp.Header.Get("Content-Type"); !strings.HasPrefix(ct, "text/plain") {
+			t.Errorf("Content-Type = %q", ct)
+		}
+	})
+
+	t.Run("logs for a missing function are 404", func(t *testing.T) {
+		resp, err := http.Get(srv.URL + functions.AdminPath + "/nope/logs")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusNotFound {
+			t.Errorf("status = %d, want 404", resp.StatusCode)
+		}
+	})
+
+	t.Run("an unknown sub-resource is 404", func(t *testing.T) {
+		resp, err := http.Get(srv.URL + functions.AdminPath + "/hello/metrics")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusNotFound {
+			t.Errorf("status = %d, want 404", resp.StatusCode)
+		}
+	})
+}
+
+// TestLogsFollowStreams proves a follower sees output as the function produces
+// it, rather than when a buffer happens to fill.
+func TestLogsFollowStreams(t *testing.T) {
+	if testing.Short() {
+		t.Skip("compiles a function")
+	}
+	t.Parallel()
+
+	dir := t.TempDir()
+	write(t, dir, "go.mod", "module example.com/chatty\n\ngo 1.25\n")
+	write(t, dir, "fn.go", `package chatty
+
+import (
+	"fmt"
+	"net/http"
+)
+
+func Handler(w http.ResponseWriter, r *http.Request) {
+	fmt.Printf("handled %s\n", r.URL.Query().Get("n"))
+	w.Write([]byte("ok"))
+}
+`)
+
+	r := newRegistry(t)
+	if _, err := r.Deploy(context.Background(), functions.Function{Name: "chatty", Source: dir}); err != nil {
+		t.Fatal(err)
+	}
+	inst, _ := r.Instance("", "", "chatty")
+
+	srv := httptest.NewServer(r.Admin())
+	t.Cleanup(srv.Close)
+
+	resp, err := http.Get(srv.URL + functions.AdminPath + "/chatty/logs?follow=true")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { resp.Body.Close() })
+
+	// Drive the function; its output must arrive on the open stream.
+	fnSrv := httptest.NewServer(inst)
+	t.Cleanup(fnSrv.Close)
+	if _, err := http.Get(fnSrv.URL + "/?n=first"); err != nil {
+		t.Fatal(err)
+	}
+
+	lines := bufio.NewScanner(resp.Body)
+	deadline := make(chan struct{})
+	go func() {
+		defer close(deadline)
+		for lines.Scan() {
+			if strings.Contains(lines.Text(), "handled first") {
+				return
+			}
+		}
+	}()
+
+	select {
+	case <-deadline:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the followed stream never carried the function's output")
+	}
+}
+
+// TestWatchRedeploysOnChange drives the whole loop with a fake clock: edit the
+// source, advance time, and the running function is the new one.
+func TestWatchRedeploysOnChange(t *testing.T) {
+	if testing.Short() {
+		t.Skip("compiles a function")
+	}
+	t.Parallel()
+
+	dir := t.TempDir()
+	write(t, dir, "go.mod", "module example.com/watched\n\ngo 1.25\n")
+	source := func(reply string) string {
+		return `package watched
+
+import "net/http"
+
+func Handler(w http.ResponseWriter, r *http.Request) { w.Write([]byte("` + reply + `")) }
+`
+	}
+	write(t, dir, "fn.go", source("first"))
+
+	clk := clock.NewFake(epoch)
+	var events strings.Builder
+	r := functions.NewRegistry(clk, functions.Options{EventLog: &events})
+	t.Cleanup(r.StopAll)
+
+	if _, err := r.Deploy(context.Background(), functions.Function{
+		Name: "watched", Source: dir, Watch: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	body := func(t *testing.T) string {
+		t.Helper()
+		h, ok := r.Handler("", "", "watched")
+		if !ok {
+			t.Fatal("function is not deployed")
+		}
+		srv := httptest.NewServer(h)
+		defer srv.Close()
+		return get(t, srv.URL+"/")
+	}
+
+	if got := body(t); got != "first" {
+		t.Fatalf("body = %q, want first", got)
+	}
+
+	t.Run("an edit is picked up", func(t *testing.T) {
+		write(t, dir, "fn.go", source("second"))
+		clk.Advance(functions.WatchInterval)
+
+		if got := body(t); got != "second" {
+			t.Errorf("body = %q, want second", got)
+		}
+		if !strings.Contains(events.String(), "redeployed") {
+			t.Errorf("events = %q, want a redeploy reported", events.String())
+		}
+	})
+
+	t.Run("a broken edit leaves the old one serving", func(t *testing.T) {
+		write(t, dir, "fn.go", "package watched\nthis does not compile\n")
+		clk.Advance(functions.WatchInterval)
+
+		if got := body(t); got != "second" {
+			t.Errorf("body = %q, want the previous version still serving", got)
+		}
+		if !strings.Contains(events.String(), "watch: watched:") {
+			t.Errorf("events = %q, want the failure reported", events.String())
+		}
+	})
+
+	t.Run("fixing it recovers", func(t *testing.T) {
+		write(t, dir, "fn.go", source("third"))
+		clk.Advance(functions.WatchInterval)
+
+		if got := body(t); got != "third" {
+			t.Errorf("body = %q, want third", got)
+		}
+	})
+
+	t.Run("deleting stops the watcher", func(t *testing.T) {
+		if err := r.Delete("", "", "watched"); err != nil {
+			t.Fatal(err)
+		}
+		if clk.Pending() != 0 {
+			t.Errorf("pending timers = %d after delete, want 0", clk.Pending())
+		}
+	})
+}
+
+// TestRedeployDoesNotLeaveTwoWatchers guards a leak: each Deploy starts a
+// watcher, so replacing a watched function must stop the incumbent's.
+func TestRedeployDoesNotLeaveTwoWatchers(t *testing.T) {
+	if testing.Short() {
+		t.Skip("compiles a function")
+	}
+	t.Parallel()
+
+	clk := clock.NewFake(epoch)
+	r := functions.NewRegistry(clk, functions.Options{})
+	t.Cleanup(r.StopAll)
+
+	f := goFn("hello")
+	f.Watch = true
+	for i := 0; i < 3; i++ {
+		if _, err := r.Deploy(context.Background(), f); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := clk.Pending(); got != 1 {
+		t.Errorf("pending timers = %d after three deploys, want 1", got)
 	}
 }

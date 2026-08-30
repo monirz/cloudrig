@@ -53,9 +53,10 @@ func run(args []string, env lookupEnv, stdout, stderr *os.File) error {
 	defer stop()
 
 	emu, err := cloudrig.Start(ctx, cloudrig.Options{
-		Addr:    cfg.addr(),
-		Version: version,
-		Runner:  cfg.runner,
+		Addr:     cfg.addr(),
+		Version:  version,
+		Runner:   cfg.runner,
+		EventLog: stdout,
 	})
 	if err != nil {
 		return err

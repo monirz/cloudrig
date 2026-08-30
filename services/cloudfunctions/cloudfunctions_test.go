@@ -100,6 +100,32 @@ func TestGetFunctionV2IsTheSameFacts(t *testing.T) {
 	}
 }
 
+// TestNotFoundPointsAtTheRightProject guards the easiest mistake to make:
+// deploying to one project and addressing another. "does not exist" alone sends
+// you looking for the wrong problem.
+func TestNotFoundPointsAtTheRightProject(t *testing.T) {
+	t.Parallel()
+	srv := serve(t, goFn("my-project", "us-central1", "hello"))
+
+	var body struct {
+		Error struct{ Message string } `json:"error"`
+	}
+	code := getJSON(t, srv.URL+"/v1/projects/other/locations/us-central1/functions/hello", &body)
+	if code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", code)
+	}
+	if !strings.Contains(body.Error.Message, "projects/my-project/locations/us-central1/functions/hello") {
+		t.Errorf("message = %q, want it to name where the function actually is", body.Error.Message)
+	}
+
+	// A name that exists nowhere must not gain a misleading hint.
+	body.Error.Message = ""
+	getJSON(t, srv.URL+"/v1/projects/other/locations/us-central1/functions/absent", &body)
+	if strings.Contains(body.Error.Message, "deployed at") {
+		t.Errorf("message = %q, want no hint for a name that exists nowhere", body.Error.Message)
+	}
+}
+
 func TestMissingFunctionIs404(t *testing.T) {
 	t.Parallel()
 	srv := serve(t)

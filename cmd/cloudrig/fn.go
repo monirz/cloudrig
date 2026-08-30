@@ -88,7 +88,9 @@ func parseFnRun(args []string, env lookupEnv, out io.Writer) (fnConfig, error) {
 // fnUsage lists the fn subcommands.
 const fnUsage = `usage:
   cloudrig fn run <dir> [--name N] [--runtime R] [--entry-point F] [--port N]
-  cloudrig fn deploy <name> --source DIR [--runtime R] [--entry-point F]
+  cloudrig fn deploy <name> --source DIR [--runtime R] [--entry-point F] [--watch]
+  cloudrig fn invoke <name> [--data JSON]
+  cloudrig fn logs <name> [-f]
   cloudrig fn list
   cloudrig fn describe <name>
   cloudrig fn delete <name>`
@@ -104,6 +106,10 @@ func runFnCommand(args []string, env lookupEnv, stdout, stderr *os.File) error {
 		return runFn(args, env, stdout, stderr)
 	case "deploy":
 		return fnDeploy(args[1:], env, stdout, stderr)
+	case "invoke":
+		return fnInvoke(args[1:], env, stdout, stderr)
+	case "logs":
+		return fnLogs(args[1:], env, stdout, stderr)
 	case "list":
 		return fnList(args[1:], env, stdout, stderr)
 	case "describe":
@@ -124,6 +130,7 @@ type deployFlags struct {
 	project    string
 	location   string
 	endpoint   string
+	watch      bool
 }
 
 // fnDeploy sends a function to a running emulator.
@@ -138,6 +145,7 @@ func fnDeploy(args []string, env lookupEnv, stdout, stderr *os.File) error {
 	fs.StringVar(&f.project, "project", "", "GCP project (default "+functions.DefaultProject+")")
 	fs.StringVar(&f.location, "region", "", "GCP location (default "+functions.DefaultLocation+")")
 	fs.StringVar(&f.endpoint, "endpoint", "", "emulator endpoint (env CLOUDRIG_ENDPOINT)")
+	fs.BoolVar(&f.watch, "watch", false, "redeploy when the source changes")
 
 	name, rest := splitPositional(args)
 	if err := fs.Parse(rest); err != nil {
@@ -167,6 +175,7 @@ func fnDeploy(args []string, env lookupEnv, stdout, stderr *os.File) error {
 		Source:     source,
 		Runtime:    functions.Runtime(f.runtime),
 		EntryPoint: f.entryPoint,
+		Watch:      f.watch,
 	})
 	if err != nil {
 		return err
@@ -174,7 +183,85 @@ func fnDeploy(args []string, env lookupEnv, stdout, stderr *os.File) error {
 
 	fmt.Fprintf(stdout, "deployed %s (%s, %s)\n", desc.ResourceName(), desc.Runtime, desc.EntryPoint)
 	fmt.Fprintf(stdout, "url: %s/%s-%s/%s\n", c.endpoint, desc.Location, desc.Project, desc.Name)
+	if desc.Watch {
+		fmt.Fprintf(stdout, "watching %s; edit and save to redeploy\n", f.source)
+	}
 	return nil
+}
+
+// fnInvoke runs a deployed function and prints what it returned.
+func fnInvoke(args []string, env lookupEnv, stdout, stderr *os.File) error {
+	name, rest := splitPositional(args)
+	if name == "" {
+		return errors.New("cloudrig fn invoke needs a function name")
+	}
+
+	fs := flag.NewFlagSet("cloudrig fn invoke", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	data := fs.String("data", "", "request body, or - to read stdin")
+	project := fs.String("project", "", "GCP project (default "+functions.DefaultProject+")")
+	region := fs.String("region", "", "GCP location (default "+functions.DefaultLocation+")")
+	endpoint := fs.String("endpoint", "", "emulator endpoint (env CLOUDRIG_ENDPOINT)")
+	if err := fs.Parse(rest); err != nil {
+		return err
+	}
+	if extra := fs.Args(); len(extra) > 0 {
+		return fmt.Errorf("unexpected argument %q", extra[0])
+	}
+
+	body := *data
+	if body == "-" {
+		piped, err := io.ReadAll(os.Stdin)
+		if err != nil {
+			return fmt.Errorf("reading stdin: %w", err)
+		}
+		body = strings.TrimSpace(string(piped))
+	}
+
+	c := client{endpoint: resolveEndpoint(*endpoint, env)}
+	out, err := c.call(context.Background(), scope{*project, *region}, name, body)
+	if err != nil {
+		return err
+	}
+
+	// A function that failed is a successful invocation reporting an error, so
+	// print it and exit non-zero rather than pretending the call broke.
+	if out.Error != "" {
+		fmt.Fprintln(stderr, strings.TrimRight(out.Error, "\n"))
+		return fmt.Errorf("function %s returned an error", name)
+	}
+	fmt.Fprintln(stdout, strings.TrimRight(out.Result, "\n"))
+	return nil
+}
+
+// fnLogs prints a function's output, following it with -f until interrupted.
+func fnLogs(args []string, env lookupEnv, stdout, stderr *os.File) error {
+	name, rest := splitPositional(args)
+	if name == "" {
+		return errors.New("cloudrig fn logs needs a function name")
+	}
+
+	fs := flag.NewFlagSet("cloudrig fn logs", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	follow := fs.Bool("f", false, "keep streaming new output")
+	fs.BoolVar(follow, "follow", false, "keep streaming new output")
+	project := fs.String("project", "", "GCP project (default "+functions.DefaultProject+")")
+	region := fs.String("region", "", "GCP location (default "+functions.DefaultLocation+")")
+	endpoint := fs.String("endpoint", "", "emulator endpoint (env CLOUDRIG_ENDPOINT)")
+	if err := fs.Parse(rest); err != nil {
+		return err
+	}
+	if extra := fs.Args(); len(extra) > 0 {
+		return fmt.Errorf("unexpected argument %q", extra[0])
+	}
+
+	// Ctrl-C ends a follow without an error: stopping is what the user asked
+	// for, not a failure.
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	c := client{endpoint: resolveEndpoint(*endpoint, env)}
+	return c.logs(ctx, scope{*project, *region}, name, *follow, stdout)
 }
 
 func fnList(args []string, env lookupEnv, stdout, stderr *os.File) error {
@@ -286,6 +373,7 @@ func runFn(args []string, env lookupEnv, stdout, stderr *os.File) error {
 			EntryPoint: cfg.entryPoint,
 		}},
 		FunctionLog: stderr,
+		EventLog:    stdout,
 	})
 	if err != nil {
 		return err

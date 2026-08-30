@@ -40,6 +40,9 @@ type Function struct {
 
 	// EntryPoint is the exported handler to serve.
 	EntryPoint string
+
+	// Watch redeploys the function when its source changes.
+	Watch bool
 }
 
 // ResourceName is projects/P/locations/L/functions/F, the identity both API

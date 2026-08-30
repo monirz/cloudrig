@@ -35,7 +35,7 @@ type callResponse struct {
 func (s *Service) callFunction(w http.ResponseWriter, r *http.Request, p transport.Params, name string) error {
 	handler, ok := s.reg.Handler(p["project"], p["location"], name)
 	if !ok {
-		return notFound(p["project"], p["location"], name)
+		return s.notFound(p["project"], p["location"], name)
 	}
 
 	var body callRequest

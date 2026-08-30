@@ -2,6 +2,7 @@ package functions
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strings"
 
@@ -21,17 +22,25 @@ type DeployRequest struct {
 	Source     string  `json:"source"`
 	Runtime    Runtime `json:"runtime,omitempty"`
 	EntryPoint string  `json:"entryPoint,omitempty"`
+	Watch      bool    `json:"watch,omitempty"`
 }
 
 // Admin serves deploy, list, describe and delete.
 func (r *Registry) Admin() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		name := strings.Trim(strings.TrimPrefix(req.URL.EscapedPath(), AdminPath), "/")
+		rest := strings.Trim(strings.TrimPrefix(req.URL.EscapedPath(), AdminPath), "/")
+		name, sub, _ := strings.Cut(rest, "/")
 		project := req.URL.Query().Get("project")
 		location := req.URL.Query().Get("location")
 
 		var err error
 		switch {
+		case name != "" && sub == "logs" && req.Method == http.MethodGet:
+			err = r.handleLogs(w, req, project, location, name)
+		case sub != "":
+			err = gerr.Newf(gerr.NotFound, "no such sub-resource %q", sub).
+				WithHTTPStatus(http.StatusNotFound).
+				WithReason("notFound")
 		case name == "" && req.Method == http.MethodPost:
 			err = r.handleDeploy(w, req)
 		case name == "" && req.Method == http.MethodGet:
@@ -66,6 +75,7 @@ func (r *Registry) handleDeploy(w http.ResponseWriter, req *http.Request) error 
 		Source:     body.Source,
 		Runtime:    body.Runtime,
 		EntryPoint: body.EntryPoint,
+		Watch:      body.Watch,
 	})
 	if err != nil {
 		// A deploy that fails to build is the caller's problem, not ours, so
@@ -91,6 +101,52 @@ func (r *Registry) handleDelete(w http.ResponseWriter, project, location, name s
 	}
 	w.WriteHeader(http.StatusNoContent)
 	return nil
+}
+
+// handleLogs writes a function's recent output, then streams new lines while
+// follow is set. Streaming is line-at-a-time with an explicit flush, so a
+// follower sees output as the function produces it rather than when a buffer
+// happens to fill.
+func (r *Registry) handleLogs(w http.ResponseWriter, req *http.Request, project, location, name string) error {
+	inst, ok := r.Instance(project, location, name)
+	if !ok {
+		return notDeployed(name)
+	}
+
+	flusher, canStream := w.(http.Flusher)
+	follow := req.URL.Query().Get("follow") == "true" && canStream
+
+	// Subscribe before writing the snapshot, so a line produced in between is
+	// streamed rather than lost.
+	var lines <-chan string
+	var stop func()
+	if follow {
+		lines, stop = inst.FollowLogs()
+		defer stop()
+	}
+
+	w.Header().Set("Content-Type", "text/plain; charset=UTF-8")
+	w.WriteHeader(http.StatusOK)
+	for _, line := range inst.LogSnapshot() {
+		fmt.Fprintln(w, line)
+	}
+	if !follow {
+		return nil
+	}
+	flusher.Flush()
+
+	for {
+		select {
+		case line, open := <-lines:
+			if !open {
+				return nil
+			}
+			fmt.Fprintln(w, line)
+			flusher.Flush()
+		case <-req.Context().Done():
+			return nil
+		}
+	}
 }
 
 func notDeployed(name string) error {
