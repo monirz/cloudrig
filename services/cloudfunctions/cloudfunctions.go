@@ -8,7 +8,9 @@
 package cloudfunctions
 
 import (
+	"io"
 	"net/http"
+	"os"
 	"sort"
 	"strings"
 	"sync"
@@ -23,31 +25,43 @@ import (
 //
 // v2 is here for a single endpoint: gcloud validates --runtime against
 // /v2/{parent}/runtimes even when deploying a gen1 function.
-var Prefixes = []string{"/v1/", "/v2/"}
+var Prefixes = []string{"/v1/", "/v2/", UploadPath + "/"}
 
 // Service is the v1 API over a function registry. It holds no state of its own
 // beyond operations: the registry is the single source of truth, so the API and
 // the runner cannot drift apart.
 type Service struct {
-	reg    *functions.Registry
-	clk    clock.Clock
-	router *transport.Router
-	ops    *operationStore
+	reg     *functions.Registry
+	clk     clock.Clock
+	router  *transport.Router
+	ops     *operationStore
+	uploads *uploadStore
+	sources string
+	events  io.Writer
 
 	mu      sync.Mutex
 	execSeq uint64
 }
 
 // New wires the API onto a registry.
-func New(reg *functions.Registry, clk clock.Clock) *Service {
-	s := &Service{reg: reg, clk: clk, router: transport.NewRouter(), ops: newOperationStore()}
+func New(reg *functions.Registry, clk clock.Clock, events io.Writer) *Service {
+	s := &Service{reg: reg, clk: clk, router: transport.NewRouter(), ops: newOperationStore(), events: events}
+
+	// A failure here leaves deploy-by-upload unavailable rather than the whole
+	// emulator: every other method still works from a temp-less service.
+	if uploads, err := newUploadStore(); err == nil {
+		s.uploads = uploads
+	}
+	if dir, err := os.MkdirTemp("", "cloudrig-source-"); err == nil {
+		s.sources = dir
+	}
 
 	const parent = "/v1/projects/{project}/locations/{location}"
 	s.router.Handle(http.MethodGet, parent+"/functions", s.listFunctions)
-	s.router.Handle(http.MethodPost, parent+"/functions", s.createFunction)
+	s.router.Handle(http.MethodPost, parent+"/functions", s.deployFunction)
 	s.router.Handle(http.MethodGet, parent+"/functions/{name}", s.getFunction)
 	s.router.Handle(http.MethodPost, parent+"/functions/{name}", s.postFunction)
-	s.router.Handle(http.MethodPatch, parent+"/functions/{name}", s.patchFunction)
+	s.router.Handle(http.MethodPatch, parent+"/functions/{name}", s.deployFunction)
 	s.router.Handle(http.MethodDelete, parent+"/functions/{name}", s.deleteFunction)
 	s.router.Handle(http.MethodPost, parent+"/functions:generateUploadUrl", s.generateUploadURL)
 
@@ -59,6 +73,17 @@ func New(reg *functions.Registry, clk clock.Clock) *Service {
 	const v2parent = "/v2/projects/{project}/locations/{location}"
 	s.router.Handle(http.MethodGet, v2parent+"/functions", s.listFunctionsV2)
 	s.router.Handle(http.MethodGet, v2parent+"/functions/{name}", s.getFunctionV2)
+	s.router.Handle(http.MethodPut, UploadPath+"/{token}", s.receiveUpload)
+	s.router.Handle(http.MethodPost, UploadPath+"/{token}", s.receiveUpload)
+
+	// Neighbouring services gcloud consults during a deploy. Without them it
+	// reaches the real googleapis.com hosts, which is both a failure and a
+	// leak. See stubs.go.
+	s.router.Handle(http.MethodGet, "/v1/projects/{project}", s.getProject)
+	s.router.Handle(http.MethodPost, "/v1/projects/{project}", s.testProjectPermissions)
+	s.router.Handle(http.MethodGet, "/v1/projects/{project}/services/{service}", s.getService)
+	s.router.Handle(http.MethodGet, "/v1/projects/{project}/locations/{location}/defaultServiceAccount", s.defaultServiceAccount)
+
 	s.router.Handle(http.MethodGet, "/v1/operations/{operation}", s.getOperation)
 	s.router.Handle(http.MethodGet, "/v2/projects/{project}/locations/{location}/runtimes", s.listRuntimes)
 	return s
@@ -156,10 +181,6 @@ func (s *Service) createFunction(w http.ResponseWriter, r *http.Request, p trans
 
 func (s *Service) patchFunction(w http.ResponseWriter, r *http.Request, p transport.Params) error {
 	return deployUnimplemented("cloudfunctions.projects.locations.functions.patch")
-}
-
-func (s *Service) generateUploadURL(w http.ResponseWriter, r *http.Request, p transport.Params) error {
-	return deployUnimplemented("cloudfunctions.projects.locations.functions.generateUploadUrl")
 }
 
 func deployUnimplemented(op string) error {

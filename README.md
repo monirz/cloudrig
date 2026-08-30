@@ -76,14 +76,21 @@ url: http://localhost:4599/us-central1-my-project/hello
 ### 5. Point gcloud at the emulator
 
 ```sh
-export CLOUDSDK_API_ENDPOINT_OVERRIDES_CLOUDFUNCTIONS=http://localhost:4599/
-export CLOUDSDK_AUTH_DISABLE_CREDENTIALS=true
 export CLOUDSDK_CORE_PROJECT=my-project
+. ./cloudrig-env.sh
 ```
 
-Three variables, nothing else. `CLOUDSDK_CORE_PROJECT` must match the
-`--project` from step 4, or gcloud will look in the wrong place and find
-nothing.
+`cloudrig-env.sh` exports the overrides for the four services gcloud consults —
+cloudfunctions, cloudbuild, serviceusage and cloudresourcemanager — plus
+`CLOUDSDK_AUTH_DISABLE_CREDENTIALS=true`.
+
+`CLOUDSDK_CORE_PROJECT` must match the `--project` from step 4, or gcloud looks
+in the wrong project and finds nothing.
+
+**Set all four.** Without them `gcloud functions deploy` reaches
+`cloudbuild.googleapis.com`, `serviceusage.googleapis.com` and
+`cloudresourcemanager.googleapis.com` on the public internet. It fails on auth
+today, but with live credentials it would touch a real project.
 
 ### 6. Call the function
 
@@ -141,20 +148,34 @@ gcloud functions delete hello --region us-central1 --quiet
 Deleted [projects/my-project/locations/us-central1/functions/hello].
 ```
 
-### 9. What does not work
+### 9. Deploying with gcloud
+
+`gcloud functions deploy` works too — it zips the source, uploads it, and the
+emulator builds and runs what arrived:
 
 ```sh
-gcloud functions deploy hello --source ./testdata/node-hello ...
+gcloud functions deploy gohello --no-gen2 --region us-central1 \
+  --runtime go125 --entry-point Handler \
+  --trigger-http --source ./testdata/go-hello
 ```
 
 ```
-ERROR: (gcloud.functions.deploy) ResponseError: status=[501], message=[operation
-not implemented: cloudfunctions.projects.locations.functions.generateUploadUrl;
-deploy with: cloudrig fn deploy NAME --source DIR]
+name: projects/my-project/locations/us-central1/functions/gohello
+runtime: go125
+status: ACTIVE
 ```
 
-Real gcloud uploads a source zip, which the emulator cannot accept yet. Deploy
-with `cloudrig fn deploy` (step 4); every other gcloud command then works.
+Two things to know:
+
+- **A Go source must be its own module.** gcloud zips the directory, so an
+  enclosing `go.mod` does not travel with it. Without one you get
+  `has no go.mod; a Go function's source must be a module`.
+- **Node dependencies are installed on deploy.** gcloud excludes
+  `node_modules` from the archive, so the emulator runs `npm install` on the
+  extracted source — the first deploy needs network access.
+
+`cloudrig fn deploy` remains the faster path: it takes a local directory, so
+nothing is zipped, uploaded or reinstalled.
 
 ### Without gcloud
 

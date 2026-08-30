@@ -15,3 +15,6 @@ docs/
 
 # Node fixtures install their own dependencies.
 testdata/**/node_modules/
+
+# gcloud writes this into any directory it deploys from.
+.gcloudignore

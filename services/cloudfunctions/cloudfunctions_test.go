@@ -15,7 +15,13 @@ import (
 	"github.com/monirz/cloudrig/services/cloudfunctions"
 )
 
-const helloDir = "../../examples/hello"
+const (
+	helloDir = "../../examples/hello"
+	// moduleDir is a function that is its own Go module, which an uploaded
+	// source has to be: gcloud zips the directory, so an enclosing go.mod does
+	// not travel with it.
+	moduleDir = "../../testdata/go-hello"
+)
 
 var epoch = time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 
@@ -34,7 +40,7 @@ func serve(t *testing.T, fns ...functions.Function) *httptest.Server {
 		}
 	}
 
-	srv := httptest.NewServer(cloudfunctions.New(reg, clock.NewFake(epoch)))
+	srv := httptest.NewServer(cloudfunctions.New(reg, clock.NewFake(epoch), nil))
 	t.Cleanup(srv.Close)
 	return srv
 }
@@ -276,33 +282,6 @@ func TestDeleteReturnsACompletedOperation(t *testing.T) {
 
 	if code := getJSON(t, srv.URL+"/v1/projects/p/locations/us-central1/functions/hello", nil); code != http.StatusNotFound {
 		t.Errorf("function still present after delete: status = %d", code)
-	}
-}
-
-// TestDeployIsLoudlyUnimplemented holds spec.md rule 5: real gcloud uploads a
-// source zip, which we cannot accept yet, so say so rather than accept and
-// ignore.
-func TestDeployIsLoudlyUnimplemented(t *testing.T) {
-	t.Parallel()
-	srv := serve(t)
-
-	for _, path := range []string{
-		"/v1/projects/p/locations/us-central1/functions",
-		"/v1/projects/p/locations/us-central1/functions:generateUploadUrl",
-	} {
-		resp, err := http.Post(srv.URL+path, "application/json", strings.NewReader("{}"))
-		if err != nil {
-			t.Fatal(err)
-		}
-		body, _ := readAll(resp)
-		resp.Body.Close()
-
-		if resp.StatusCode != http.StatusNotImplemented {
-			t.Errorf("%s: status = %d, want 501", path, resp.StatusCode)
-		}
-		if !strings.Contains(body, "cloudrig fn deploy") {
-			t.Errorf("%s: body %s does not point at the working path", path, body)
-		}
 	}
 }
 

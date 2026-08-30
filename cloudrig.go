@@ -189,7 +189,7 @@ func newHandler(clk clock.Clock, o Options, reg *functions.Registry) http.Handle
 	// The v1 API is a view over the same registry the runner uses, never a
 	// second store: an API that keeps its own copy is how an emulator ends up
 	// reporting a deploy that runs nothing.
-	api := cloudfunctions.New(reg, clk)
+	api := cloudfunctions.New(reg, clk, o.EventLog)
 	mounts := make(map[string]http.Handler, len(cloudfunctions.Prefixes))
 	for _, prefix := range cloudfunctions.Prefixes {
 		mounts[prefix] = api

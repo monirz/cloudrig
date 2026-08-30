@@ -34,12 +34,15 @@ func TestGcloudCompatibility(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// The three variables a user sets to point gcloud at the emulator.
+	// Deploy consults neighbouring services, so all four are overridden.
+	// Without them gcloud reaches the real googleapis.com hosts.
 	env := append(os.Environ(),
 		"CLOUDSDK_CORE_PROJECT=my-project",
 		"CLOUDSDK_AUTH_DISABLE_CREDENTIALS=true",
-		"CLOUDSDK_API_ENDPOINT_OVERRIDES_CLOUDFUNCTIONS="+emu.BaseURL()+"/",
 	)
+	for _, svc := range []string{"CLOUDFUNCTIONS", "CLOUDBUILD", "SERVICEUSAGE", "CLOUDRESOURCEMANAGER"} {
+		env = append(env, "CLOUDSDK_API_ENDPOINT_OVERRIDES_"+svc+"="+emu.BaseURL()+"/")
+	}
 
 	run := func(t *testing.T, args ...string) string {
 		t.Helper()
@@ -51,6 +54,24 @@ func TestGcloudCompatibility(t *testing.T) {
 		}
 		return string(out)
 	}
+
+	// The whole flow: gcloud zips the source, uploads it, and the emulator
+	// builds and runs what arrived — no local path is shared.
+	t.Run("deploy", func(t *testing.T) {
+		out := run(t, "functions", "deploy", "deployed",
+			"--no-gen2", "--region", "us-central1",
+			"--runtime", "go125", "--entry-point", "Handler",
+			"--trigger-http", "--source", moduleDir, "--quiet")
+		if !strings.Contains(out, "status: ACTIVE") {
+			t.Fatalf("deploy output:\n%s", out)
+		}
+
+		called := run(t, "functions", "call", "deployed",
+			"--region", "us-central1", "--data", `{"name":"Monir"}`)
+		if !strings.Contains(called, `"hello"`) {
+			t.Errorf("the deployed function did not run:\n%s", called)
+		}
+	})
 
 	t.Run("describe", func(t *testing.T) {
 		out := run(t, "functions", "describe", "hello", "--region", "us-central1")

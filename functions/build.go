@@ -169,6 +169,14 @@ func listPackage(ctx context.Context, dir string) (pkgInfo, error) {
 			info.env = standalone
 			return info, nil
 		}
+		return pkgInfo{}, err
+	}
+
+	// Uploaded sources arrive as a standalone tree, so a Go function that
+	// relied on an enclosing module in its original checkout has nothing to
+	// build against. Say that rather than repeat the toolchain's puzzlement.
+	if strings.Contains(err.Error(), "go.mod file not found") {
+		return pkgInfo{}, fmt.Errorf("%s has no go.mod; a Go function's source must be a module", dir)
 	}
 	return pkgInfo{}, err
 }
