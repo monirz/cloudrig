@@ -41,6 +41,7 @@ Each one is a sequence you can paste, in order, against a running emulator.
 | [Use in a Go test](#use-in-a-go-test) | In-process, one isolated emulator per test |
 | [Inject failures](#inject-failures) | Make a request fail, to test your error handling |
 | [Fork state](#fork-state) | Branch an emulator, cheaply, mid-test |
+| [Firestore](#firestore) | Documents and queries, over gRPC |
 
 ## Reference
 
@@ -572,6 +573,41 @@ Only an in-memory emulator can fork; one started with `--data-dir` cannot.
 
 ---
 
+## Firestore
+
+gRPC, on the same port. The env var is all the configuration a client needs:
+
+```sh
+export FIRESTORE_EMULATOR_HOST=localhost:4599   # host:port, no scheme
+```
+
+```go
+c, _ := firestore.NewClient(ctx, "cloudrig-local")
+
+c.Collection("crew").Doc("ada").Set(ctx, map[string]any{
+    "name": "ada", "age": 36, "role": "eng",
+})
+
+snap, _ := c.Collection("crew").Doc("ada").Get(ctx)
+
+docs, _ := c.Collection("crew").
+    Where("role", "==", "eng").
+    OrderBy("age", firestore.Desc).
+    Limit(10).
+    Documents(ctx).GetAll()
+```
+
+Documents, subcollections, `Set`, `Create`, `Update` with field masks,
+`Delete`, `BulkWriter`, and queries: `==`, `!=`, `<`, `<=`, `>`, `>=`, `in`,
+`not-in`, `array-contains`, `array-contains-any`, `AND`/`OR`, ordering, limit
+and offset. Values sort the way Firestore sorts them, across types.
+
+Not supported: transactions, `Listen` (real-time updates), cursors
+(`StartAt`/`EndAt`), collection-group queries, aggregations, and field
+transforms such as `Increment` and `ServerTimestamp`.
+
+---
+
 ## Commands
 
 ```
@@ -630,6 +666,9 @@ versioning, signed URLs, persistence. Verified against the real Go client and
 **Pub/Sub** — topics, subscriptions, publish, streaming pull, ack and nack,
 deadline expiry, and `--trigger-topic` to run a function on a message. gRPC for
 the client libraries, REST for Terraform, one service behind both.
+
+**Firestore** — documents, subcollections and queries over gRPC, found through
+`FIRESTORE_EMULATOR_HOST`.
 
 **Fault injection** — `emu.Faults()` fails chosen requests, so error paths and
 retries can be tested.

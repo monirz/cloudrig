@@ -267,3 +267,134 @@ func TestFirestoreNestedValues(t *testing.T) {
 		t.Errorf("list = %#v", got["list"])
 	}
 }
+
+// seedQuery fills a collection with documents a query can sort and filter.
+func seedQuery(t *testing.T, c *firestore.Client, ctx context.Context) *firestore.CollectionRef {
+	t.Helper()
+
+	col := c.Collection("crew")
+	for _, m := range []map[string]any{
+		{"name": "ada", "age": int64(36), "role": "eng", "tags": []any{"maths", "engines"}},
+		{"name": "alan", "age": int64(41), "role": "eng", "tags": []any{"maths", "logic"}},
+		{"name": "grace", "age": int64(45), "role": "cmdr", "tags": []any{"compilers"}},
+		{"name": "katherine", "age": int64(52), "role": "eng", "tags": []any{"orbits"}},
+	} {
+		if _, err := col.Doc(m["name"].(string)).Set(ctx, m); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return col
+}
+
+func names(t *testing.T, docs []*firestore.DocumentSnapshot) []string {
+	t.Helper()
+
+	out := make([]string, 0, len(docs))
+	for _, d := range docs {
+		out = append(out, d.Ref.ID)
+	}
+	return out
+}
+
+func TestFirestoreQueryAll(t *testing.T) {
+	c, ctx := fsClient(t)
+	col := seedQuery(t, c, ctx)
+
+	docs, err := col.Documents(ctx).GetAll()
+	if err != nil {
+		t.Fatalf("GetAll: %v", err)
+	}
+	// No order-by, so documents come back in name order.
+	if got := names(t, docs); !equal(got, []string{"ada", "alan", "grace", "katherine"}) {
+		t.Errorf("names = %v", got)
+	}
+}
+
+func TestFirestoreQueryFilters(t *testing.T) {
+	c, ctx := fsClient(t)
+	col := seedQuery(t, c, ctx)
+
+	cases := []struct {
+		name  string
+		query firestore.Query
+		want  []string
+	}{
+		{"equal", col.Where("role", "==", "eng"), []string{"ada", "alan", "katherine"}},
+		{"not equal", col.Where("role", "!=", "eng"), []string{"grace"}},
+		{"greater than", col.Where("age", ">", 41), []string{"grace", "katherine"}},
+		{"at most", col.Where("age", "<=", 41), []string{"ada", "alan"}},
+		{"in", col.Where("name", "in", []string{"ada", "grace"}), []string{"ada", "grace"}},
+		{"array contains", col.Where("tags", "array-contains", "maths"), []string{"ada", "alan"}},
+		{"array contains any", col.Where("tags", "array-contains-any", []string{"orbits", "logic"}),
+			[]string{"alan", "katherine"}},
+		{"two filters", col.Where("role", "==", "eng").Where("age", ">", 36),
+			[]string{"alan", "katherine"}},
+		{"a field nothing has", col.Where("missing", "==", 1), nil},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			docs, err := tc.query.Documents(ctx).GetAll()
+			if err != nil {
+				t.Fatalf("GetAll: %v", err)
+			}
+			if got := names(t, docs); !equal(got, tc.want) {
+				t.Errorf("names = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestFirestoreQueryOrderAndLimit(t *testing.T) {
+	c, ctx := fsClient(t)
+	col := seedQuery(t, c, ctx)
+
+	docs, err := col.OrderBy("age", firestore.Desc).Limit(2).Documents(ctx).GetAll()
+	if err != nil {
+		t.Fatalf("GetAll: %v", err)
+	}
+	if got := names(t, docs); !equal(got, []string{"katherine", "grace"}) {
+		t.Errorf("names = %v, want the two oldest, oldest first", got)
+	}
+
+	// Offset walks past the front of the same ordering.
+	docs, err = col.OrderBy("age", firestore.Asc).Offset(2).Documents(ctx).GetAll()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := names(t, docs); !equal(got, []string{"grace", "katherine"}) {
+		t.Errorf("names = %v", got)
+	}
+}
+
+// TestFirestoreQueryIgnoresSubcollections holds that a query over a collection
+// returns its own documents, not those of a collection beneath it.
+func TestFirestoreQueryIgnoresSubcollections(t *testing.T) {
+	c, ctx := fsClient(t)
+	col := seedQuery(t, c, ctx)
+
+	if _, err := col.Doc("ada").Collection("pets").Doc("cat").
+		Set(ctx, map[string]any{"name": "cat"}); err != nil {
+		t.Fatal(err)
+	}
+
+	docs, err := col.Documents(ctx).GetAll()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := names(t, docs); len(got) != 4 {
+		t.Errorf("names = %v, want only the four documents in the collection", got)
+	}
+}
+
+func equal(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
