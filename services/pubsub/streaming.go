@@ -49,7 +49,9 @@ func (b *Subscriber) StreamingPull(stream pubsubpb.Subscriber_StreamingPullServe
 		}
 	}()
 
-	wait := b.svc.waitCh(name)
+	wait, stopListening := b.svc.listen(name)
+	defer stopListening()
+
 	for {
 		if messages := b.svc.take(name, streamBatch, deadline); len(messages) > 0 {
 			if err := stream.Send(&pubsubpb.StreamingPullResponse{ReceivedMessages: messages}); err != nil {

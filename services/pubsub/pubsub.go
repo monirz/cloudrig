@@ -37,10 +37,11 @@ type Service struct {
 	// outstanding holds messages delivered but not yet acknowledged, so a nack
 	// or an expired deadline can return them.
 	outstanding map[string]map[string]*lease
-	// waiters wakes streaming pulls when a message arrives. A stream waits on
-	// a signal rather than polling, so nothing here needs a wall clock and a
-	// fake one cannot stall delivery.
-	waiters map[string]chan struct{}
+	// waiters wakes streaming pulls when a message arrives: one channel per
+	// live stream, never one shared by all of them. A stream waits on a signal
+	// rather than polling, so nothing here needs a wall clock and a fake one
+	// cannot stall delivery.
+	waiters map[string]map[chan struct{}]struct{}
 	seq     uint64
 }
 
@@ -52,7 +53,7 @@ func New(kv store.Store, clk clock.Clock, bus *events.Bus) *Service {
 		bus:         bus,
 		backlog:     map[string][]*pubsubpb.PubsubMessage{},
 		outstanding: map[string]map[string]*lease{},
-		waiters:     map[string]chan struct{}{},
+		waiters:     map[string]map[chan struct{}]struct{}{},
 	}
 }
 
@@ -161,28 +162,38 @@ func (s *Service) getSubscription(ctx context.Context, name string) (*pubsubpb.S
 // again", so one pending is as good as many, and a publish must never wait on
 // a subscriber.
 func (s *Service) signal(subscription string) {
-	ch, ok := s.waiters[subscription]
-	if !ok {
-		ch = make(chan struct{}, 1)
-		s.waiters[subscription] = ch
-	}
-	select {
-	case ch <- struct{}{}:
-	default:
+	for ch := range s.waiters[subscription] {
+		select {
+		case ch <- struct{}{}:
+		default:
+		}
 	}
 }
 
-// waitCh returns the channel a subscription is signalled on.
-func (s *Service) waitCh(subscription string) chan struct{} {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+// listen registers a stream's own wake-up channel and returns it with the
+// function that removes it.
+//
+// One channel per stream, because a shared one loses wake-ups: a stream on its
+// way out can take the token meant for the stream that is staying, which then
+// sleeps through a message already sitting in the backlog.
+func (s *Service) listen(subscription string) (chan struct{}, func()) {
+	ch := make(chan struct{}, 1)
 
-	ch, ok := s.waiters[subscription]
-	if !ok {
-		ch = make(chan struct{}, 1)
-		s.waiters[subscription] = ch
+	s.mu.Lock()
+	if s.waiters[subscription] == nil {
+		s.waiters[subscription] = map[chan struct{}]struct{}{}
 	}
-	return ch
+	s.waiters[subscription][ch] = struct{}{}
+	s.mu.Unlock()
+
+	return ch, func() {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		delete(s.waiters[subscription], ch)
+		if len(s.waiters[subscription]) == 0 {
+			delete(s.waiters, subscription)
+		}
+	}
 }
 
 // nextMessageID hands out ids that are unique and increasing, so a test can

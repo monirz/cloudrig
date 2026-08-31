@@ -106,6 +106,9 @@ func TestSignalDoesNotBlock(t *testing.T) {
 	s := newService(t)
 	const sub = "projects/p/subscriptions/s"
 
+	wait, stop := s.listen(sub)
+	defer stop()
+
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
@@ -124,14 +127,60 @@ func TestSignalDoesNotBlock(t *testing.T) {
 
 	// One wake-up is waiting, and only one.
 	select {
-	case <-s.waitCh(sub):
+	case <-wait:
 	default:
 		t.Error("no signal was delivered")
 	}
 	select {
-	case <-s.waitCh(sub):
+	case <-wait:
 		t.Error("more than one signal was queued")
 	default:
+	}
+}
+
+// TestEveryStreamIsWoken is the bug a shared channel caused: a message
+// published while one stream is leaving must still reach the stream that
+// stayed, rather than waking whichever one happened to take the token.
+func TestEveryStreamIsWoken(t *testing.T) {
+	t.Parallel()
+
+	s := newService(t)
+	const sub = "projects/p/subscriptions/s"
+
+	leaving, stopLeaving := s.listen(sub)
+	staying, stopStaying := s.listen(sub)
+	defer stopStaying()
+
+	s.mu.Lock()
+	s.signal(sub)
+	s.mu.Unlock()
+
+	// The departing stream drains its own wake-up and goes.
+	<-leaving
+	stopLeaving()
+
+	select {
+	case <-staying:
+	default:
+		t.Error("the surviving stream was never woken; it would sleep through a queued message")
+	}
+}
+
+// TestStopListeningIsCleanedUp keeps a long-running emulator from growing a
+// channel per stream that ever existed.
+func TestStopListeningIsCleanedUp(t *testing.T) {
+	t.Parallel()
+
+	s := newService(t)
+	const sub = "projects/p/subscriptions/s"
+
+	_, stop := s.listen(sub)
+	stop()
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.waiters[sub]; ok {
+		t.Errorf("waiters still holds an entry for %s after the last stream left", sub)
 	}
 }
 
