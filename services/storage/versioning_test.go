@@ -127,7 +127,7 @@ func TestSharedContentSurvivesOneDelete(t *testing.T) {
 	}
 
 	// The survivor must still read, not just exist.
-	_, f, err := s.OpenObject(ctx, "p", "bkt", "b", nil)
+	_, f, err := s.OpenObject(ctx, "p", "bkt", "b", nil, storage.Preconditions{})
 	if err != nil {
 		t.Fatalf("the surviving object lost its content: %v", err)
 	}
@@ -155,7 +155,7 @@ func TestRewritingIdenticalContentKeepsIt(t *testing.T) {
 		t.Fatalf("%d blobs, want 1", got)
 	}
 
-	_, f, err := s.OpenObject(ctx, "p", "bkt", "obj", nil)
+	_, f, err := s.OpenObject(ctx, "p", "bkt", "obj", nil, storage.Preconditions{})
 	if err != nil {
 		t.Fatalf("the object lost its content to its own rewrite: %v", err)
 	}
@@ -181,7 +181,7 @@ func TestConcurrentWritesDoNotLoseContent(t *testing.T) {
 		<-done
 	}
 
-	_, f, err := s.OpenObject(ctx, "p", "bkt", "obj", nil)
+	_, f, err := s.OpenObject(ctx, "p", "bkt", "obj", nil, storage.Preconditions{})
 	if err != nil {
 		t.Fatalf("the surviving object has no content: %v", err)
 	}

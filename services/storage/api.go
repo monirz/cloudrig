@@ -122,6 +122,40 @@ func (a *API) getBucket(w http.ResponseWriter, r *http.Request, p transport.Para
 	return writeJSON(w, http.StatusOK, toAPIBucket(b, baseURL(r)))
 }
 
+func (a *API) patchBucket(w http.ResponseWriter, r *http.Request, p transport.Params) error {
+	project, err := a.svc.ProjectOf(r.Context(), p["bucket"])
+	if err != nil {
+		return err
+	}
+	var body bucketRequest
+	if err := decodeJSON(r, &body); err != nil {
+		return err
+	}
+	pre, err := preconditionsOf(r.URL.Query())
+	if err != nil {
+		return err
+	}
+
+	b, err := a.svc.UpdateBucket(r.Context(), project, p["bucket"], BucketPatch{
+		StorageClass:  body.StorageClass,
+		Versioning:    versioningOf(body),
+		Preconditions: pre,
+	})
+	if err != nil {
+		return err
+	}
+	return writeJSON(w, http.StatusOK, toAPIBucket(b, baseURL(r)))
+}
+
+// versioningOf distinguishes "not mentioned" from "set to false": a patch that
+// omits versioning must leave it alone, not turn it off.
+func versioningOf(body bucketRequest) *bool {
+	if body.Versioning == nil {
+		return nil
+	}
+	return &body.Versioning.Enabled
+}
+
 func (a *API) deleteBucket(w http.ResponseWriter, r *http.Request, p transport.Params) error {
 	project, err := a.svc.ProjectOf(r.Context(), p["bucket"])
 	if err != nil {
@@ -182,16 +216,20 @@ func (a *API) getObject(w http.ResponseWriter, r *http.Request, p transport.Para
 	if err != nil {
 		return err
 	}
+	pre, err := preconditionsOf(r.URL.Query())
+	if err != nil {
+		return err
+	}
 
 	if r.URL.Query().Get("alt") != "media" {
-		obj, err := a.svc.GetObject(r.Context(), project, p["bucket"], p["object"], generation)
+		obj, err := a.svc.GetObjectIf(r.Context(), project, p["bucket"], p["object"], generation, pre)
 		if err != nil {
 			return err
 		}
 		return writeJSON(w, http.StatusOK, toAPIObject(obj, baseURL(r)))
 	}
 
-	obj, f, err := a.svc.OpenObject(r.Context(), project, p["bucket"], p["object"], generation)
+	obj, f, err := a.svc.OpenObject(r.Context(), project, p["bucket"], p["object"], generation, pre)
 	if err != nil {
 		return err
 	}
@@ -217,7 +255,12 @@ func (a *API) downloadMedia(w http.ResponseWriter, r *http.Request, p transport.
 		return err
 	}
 
-	obj, f, err := a.svc.OpenObject(r.Context(), project, p["bucket"], p["object"], generation)
+	pre, err := preconditionsOf(r.URL.Query())
+	if err != nil {
+		return err
+	}
+
+	obj, f, err := a.svc.OpenObject(r.Context(), project, p["bucket"], p["object"], generation, pre)
 	if err != nil {
 		return err
 	}
@@ -393,12 +436,26 @@ func preconditionsOf(q url.Values) (Preconditions, error) {
 		}
 		p.IfGenerationMatch = &n
 	}
+	if raw := q.Get("ifGenerationNotMatch"); raw != "" {
+		n, err := strconv.ParseInt(raw, 10, 64)
+		if err != nil {
+			return p, invalidParam("ifGenerationNotMatch", raw)
+		}
+		p.IfGenerationNotMatch = &n
+	}
 	if raw := q.Get("ifMetagenerationMatch"); raw != "" {
 		n, err := strconv.ParseInt(raw, 10, 64)
 		if err != nil {
 			return p, invalidParam("ifMetagenerationMatch", raw)
 		}
 		p.IfMetagenerationMatch = &n
+	}
+	if raw := q.Get("ifMetagenerationNotMatch"); raw != "" {
+		n, err := strconv.ParseInt(raw, 10, 64)
+		if err != nil {
+			return p, invalidParam("ifMetagenerationNotMatch", raw)
+		}
+		p.IfMetagenerationNotMatch = &n
 	}
 	return p, nil
 }

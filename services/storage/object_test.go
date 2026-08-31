@@ -53,7 +53,7 @@ func TestWriteAndRead(t *testing.T) {
 		t.Errorf("checksums or etag missing: %+v", obj)
 	}
 
-	got, f, err := s.OpenObject(ctx, "p", "bkt", "logs/2026/app.log", nil)
+	got, f, err := s.OpenObject(ctx, "p", "bkt", "logs/2026/app.log", nil, storage.Preconditions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -385,7 +385,7 @@ func TestBlobAddressSurvivesAReload(t *testing.T) {
 		t.Fatal("the content address was not persisted")
 	}
 
-	_, f, err := s.OpenObject(ctx, "p", "bkt", "obj", nil)
+	_, f, err := s.OpenObject(ctx, "p", "bkt", "obj", nil, storage.Preconditions{})
 	if err != nil {
 		t.Fatalf("opening content after a reload: %v", err)
 	}
@@ -438,4 +438,91 @@ func TestConcurrentWritesAllocateDistinctGenerations(t *testing.T) {
 	if seen[live.Generation] != 1 {
 		t.Errorf("the live generation %d was never handed out", live.Generation)
 	}
+}
+
+// TestNotMatchPreconditions checks the semantics at the layer that decides
+// them: a NotMatch condition that holds is 304 on a read and 412 on a write.
+func TestNotMatchPreconditions(t *testing.T) {
+	t.Parallel()
+	s, ctx := withBucket(t)
+
+	obj, err := write(t, s, "obj", "content", storage.Preconditions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		name string
+		pre  storage.Preconditions
+		read bool
+		want int
+	}{
+		{"read, generation matches", storage.Preconditions{IfGenerationNotMatch: gen(obj.Generation)}, true, 304},
+		{"read, generation differs", storage.Preconditions{IfGenerationNotMatch: gen(obj.Generation + 1)}, true, 0},
+		{"read, metageneration matches", storage.Preconditions{IfMetagenerationNotMatch: gen(1)}, true, 304},
+		{"read, metageneration differs", storage.Preconditions{IfMetagenerationNotMatch: gen(2)}, true, 0},
+		{"write, generation matches", storage.Preconditions{IfGenerationNotMatch: gen(obj.Generation)}, false, 412},
+		{"write, generation differs", storage.Preconditions{IfGenerationNotMatch: gen(obj.Generation + 1)}, false, 0},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var err error
+			if tc.read {
+				_, err = s.GetObjectIf(ctx, "p", "bkt", "obj", nil, tc.pre)
+			} else {
+				_, err = s.WriteObject(ctx, "p", storage.Write{
+					Bucket: "bkt", Name: "obj", Preconditions: tc.pre,
+				}, strings.NewReader("new"))
+			}
+
+			if tc.want == 0 {
+				if err != nil {
+					t.Errorf("the condition was refused: %v", err)
+				}
+				return
+			}
+			if got := status(t, err); got != tc.want {
+				t.Errorf("status = %d, want %d", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestUpdateBucket(t *testing.T) {
+	t.Parallel()
+	s, ctx := withBucket(t)
+
+	enabled := true
+	b, err := s.UpdateBucket(ctx, "p", "bkt", storage.BucketPatch{Versioning: &enabled})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !b.Versioning || b.Metageneration != 2 {
+		t.Errorf("bucket = %+v, want versioned at metageneration 2", b)
+	}
+
+	t.Run("an omitted field is left alone", func(t *testing.T) {
+		// Versioning is nil here, so the earlier true must survive.
+		got, err := s.UpdateBucket(ctx, "p", "bkt", storage.BucketPatch{StorageClass: "NEARLINE"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !got.Versioning {
+			t.Error("a patch that did not mention versioning turned it off")
+		}
+		if got.StorageClass != "NEARLINE" || got.Metageneration != 3 {
+			t.Errorf("bucket = %+v", got)
+		}
+	})
+
+	t.Run("a stale metageneration is 412", func(t *testing.T) {
+		_, err := s.UpdateBucket(ctx, "p", "bkt", storage.BucketPatch{
+			StorageClass:  "COLDLINE",
+			Preconditions: storage.Preconditions{IfMetagenerationMatch: gen(1)},
+		})
+		if got := status(t, err); got != 412 {
+			t.Errorf("status = %d, want 412", got)
+		}
+	})
 }

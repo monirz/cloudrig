@@ -113,6 +113,54 @@ func (s *Service) ListBuckets(ctx context.Context, project string) ([]Bucket, er
 	return out, nil
 }
 
+// BucketPatch is a partial update. A nil field is left unchanged.
+type BucketPatch struct {
+	StorageClass  string
+	Versioning    *bool
+	Preconditions Preconditions
+}
+
+// UpdateBucket applies a patch and bumps metageneration.
+//
+// Location is not patchable: GCS fixes it at creation, and silently accepting a
+// change would be worse than refusing one.
+func (s *Service) UpdateBucket(ctx context.Context, project, name string, patch BucketPatch) (Bucket, error) {
+	b, version, err := s.bucket(ctx, project, name)
+	if err != nil {
+		return Bucket{}, err
+	}
+
+	if m := patch.Preconditions.IfMetagenerationMatch; m != nil && b.Metageneration != *m {
+		return Bucket{}, preconditionFailed(name, "")
+	}
+	if m := patch.Preconditions.IfMetagenerationNotMatch; m != nil && b.Metageneration == *m {
+		return Bucket{}, preconditionFailed(name, "")
+	}
+
+	if patch.StorageClass != "" {
+		b.StorageClass = patch.StorageClass
+	}
+	if patch.Versioning != nil {
+		b.Versioning = *patch.Versioning
+	}
+	b.Metageneration++
+	b.Updated = s.clk.Now()
+
+	encoded, err := json.Marshal(b)
+	if err != nil {
+		return Bucket{}, gerr.Wrap(err, gerr.Internal, "encoding bucket metadata")
+	}
+	// Compare-and-swap on the version read above, so two concurrent patches
+	// cannot both claim the same metageneration.
+	if _, err := s.kv.Put(ctx, resource.Bucket(project, name), encoded, version); err != nil {
+		if errors.Is(err, store.ErrVersionMismatch) {
+			return Bucket{}, preconditionFailed(name, "")
+		}
+		return Bucket{}, gerr.Wrap(err, gerr.Internal, "storing bucket metadata")
+	}
+	return b, nil
+}
+
 // DeleteBucket removes an empty bucket.
 func (s *Service) DeleteBucket(ctx context.Context, project, name string) error {
 	if _, _, err := s.bucket(ctx, project, name); err != nil {

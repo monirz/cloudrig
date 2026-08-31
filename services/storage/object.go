@@ -43,12 +43,21 @@ type live struct {
 	Highest    int64 `json:"highest"`
 }
 
-// Preconditions gate a write. A nil field is no condition.
+// Preconditions gate an operation. A nil field is no condition.
 type Preconditions struct {
 	// IfGenerationMatch of 0 means the object must not exist — what
 	// storage.Conditions{DoesNotExist: true} compiles to.
-	IfGenerationMatch     *int64
-	IfMetagenerationMatch *int64
+	IfGenerationMatch    *int64
+	IfGenerationNotMatch *int64
+
+	IfMetagenerationMatch    *int64
+	IfMetagenerationNotMatch *int64
+}
+
+// isSet reports whether any condition was given.
+func (p Preconditions) isSet() bool {
+	return p.IfGenerationMatch != nil || p.IfGenerationNotMatch != nil ||
+		p.IfMetagenerationMatch != nil || p.IfMetagenerationNotMatch != nil
 }
 
 // Write is a request to store an object.
@@ -82,8 +91,7 @@ const maxGenerationProbes = 1024
 // alternative is holding the bytes until the outcome is known, which is exactly
 // the memory behaviour this project exists to avoid. Reclaimed by Reset.
 func (s *Service) WriteObject(ctx context.Context, project string, w Write, r io.Reader) (Object, error) {
-	bkt, _, err := s.bucket(ctx, project, w.Bucket)
-	if err != nil {
+	if _, _, err := s.bucket(ctx, project, w.Bucket); err != nil {
 		return Object{}, err
 	}
 	if w.Name == "" {
@@ -95,6 +103,18 @@ func (s *Service) WriteObject(ctx context.Context, project string, w Write, r io
 	ref, err := s.blobs.Put(ctx, r)
 	if err != nil {
 		return Object{}, gerr.Wrap(err, gerr.Internal, "storing object content")
+	}
+	return s.publishRef(ctx, project, w, ref)
+}
+
+// publishRef makes already-stored content visible under a name.
+//
+// Split out so a copy can reuse content instead of rewriting it: the bytes are
+// addressed by hash, so pointing a second name at them is all a copy is.
+func (s *Service) publishRef(ctx context.Context, project string, w Write, ref blobRef) (Object, error) {
+	bkt, _, err := s.bucket(ctx, project, w.Bucket)
+	if err != nil {
+		return Object{}, err
 	}
 
 	conditional := w.Preconditions.IfGenerationMatch != nil || w.Preconditions.IfMetagenerationMatch != nil
@@ -141,7 +161,7 @@ func (s *Service) publish(ctx context.Context, project string, w Write, ref blob
 		}
 		existing = &obj
 	}
-	if err := checkPreconditions(w.Preconditions, existing, w.Bucket, w.Name); err != nil {
+	if err := checkPreconditions(w.Preconditions, existing, w.Bucket, w.Name, false); err != nil {
 		return Object{}, err
 	}
 
@@ -241,7 +261,12 @@ func nextGeneration(now time.Time, highest int64) int64 {
 	return candidate
 }
 
-func checkPreconditions(p Preconditions, existing *Object, bucket, name string) error {
+// checkPreconditions applies the conditions to what is currently there.
+//
+// read is true for an operation that only reads: a NotMatch condition that
+// holds means the caller already has the current version, which GCS answers
+// with 304 rather than 412. On a mutation the same condition is a failure.
+func checkPreconditions(p Preconditions, existing *Object, bucket, name string, read bool) error {
 	if p.IfGenerationMatch != nil {
 		want := *p.IfGenerationMatch
 		switch {
@@ -251,12 +276,43 @@ func checkPreconditions(p Preconditions, existing *Object, bucket, name string) 
 			return preconditionFailed(bucket, name)
 		}
 	}
+	if p.IfGenerationNotMatch != nil {
+		want := *p.IfGenerationNotMatch
+		// The condition asks for the object only if it is *not* this
+		// generation; it being exactly that is the condition failing.
+		if existing != nil && existing.Generation == want {
+			return conditionHeld(read, bucket, name)
+		}
+		if want == 0 && existing == nil {
+			return conditionHeld(read, bucket, name)
+		}
+	}
 	if p.IfMetagenerationMatch != nil {
 		if existing == nil || existing.Metageneration != *p.IfMetagenerationMatch {
 			return preconditionFailed(bucket, name)
 		}
 	}
+	if p.IfMetagenerationNotMatch != nil {
+		if existing != nil && existing.Metageneration == *p.IfMetagenerationNotMatch {
+			return conditionHeld(read, bucket, name)
+		}
+	}
 	return nil
+}
+
+// conditionHeld reports a NotMatch condition that turned out to match.
+func conditionHeld(read bool, bucket, name string) error {
+	if read {
+		return notModified(bucket, name)
+	}
+	return preconditionFailed(bucket, name)
+}
+
+// notModified is what a read gets when the caller already has this version.
+func notModified(bucket, name string) error {
+	return gerr.Newf(gerr.Aborted, "The conditional request failed: %s/%s", bucket, name).
+		WithHTTPStatus(http.StatusNotModified).
+		WithReason("notModified")
 }
 
 // etag is opaque to clients, so any stable function of the identity will do.
@@ -403,16 +459,35 @@ func (s *Service) readGenerationVersion(ctx context.Context, project, bucket, na
 
 // GetObject returns metadata for the live generation, or a specific one.
 func (s *Service) GetObject(ctx context.Context, project, bucket, name string, generation *int64) (Object, error) {
-	if generation != nil {
-		return s.readGeneration(ctx, project, bucket, name, *generation)
-	}
+	return s.GetObjectIf(ctx, project, bucket, name, generation, Preconditions{})
+}
 
-	obj, version, err := s.resolveLive(ctx, project, bucket, name)
+// GetObjectIf is GetObject with conditions. A NotMatch condition that holds is
+// reported as 304, as GCS does for a read.
+func (s *Service) GetObjectIf(ctx context.Context, project, bucket, name string, generation *int64, p Preconditions) (Object, error) {
+	var obj Object
+	var err error
+
+	if generation != nil {
+		obj, err = s.readGeneration(ctx, project, bucket, name, *generation)
+	} else {
+		var version uint64
+		obj, version, err = s.resolveLive(ctx, project, bucket, name)
+		if err == nil && version == 0 {
+			err = notFoundObject(bucket, name)
+		}
+	}
 	if err != nil {
+		if p.isSet() && isNotFound(err) {
+			// A condition against something absent is a failed precondition,
+			// not a missing object, when the caller asked conditionally.
+			return Object{}, checkPreconditions(p, nil, bucket, name, true)
+		}
 		return Object{}, err
 	}
-	if version == 0 {
-		return Object{}, notFoundObject(bucket, name)
+
+	if err := checkPreconditions(p, &obj, bucket, name, true); err != nil {
+		return Object{}, err
 	}
 	return obj, nil
 }
@@ -420,8 +495,8 @@ func (s *Service) GetObject(ctx context.Context, project, bucket, name string, g
 // OpenObject returns metadata and an open file of the content. The caller
 // closes the file; handing back the file rather than bytes is what keeps a
 // download's memory constant.
-func (s *Service) OpenObject(ctx context.Context, project, bucket, name string, generation *int64) (Object, *os.File, error) {
-	obj, err := s.GetObject(ctx, project, bucket, name, generation)
+func (s *Service) OpenObject(ctx context.Context, project, bucket, name string, generation *int64, p Preconditions) (Object, *os.File, error) {
+	obj, err := s.GetObjectIf(ctx, project, bucket, name, generation, p)
 	if err != nil {
 		return Object{}, nil, err
 	}
@@ -452,7 +527,7 @@ func (s *Service) UpdateObject(ctx context.Context, project, bucket, name string
 		}
 		return Object{}, err
 	}
-	if err := checkPreconditions(patch.Preconditions, &obj, bucket, name); err != nil {
+	if err := checkPreconditions(patch.Preconditions, &obj, bucket, name, false); err != nil {
 		return Object{}, err
 	}
 
@@ -492,7 +567,7 @@ func (s *Service) DeleteObject(ctx context.Context, project, bucket, name string
 	if version == 0 {
 		return notFoundObject(bucket, name)
 	}
-	if err := checkPreconditions(p, &obj, bucket, name); err != nil {
+	if err := checkPreconditions(p, &obj, bucket, name, false); err != nil {
 		return err
 	}
 
