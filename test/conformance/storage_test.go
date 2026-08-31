@@ -9,7 +9,9 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"runtime"
 	"strings"
+	"sync"
 	"testing"
 
 	"cloud.google.com/go/storage"
@@ -20,12 +22,28 @@ import (
 	"google.golang.org/api/option"
 )
 
+// bases records each test's emulator address, so a test that builds a URL by
+// hand can find the instance its client is talking to.
+var bases sync.Map
+
+// baseOf is the emulator URL for this test.
+func baseOf(t *testing.T) string {
+	t.Helper()
+	v, ok := bases.Load(t.Name())
+	if !ok {
+		t.Fatal("no emulator for this test; call client(t) first")
+	}
+	return v.(string)
+}
+
 // client points the real storage client at an in-process emulator.
 func client(t *testing.T) (*storage.Client, context.Context) {
 	t.Helper()
 	t.Parallel()
 
 	emu := cloudrig.MustStart(t)
+	bases.Store(t.Name(), emu.BaseURL())
+	t.Cleanup(func() { bases.Delete(t.Name()) })
 	ctx := context.Background()
 
 	c, err := storage.NewClient(ctx,
@@ -511,5 +529,268 @@ func TestResumableWithPreconditions(t *testing.T) {
 		t.Fatal("the second conditional upload succeeded")
 	} else if statusOf(t, err) != 412 {
 		t.Errorf("status = %d, want 412", statusOf(t, err))
+	}
+}
+
+// TestNotMatchConditions covers the conditions the client sends and we used to
+// ignore. Ignoring them is worse than refusing them: a conditional request
+// silently succeeded when it should not have.
+func TestNotMatchConditions(t *testing.T) {
+	c, ctx := client(t)
+	b := bucket(t, c, ctx, "notmatch")
+
+	w := b.Object("obj").NewWriter(ctx)
+	w.Write([]byte("one"))
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	first := w.Attrs()
+
+	t.Run("GenerationNotMatch on a read is 304 when it matches", func(t *testing.T) {
+		_, err := b.Object("obj").If(storage.Conditions{
+			GenerationNotMatch: first.Generation,
+		}).Attrs(ctx)
+		if err == nil {
+			t.Fatal("a read conditioned on a different generation returned the same one")
+		}
+		if got := statusOf(t, err); got != 304 {
+			t.Errorf("status = %d, want 304", got)
+		}
+	})
+
+	t.Run("GenerationNotMatch on a read passes when it differs", func(t *testing.T) {
+		if _, err := b.Object("obj").If(storage.Conditions{
+			GenerationNotMatch: first.Generation + 1,
+		}).Attrs(ctx); err != nil {
+			t.Errorf("a read conditioned on another generation was refused: %v", err)
+		}
+	})
+
+	t.Run("MetagenerationNotMatch on a read is 304 when it matches", func(t *testing.T) {
+		_, err := b.Object("obj").If(storage.Conditions{
+			MetagenerationNotMatch: first.Metageneration,
+		}).Attrs(ctx)
+		if got := statusOf(t, err); got != 304 {
+			t.Errorf("status = %d, want 304", got)
+		}
+	})
+
+	t.Run("GenerationNotMatch on a write is 412 when it matches", func(t *testing.T) {
+		blocked := b.Object("obj").If(storage.Conditions{
+			GenerationNotMatch: first.Generation,
+		}).NewWriter(ctx)
+		blocked.Write([]byte("two"))
+		if err := blocked.Close(); err == nil {
+			t.Fatal("a write conditioned against the current generation succeeded")
+		} else if got := statusOf(t, err); got != 412 {
+			t.Errorf("status = %d, want 412", got)
+		}
+	})
+
+	t.Run("GenerationNotMatch on a delete is 412 when it matches", func(t *testing.T) {
+		err := b.Object("obj").If(storage.Conditions{
+			GenerationNotMatch: first.Generation,
+		}).Delete(ctx)
+		if got := statusOf(t, err); got != 412 {
+			t.Errorf("status = %d, want 412", got)
+		}
+	})
+}
+
+// TestBucketUpdate covers turning versioning on after creation, which was not
+// routed at all.
+func TestBucketUpdate(t *testing.T) {
+	c, ctx := client(t)
+	b := bucket(t, c, ctx, "patchable")
+
+	attrs, err := b.Update(ctx, storage.BucketAttrsToUpdate{VersioningEnabled: true})
+	if err != nil {
+		t.Fatalf("enabling versioning: %v", err)
+	}
+	if !attrs.VersioningEnabled {
+		t.Error("versioning did not take effect")
+	}
+	if attrs.MetaGeneration != 2 {
+		t.Errorf("MetaGeneration = %d after a patch, want 2", attrs.MetaGeneration)
+	}
+
+	// It has to survive a re-read, not just come back from the patch.
+	reread, err := b.Attrs(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reread.VersioningEnabled {
+		t.Error("versioning was not persisted")
+	}
+
+	// And it has to actually change behaviour: an overwrite now keeps the old
+	// generation instead of discarding it.
+	w := b.Object("obj").NewWriter(ctx)
+	w.Write([]byte("one"))
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	firstGen := w.Attrs().Generation
+
+	w2 := b.Object("obj").NewWriter(ctx)
+	w2.Write([]byte("two"))
+	if err := w2.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := b.Object("obj").Generation(firstGen).Attrs(ctx); err != nil {
+		t.Errorf("the previous generation is gone despite versioning: %v", err)
+	}
+}
+
+// TestCopyAndCompose covers the object-to-object operations. The client's
+// Copier uses rewriteTo, and ComposerFrom uses compose.
+func TestCopyAndCompose(t *testing.T) {
+	c, ctx := client(t)
+	b := bucket(t, c, ctx, "copying")
+
+	put := func(t *testing.T, name, content string) {
+		t.Helper()
+		w := b.Object(name).NewWriter(ctx)
+		w.Write([]byte(content))
+		if err := w.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	read := func(t *testing.T, name string) string {
+		t.Helper()
+		r, err := b.Object(name).NewReader(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer r.Close()
+		out, _ := io.ReadAll(r)
+		return string(out)
+	}
+
+	t.Run("copy", func(t *testing.T) {
+		put(t, "source.txt", "original content")
+
+		attrs, err := b.Object("dest.txt").CopierFrom(b.Object("source.txt")).Run(ctx)
+		if err != nil {
+			t.Fatalf("copy: %v", err)
+		}
+		if attrs.Name != "dest.txt" || attrs.Size != 16 {
+			t.Errorf("attrs = %+v", attrs)
+		}
+		if got := read(t, "dest.txt"); got != "original content" {
+			t.Errorf("copied content = %q", got)
+		}
+		// The source is untouched.
+		if got := read(t, "source.txt"); got != "original content" {
+			t.Errorf("source content = %q", got)
+		}
+	})
+
+	t.Run("copy carries metadata across", func(t *testing.T) {
+		w := b.Object("tagged.txt").NewWriter(ctx)
+		w.ContentType = "text/plain"
+		w.Metadata = map[string]string{"team": "infra"}
+		w.Write([]byte("x"))
+		if err := w.Close(); err != nil {
+			t.Fatal(err)
+		}
+
+		attrs, err := b.Object("tagged-copy.txt").CopierFrom(b.Object("tagged.txt")).Run(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if attrs.ContentType != "text/plain" || attrs.Metadata["team"] != "infra" {
+			t.Errorf("copy lost its metadata: %+v", attrs)
+		}
+	})
+
+	t.Run("copy into another bucket", func(t *testing.T) {
+		other := bucket(t, c, ctx, "copying-dest")
+		put(t, "cross.txt", "across buckets")
+
+		if _, err := other.Object("arrived.txt").CopierFrom(b.Object("cross.txt")).Run(ctx); err != nil {
+			t.Fatalf("cross-bucket copy: %v", err)
+		}
+		r, err := other.Object("arrived.txt").NewReader(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer r.Close()
+		got, _ := io.ReadAll(r)
+		if string(got) != "across buckets" {
+			t.Errorf("content = %q", got)
+		}
+	})
+
+	t.Run("copy a missing object is 404", func(t *testing.T) {
+		_, err := b.Object("x").CopierFrom(b.Object("absent")).Run(ctx)
+		if got := statusOf(t, err); got != 404 {
+			t.Errorf("status = %d, want 404", got)
+		}
+	})
+
+	t.Run("compose", func(t *testing.T) {
+		put(t, "part-a", "hello ")
+		put(t, "part-b", "composed ")
+		put(t, "part-c", "world")
+
+		attrs, err := b.Object("whole.txt").ComposerFrom(
+			b.Object("part-a"), b.Object("part-b"), b.Object("part-c"),
+		).Run(ctx)
+		if err != nil {
+			t.Fatalf("compose: %v", err)
+		}
+		if attrs.Size != 20 {
+			t.Errorf("Size = %d, want 20", attrs.Size)
+		}
+		if got := read(t, "whole.txt"); got != "hello composed world" {
+			t.Errorf("composed content = %q", got)
+		}
+	})
+
+	t.Run("compose a missing part is 404", func(t *testing.T) {
+		_, err := b.Object("bad.txt").ComposerFrom(b.Object("part-a"), b.Object("absent")).Run(ctx)
+		if got := statusOf(t, err); got != 404 {
+			t.Errorf("status = %d, want 404", got)
+		}
+	})
+}
+
+// TestCopyIsMetadataOnly is the property content addressing buys: copying does
+// not duplicate the bytes, so a copy of a large object is as cheap as a small
+// one.
+func TestCopyIsMetadataOnly(t *testing.T) {
+	if testing.Short() {
+		t.Skip("uploads tens of megabytes")
+	}
+
+	c, ctx := client(t)
+	b := bucket(t, c, ctx, "cheap-copy")
+
+	const size = 32 << 20
+	w := b.Object("big.bin").NewWriter(ctx)
+	w.ChunkSize = 0
+	if _, err := io.Copy(w, source(size)); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	runtime.GC()
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+
+	if _, err := b.Object("big-copy.bin").CopierFrom(b.Object("big.bin")).Run(ctx); err != nil {
+		t.Fatal(err)
+	}
+	runtime.GC()
+	runtime.ReadMemStats(&after)
+
+	churn := int64(after.TotalAlloc) - int64(before.TotalAlloc)
+	t.Logf("copying %d MiB allocated %d KiB in total", size>>20, churn>>10)
+	if churn > 1<<20 {
+		t.Errorf("copying %d bytes allocated %d; a copy should not move the content", size, churn)
 	}
 }

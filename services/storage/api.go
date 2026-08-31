@@ -61,6 +61,11 @@ func NewAPI(svc *Service) *API {
 	// JSON API, so without it every read fails.
 	a.router.Handle(http.MethodGet, "/{bucket}/{object}", a.downloadMedia)
 	a.router.Handle(http.MethodHead, "/{bucket}/{object}", a.downloadMedia)
+
+	// The write half of the same surface, which is what a signed upload or
+	// delete URL points at.
+	a.router.Handle(http.MethodPut, "/{bucket}/{object}", a.uploadSigned)
+	a.router.Handle(http.MethodDelete, "/{bucket}/{object}", a.deleteSigned)
 	return a
 }
 
