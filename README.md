@@ -23,18 +23,57 @@ export CLOUDRIG_ENDPOINT=http://localhost:4599
 
 ---
 
+## Guides
+
+Each one is a sequence you can paste, in order, against a running emulator.
+
+| | |
+|---|---|
+| [Run a function](#run-a-function) | Deploy a Node or Go function and call it |
+| [Use it from gcloud](#use-it-from-gcloud) | The same function through real `gcloud` |
+| [Cloud Storage](#cloud-storage) | Buckets and objects, via `gcloud storage` or HTTP |
+| [Terraform](#terraform) | `terraform apply` against the emulator |
+| [Pub/Sub](#pubsub) | Topics, subscriptions, publish and receive |
+| [Upload a file, run a function](#upload-a-file-run-a-function) | A storage trigger, end to end |
+| [Run a function on a Pub/Sub message](#run-a-function-on-a-pubsub-message) | A topic trigger, end to end |
+| [Watch an unacknowledged message come back](#watch-an-unacknowledged-message-come-back) | Ack deadlines and redelivery |
+| [Use in a Go test](#use-in-a-go-test) | In-process, one isolated emulator per test |
+
+## Reference
+
+| | |
+|---|---|
+| [Commands](#commands) | Every subcommand and flag |
+| [Test](#test) | Running cloudrig's own suite |
+| [What works](#what-works) | Supported surface, and what is missing |
+| [Troubleshooting](#troubleshooting) | When something does not start |
+
+---
+
 ## Run a function
+
+**1. Deploy it.** The Node sample needs its dependencies once,
+`(cd testdata/node-hello && npm i)`:
 
 ```sh
 ./cloudrig fn deploy hello \
   --source ./testdata/node-hello \
   --entry-point handler \
   --project my-project
+```
 
+**2. Call it,** over HTTP or through the CLI:
+
+```sh
 curl "localhost:4599/us-central1-my-project/hello?name=Monir"
 # Hello, Monir!
 
 ./cloudrig fn invoke hello --project my-project --data '{"name":"Monir"}'
+```
+
+**3. Watch what it printed.** `-f` follows:
+
+```sh
 ./cloudrig fn logs hello -f
 ```
 
@@ -44,20 +83,20 @@ Go needs no flags at all when the source is a module:
 ./cloudrig fn deploy greet --source ./testdata/go-hello
 ```
 
-The Node sample needs its dependencies once: `(cd testdata/node-hello && npm i)`.
-
 ---
 
 ## Use it from gcloud
+
+**1. Point gcloud at the emulator.** `cloudrig-env.sh` exports the four
+endpoint overrides gcloud needs and disables credentials.
+`CLOUDSDK_CORE_PROJECT` must match the `--project` you deployed with:
 
 ```sh
 export CLOUDSDK_CORE_PROJECT=my-project
 . ./cloudrig-env.sh
 ```
 
-`cloudrig-env.sh` exports the four endpoint overrides gcloud needs and disables
-credentials. `CLOUDSDK_CORE_PROJECT` must match the `--project` you deployed
-with.
+**2. Use it as you would the real thing:**
 
 ```sh
 gcloud functions call hello --region us-central1 --data '{"name":"Monir"}'
@@ -90,12 +129,16 @@ enclosing `go.mod` does not travel with it.
 
 ## Cloud Storage
 
-With `gcloud storage`:
+**1. Point gcloud at the emulator:**
 
 ```sh
 export CLOUDSDK_CORE_PROJECT=my-project
 . ./cloudrig-env.sh
+```
 
+**2. Create a bucket and move objects around:**
+
+```sh
 gcloud storage buckets create gs://my-bucket --project my-project
 gcloud storage cp ./report.csv gs://my-bucket/report.csv
 gcloud storage ls gs://my-bucket
@@ -104,7 +147,7 @@ gcloud storage cp gs://my-bucket/report.csv gs://my-bucket/copy.csv
 gcloud storage rm gs://my-bucket/report.csv
 ```
 
-Or over HTTP:
+**Or do the same over HTTP,** with no gcloud at all:
 
 ```sh
 curl -X POST "localhost:4599/storage/v1/b?project=my-project" \
@@ -142,6 +185,8 @@ Payload bytes never enter the heap: 2 GiB moves for about 1 MiB of allocation.
 
 ## Terraform
 
+**1. Apply the example stack:**
+
 ```sh
 cd examples/terraform
 terraform init
@@ -155,13 +200,15 @@ Outputs:
 object_url = "http://localhost:4599/storage/v1/b/tf-bucket/o/hello.txt?alt=media"
 ```
 
+**2. Read back what it made, confirm the plan is clean, then tear it down:**
+
 ```sh
 curl "$(terraform output -raw object_url)"    # from terraform
 terraform plan                                 # no changes
 terraform destroy -auto-approve
 ```
 
-Two lines in the provider block do it:
+Two lines in the provider block point Terraform at the emulator:
 
 ```hcl
 provider "google" {
@@ -181,13 +228,16 @@ Works: `google_storage_bucket`, `google_storage_bucket_object`,
 
 ## Pub/Sub
 
-gRPC, on the same port as everything else. Point the client at it with the
-same environment variable the Google emulator uses, and existing code needs no
-change at all:
+gRPC, on the same port as everything else.
+
+**1. Point the client at it** with the same environment variable the Google
+emulator uses. Existing code needs no change at all:
 
 ```sh
 export PUBSUB_EMULATOR_HOST=localhost:4599   # host:port, no scheme
 ```
+
+**2. Use the client as you would against Google:**
 
 ```go
 c, _ := pubsub.NewClient(ctx, "cloudrig-local")
@@ -233,7 +283,8 @@ policies, snapshots, seek, schemas.
 
 ## Upload a file, run a function
 
-The function is an ordinary HTTP handler; the event arrives as the body.
+**1. Write the handler.** It is an ordinary HTTP handler; the event arrives as
+the body.
 
 `on-upload/go.mod`:
 
@@ -280,18 +331,26 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 }
 ```
 
-Deploy it against a bucket, then write an object:
+**2. Deploy it against a bucket:**
 
 ```sh
 ./cloudrig fn deploy on-upload --source ./on-upload --trigger-bucket uploads
+```
 
+**3. Create the bucket and write an object into it:**
+
+```sh
 curl -X POST "localhost:4599/storage/v1/b?project=demo" \
   -H 'Content-Type: application/json' -d '{"name":"uploads"}'
 
 curl -X POST \
   "localhost:4599/upload/storage/v1/b/uploads/o?uploadType=media&name=report.csv" \
   -H 'Content-Type: text/csv' --data 'a,b,c'
+```
 
+**4. The function ran.** Nothing polled and nothing was stubbed:
+
+```sh
 ./cloudrig fn logs on-upload
 # google.storage.object.finalize: gs://uploads/report.csv (5 bytes)
 ```
