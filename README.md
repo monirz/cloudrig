@@ -39,6 +39,7 @@ Each one is a sequence you can paste, in order, against a running emulator.
 | [Run a function on a Pub/Sub message](#run-a-function-on-a-pubsub-message) | A topic trigger, end to end |
 | [Watch an unacknowledged message come back](#watch-an-unacknowledged-message-come-back) | Ack deadlines and redelivery |
 | [Use in a Go test](#use-in-a-go-test) | In-process, one isolated emulator per test |
+| [Inject failures](#inject-failures) | Make a request fail, to test your error handling |
 
 ## Reference
 
@@ -502,6 +503,43 @@ Shutdown is registered with `t.Cleanup`. State is never persisted under
 
 ---
 
+## Inject failures
+
+A retry loop is only tested by a request that actually fails. Arm a rule and
+the emulator fails matching requests before they reach any service:
+
+```go
+emu := cloudrig.MustStart(t)
+
+emu.Faults().Add(faults.Rule{
+    Path:   "/storage/v1/*",   // trailing * is a prefix
+    Status: http.StatusTooManyRequests,
+    Count:  1,                 // fail once, then let the retry through
+})
+```
+
+`Count: 1` is the useful one: the first call fails, the client retries, the
+second succeeds — which proves the retry happened rather than assuming it.
+
+| Field | Meaning |
+|---|---|
+| `Method` | HTTP method, or empty for any |
+| `Path` | Escaped path; a trailing `*` makes it a prefix; empty matches all |
+| `Status` | HTTP status to answer with (default 503) |
+| `Code` | Canonical error code (default: derived from `Status`) |
+| `Message` | Error text |
+| `Latency` | Delay before responding, on the injected clock |
+| `Count` | How many requests to fail; zero means every one |
+
+`emu.Faults().Clear()` disarms everything. `/_emu/` is never faulted, so a
+match-everything rule cannot lock a test out of its own controls.
+
+`Latency` runs on the emulator's clock: under a `FakeClock` the request waits
+until the test advances time, so a slow backend is something to assert on
+rather than sit through.
+
+---
+
 ## Commands
 
 ```
@@ -560,6 +598,9 @@ versioning, signed URLs, persistence. Verified against the real Go client and
 **Pub/Sub** — topics, subscriptions, publish, streaming pull, ack and nack,
 deadline expiry, and `--trigger-topic` to run a function on a message. gRPC for
 the client libraries, REST for Terraform, one service behind both.
+
+**Fault injection** — `emu.Faults()` fails chosen requests, so error paths and
+retries can be tested.
 
 **Not yet** — the XML API, `gsutil`, ACLs, batch, Pub/Sub push subscriptions,
 gen2 functions, and every other GCP service. IAM policies are stored but never

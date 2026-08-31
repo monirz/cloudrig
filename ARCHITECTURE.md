@@ -47,6 +47,7 @@ process the same way they would reach Google.
 | `core/clock` | The only place permitted to read wall-clock time |
 | `core/gerr` | The canonical error: a code, an explicit HTTP status, a reason |
 | `core/events` | The in-process bus; the only path between services |
+| `core/faults` | Rules that fail chosen requests, matched before routing |
 | `core/resource` | GCP resource names encoded as store keys |
 | `core/tmp` | One temp-directory root per process, so a crash leaves one thing |
 | `store` | Versioned compare-and-swap KV, in memory or persisted |

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/monirz/cloudrig/core/clock"
+	"github.com/monirz/cloudrig/core/faults"
 	"github.com/monirz/cloudrig/core/gerr"
 )
 
@@ -41,6 +42,9 @@ type Config struct {
 
 	// GRPC handles requests on the gRPC branch. Nil answers them with 501.
 	GRPC http.Handler
+
+	// Faults fails requests on purpose. Nil fails nothing.
+	Faults *faults.Set
 }
 
 // FunctionHost serves deployed functions and their admin API.
@@ -75,6 +79,7 @@ type Handler struct {
 	fallback http.Handler
 	reset    func(context.Context, string) error
 	grpc     http.Handler
+	faults   *faults.Set
 }
 
 // New builds the front door. Routes register here so the endpoint set is
@@ -101,6 +106,7 @@ func New(cfg Config) *Handler {
 		mounts:   cfg.Mounts,
 		fallback: cfg.Fallback,
 		grpc:     cfg.GRPC,
+		faults:   cfg.Faults,
 	}
 	h.rest.Handle(http.MethodGet, "/_emu/health", h.health)
 	if cfg.Reset != nil {
@@ -127,6 +133,17 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	path := r.URL.EscapedPath()
+
+	// Before any routing: a fault stands in for whatever would have answered,
+	// so a rule can fail a path no service claims as readily as one it does.
+	// The admin API is exempt, or a broad rule would lock out its own switch.
+	if h.faults != nil && !strings.HasPrefix(path, adminPrefix) {
+		if rule, ok := h.faults.Match(r.Method, path); ok {
+			h.inject(w, r, rule)
+			return
+		}
+	}
+
 	if h.fns != nil && strings.HasPrefix(path, functionAdminPath) {
 		h.fns.Admin().ServeHTTP(w, r)
 		return
@@ -193,4 +210,34 @@ func (h *Handler) serveGRPC(w http.ResponseWriter, r *http.Request) {
 	}
 	gerr.WriteJSON(w, gerr.NewUnimplemented(
 		"gRPC "+r.URL.EscapedPath()+": no gRPC services are registered"))
+}
+
+// adminPrefix is the emulator's own control surface, which faults never touch.
+const adminPrefix = "/_emu/"
+
+// inject answers a request with a fault instead of routing it.
+//
+// The latency runs on the injected clock: under a FakeClock the request waits
+// until a test advances time, which is what makes a slow backend something a
+// test can assert on rather than sit through.
+func (h *Handler) inject(w http.ResponseWriter, r *http.Request, rule faults.Rule) {
+	if rule.Latency > 0 && !h.sleep(r, rule.Latency) {
+		return // the client gave up first
+	}
+	gerr.WriteJSON(w, rule.Err())
+}
+
+// sleep waits on the clock, reporting whether it elapsed rather than the
+// request being cancelled.
+func (h *Handler) sleep(r *http.Request, d time.Duration) bool {
+	done := make(chan struct{})
+	timer := h.clk.AfterFunc(d, func() { close(done) })
+
+	select {
+	case <-done:
+		return true
+	case <-r.Context().Done():
+		timer.Stop()
+		return false
+	}
 }

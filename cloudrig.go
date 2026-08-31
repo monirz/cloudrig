@@ -25,6 +25,7 @@ import (
 	"cloud.google.com/go/pubsub/v2/apiv1/pubsubpb"
 	"github.com/monirz/cloudrig/core/clock"
 	"github.com/monirz/cloudrig/core/events"
+	"github.com/monirz/cloudrig/core/faults"
 	"github.com/monirz/cloudrig/core/tmp"
 	"github.com/monirz/cloudrig/functions"
 	"google.golang.org/grpc"
@@ -77,6 +78,7 @@ type Options struct {
 
 // Emulator is a running instance.
 type Emulator struct {
+	faults   *faults.Set
 	clk      clock.Clock
 	addr     string
 	shutdown func(context.Context) error
@@ -107,6 +109,7 @@ func Start(ctx context.Context, o Options) (*Emulator, error) {
 
 	// One bus for the whole emulator: it is the only path between services.
 	bus := events.New()
+	flt := faults.New()
 
 	reg, err := newRegistry(ctx, clk, bus, o)
 	if err != nil {
@@ -126,7 +129,7 @@ func Start(ctx context.Context, o Options) (*Emulator, error) {
 	}
 
 	psvc := pubsub.New(stack.kvStore, clk, bus)
-	handler, closeAPIs := newHandler(clk, o, reg, stack.svc, psvc, newGRPC(psvc))
+	handler, closeAPIs := newHandler(clk, o, reg, stack.svc, psvc, newGRPC(psvc), flt)
 	srv := &http.Server{
 		Handler:   handler,
 		Protocols: transport.Protocols(), // HTTP/1.1 and h2c on one port
@@ -137,6 +140,7 @@ func Start(ctx context.Context, o Options) (*Emulator, error) {
 
 	return &Emulator{
 		clk:     clk,
+		faults:  flt,
 		addr:    dialable(ln.Addr().String()),
 		fns:     reg,
 		storage: stack.svc,
@@ -231,6 +235,7 @@ func MustStart(t testing.TB, opts ...Options) *Emulator {
 
 	tmp.SweepOnce()
 	bus := events.New()
+	flt := faults.New()
 
 	reg, err := newRegistry(context.Background(), o.Clock, bus, o)
 	if err != nil {
@@ -246,7 +251,7 @@ func MustStart(t testing.TB, opts ...Options) *Emulator {
 	t.Cleanup(stack.close)
 
 	psvc := pubsub.New(stack.kvStore, o.Clock, bus)
-	handler, closeAPIs := newHandler(o.Clock, o, reg, stack.svc, psvc, newGRPC(psvc))
+	handler, closeAPIs := newHandler(o.Clock, o, reg, stack.svc, psvc, newGRPC(psvc), flt)
 	t.Cleanup(closeAPIs)
 
 	srv := httptest.NewUnstartedServer(handler)
@@ -256,6 +261,7 @@ func MustStart(t testing.TB, opts ...Options) *Emulator {
 
 	return &Emulator{
 		clk:     o.Clock,
+		faults:  flt,
 		addr:    srv.Listener.Addr().String(),
 		fns:     reg,
 		storage: stack.svc,
@@ -295,7 +301,7 @@ func routeV1(ps *pubsub.REST, fns http.Handler) http.Handler {
 
 // newHandler builds the request surface and returns what it must tear down:
 // the API objects own temporary directories, and nothing else can reach them.
-func newHandler(clk clock.Clock, o Options, reg *functions.Registry, gcs *storage.Service, psvc *pubsub.Service, grpcSrv http.Handler) (http.Handler, func()) {
+func newHandler(clk clock.Clock, o Options, reg *functions.Registry, gcs *storage.Service, psvc *pubsub.Service, grpcSrv http.Handler, flt *faults.Set) (http.Handler, func()) {
 	configured := o.Runner
 	if configured == "" {
 		configured = "auto"
@@ -342,6 +348,7 @@ func newHandler(clk clock.Clock, o Options, reg *functions.Registry, gcs *storag
 		Functions: reg,
 		Mounts:    mounts,
 		GRPC:      grpcSrv,
+		Faults:    flt,
 		Reset: func(ctx context.Context, project string) error {
 			if gcs == nil {
 				return nil
@@ -379,6 +386,13 @@ func (e *Emulator) SyncEvents() {
 // Functions is the registry backing this emulator, so a test can deploy into a
 // running instance rather than only at Start.
 func (e *Emulator) Functions() *functions.Registry { return e.fns }
+
+// Faults is the live fault-injection rule set.
+//
+// A rule armed here fails matching requests before they reach any service, so
+// a test can prove its own retry and error handling rather than hoping the
+// path is exercised.
+func (e *Emulator) Faults() *faults.Set { return e.faults }
 
 // FunctionURL is where the named function is served, or "" if it is not
 // deployed. It returns the short form, valid for the default project and
