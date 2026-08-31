@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"fmt"
+	"github.com/monirz/cloudrig/core/logring"
 	"io"
 	"net/http"
 	"net/http/httputil"
@@ -24,7 +25,7 @@ type Instance struct {
 	proxy    *httputil.ReverseProxy
 	cmd      *exec.Cmd
 	cleanup  func()
-	logs     *logRing
+	logs     *logring.Ring
 	stopped  sync.Once
 }
 
@@ -61,7 +62,7 @@ func Start(ctx context.Context, f Function, o Options) (*Instance, error) {
 
 	// One buffer serves both purposes: it is the function's log, and the tail
 	// of it explains a child that dies before it ever listens.
-	logs := newLogRing(defaultLogLines)
+	logs := logring.New(logring.DefaultLines)
 	cmd := sp.cmd
 	cmd.Env = append(cmd.Environ(), o.Env...)
 	cmd.Stderr = io.Writer(logs)
