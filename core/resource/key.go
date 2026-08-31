@@ -66,6 +66,15 @@ func BucketsPrefix(project string) string {
 	return "p/" + project + "/b/"
 }
 
+// IAM is the key holding a resource's IAM policy. An empty object means the
+// bucket's own policy.
+func IAM(project, bucket, object string) string {
+	if object == "" {
+		return Bucket(project, bucket) + "/iam"
+	}
+	return Bucket(project, bucket) + "/iam/o/" + object
+}
+
 // Live is the key of the pointer to an object's current generation.
 //
 //	p/{project}/b/{bucket}/live/{name}

@@ -794,3 +794,34 @@ func TestCopyIsMetadataOnly(t *testing.T) {
 		t.Errorf("copying %d bytes allocated %d; a copy should not move the content", size, churn)
 	}
 }
+
+// TestIAMPolicy drives the policy endpoints through the real client's IAM
+// handle. Nothing is enforced — there is no identity here — but Terraform's
+// google_storage_bucket_iam_member does read-modify-write against these, and
+// an unrouted endpoint made it hang rather than fail.
+func TestIAMPolicy(t *testing.T) {
+	c, ctx := client(t)
+	b := bucket(t, c, ctx, "iam-bucket")
+
+	policy, err := b.IAM().Policy(ctx)
+	if err != nil {
+		t.Fatalf("reading an unset policy: %v", err)
+	}
+	if len(policy.Roles()) != 0 {
+		t.Errorf("a fresh bucket has roles: %v", policy.Roles())
+	}
+
+	policy.Add("allUsers", "roles/storage.objectViewer")
+	if err := b.IAM().SetPolicy(ctx, policy); err != nil {
+		t.Fatalf("setting a policy: %v", err)
+	}
+
+	got, err := b.IAM().Policy(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	members := got.Members("roles/storage.objectViewer")
+	if len(members) != 1 || members[0] != "allUsers" {
+		t.Errorf("members = %v, want [allUsers]", members)
+	}
+}

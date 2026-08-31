@@ -302,9 +302,13 @@ compose, listing with prefix and delimiter, every precondition the client sends,
 versioning, signed URLs, persistence. Verified against the real Go client and
 `gcloud storage`.
 
+Terraform works too — `google_storage_bucket`, `_object` and
+`_iam_member` — with `access_token = "cloudrig-local"` and
+`storage_custom_endpoint` in the provider block.
+
 **Not yet** — the XML API, `gsutil`, ACLs, batch, Pub/Sub, gen2 functions, and
-every other GCP service. gRPC returns 501. See
-[UNSUPPORTED.md](UNSUPPORTED.md).
+every other GCP service. IAM policies are stored but never enforced. gRPC
+returns 501. See [UNSUPPORTED.md](UNSUPPORTED.md).
 
 ---
 

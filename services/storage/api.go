@@ -42,6 +42,12 @@ func NewAPI(svc *Service) *API {
 	a.router.Handle(http.MethodDelete, "/storage/v1/b/{bucket}", a.deleteBucket)
 	a.router.Handle(http.MethodGet, "/storage/v1/b/{bucket}/storageLayout", a.storageLayout)
 
+	a.router.Handle(http.MethodGet, "/storage/v1/b/{bucket}/iam", a.getBucketIAM)
+	a.router.Handle(http.MethodPut, "/storage/v1/b/{bucket}/iam", a.setBucketIAM)
+	a.router.Handle(http.MethodGet, "/storage/v1/b/{bucket}/iam/testPermissions", a.testIAMPermissions)
+	a.router.Handle(http.MethodGet, "/storage/v1/b/{bucket}/o/{object}/iam", a.getObjectIAM)
+	a.router.Handle(http.MethodPut, "/storage/v1/b/{bucket}/o/{object}/iam", a.setObjectIAM)
+
 	a.router.Handle(http.MethodGet, "/storage/v1/b/{bucket}/o", a.listObjects)
 	a.router.Handle(http.MethodGet, "/storage/v1/b/{bucket}/o/{object}", a.getObject)
 	a.router.Handle(http.MethodGet, "/download/storage/v1/b/{bucket}/o/{object}", a.getObject)
