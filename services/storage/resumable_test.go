@@ -52,3 +52,53 @@ func TestParseContentRange(t *testing.T) {
 		})
 	}
 }
+
+// TestMultipartBoundary covers the quoting real clients use.
+//
+// gcloud sends boundary='===============123==' — single-quoted, and containing
+// "=", which is not a token character. RFC 2045 recognises neither, so
+// mime.ParseMediaType rejects the whole header and every gcloud upload failed
+// with 400 until the fallback existed.
+func TestMultipartBoundary(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name        string
+		contentType string
+		want        string
+	}{
+		{"the Go client, unquoted", `multipart/related; boundary=abc123`, "abc123"},
+		{"double quoted", `multipart/related; boundary="abc123"`, "abc123"},
+		{"gcloud, single quoted with equals", `multipart/related; boundary='===============5970272403554411136=='`,
+			"===============5970272403554411136=="},
+		{"a further parameter", `multipart/related; boundary='abc'; charset=utf-8`, "abc"},
+		{"spaces around the value", `multipart/related; boundary= abc `, "abc"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got, err := multipartBoundary(tc.contentType)
+			if err != nil {
+				t.Fatalf("rejected %q: %v", tc.contentType, err)
+			}
+			if got != tc.want {
+				t.Errorf("boundary = %q, want %q", got, tc.want)
+			}
+		})
+	}
+
+	for _, bad := range []string{
+		"multipart/related",
+		"multipart/related; boundary=",
+		"multipart/related; boundary=''",
+		"",
+	} {
+		t.Run("rejects "+bad, func(t *testing.T) {
+			t.Parallel()
+			if _, err := multipartBoundary(bad); err == nil {
+				t.Errorf("accepted %q", bad)
+			}
+		})
+	}
+}

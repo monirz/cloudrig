@@ -37,7 +37,10 @@ func NewAPI(svc *Service) *API {
 	a.router.Handle(http.MethodPost, "/storage/v1/b", a.createBucket)
 	a.router.Handle(http.MethodGet, "/storage/v1/b", a.listBuckets)
 	a.router.Handle(http.MethodGet, "/storage/v1/b/{bucket}", a.getBucket)
+	a.router.Handle(http.MethodPatch, "/storage/v1/b/{bucket}", a.patchBucket)
+	a.router.Handle(http.MethodPut, "/storage/v1/b/{bucket}", a.patchBucket)
 	a.router.Handle(http.MethodDelete, "/storage/v1/b/{bucket}", a.deleteBucket)
+	a.router.Handle(http.MethodGet, "/storage/v1/b/{bucket}/storageLayout", a.storageLayout)
 
 	a.router.Handle(http.MethodGet, "/storage/v1/b/{bucket}/o", a.listObjects)
 	a.router.Handle(http.MethodGet, "/storage/v1/b/{bucket}/o/{object}", a.getObject)
@@ -176,6 +179,24 @@ func (a *API) deleteBucket(w http.ResponseWriter, r *http.Request, p transport.P
 	}
 	w.WriteHeader(http.StatusNoContent)
 	return nil
+}
+
+// storageLayout answers the bucket layout gcloud storage reads before an
+// upload. Everything here is flat and unpartitioned.
+func (a *API) storageLayout(w http.ResponseWriter, r *http.Request, p transport.Params) error {
+	project, err := a.svc.ProjectOf(r.Context(), p["bucket"])
+	if err != nil {
+		return err
+	}
+	b, err := a.svc.GetBucket(r.Context(), project, p["bucket"])
+	if err != nil {
+		return err
+	}
+	return writeJSON(w, http.StatusOK, map[string]any{
+		"kind":     "storage#storageLayout",
+		"bucket":   b.Name,
+		"location": b.Location,
+	})
 }
 
 func (a *API) listObjects(w http.ResponseWriter, r *http.Request, p transport.Params) error {
@@ -516,17 +537,9 @@ func (a *API) upload(w http.ResponseWriter, r *http.Request, p transport.Params)
 // splitMultipart reads the metadata part and returns the media part unread, so
 // the payload streams into the blob tree rather than being buffered here.
 func splitMultipart(r *http.Request) (objectRequest, io.ReadCloser, error) {
-	_, params, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
+	boundary, err := multipartBoundary(r.Header.Get("Content-Type"))
 	if err != nil {
-		return objectRequest{}, nil, gerr.Wrap(err, gerr.InvalidArgument, "malformed multipart content type").
-			WithHTTPStatus(http.StatusBadRequest).
-			WithReason("invalid")
-	}
-	boundary, ok := params["boundary"]
-	if !ok {
-		return objectRequest{}, nil, gerr.New(gerr.InvalidArgument, "multipart upload has no boundary").
-			WithHTTPStatus(http.StatusBadRequest).
-			WithReason("invalid")
+		return objectRequest{}, nil, err
 	}
 
 	mr := multipart.NewReader(r.Body, boundary)
@@ -556,6 +569,49 @@ func splitMultipart(r *http.Request) (objectRequest, io.ReadCloser, error) {
 		meta.ContentType = mediaPart.Header.Get("Content-Type")
 	}
 	return meta, mediaPart, nil
+}
+
+// multipartBoundary reads the boundary from a content type.
+//
+// mime.ParseMediaType alone is not enough: gcloud sends
+//
+//	multipart/related; boundary='===============123=='
+//
+// where the value is wrapped in single quotes, which RFC 2045 does not treat as
+// quoting, and contains "=", which is not a token character. Go therefore
+// rejects the whole header. Real GCS accepts it, so the fallback pulls the
+// boundary out by hand and strips whatever quoting it finds.
+func multipartBoundary(contentType string) (string, error) {
+	raw := ""
+	if _, params, err := mime.ParseMediaType(contentType); err == nil {
+		// Single quotes are ordinary token characters to the parser, so a
+		// gcloud boundary comes back still wearing them.
+		raw = params["boundary"]
+	}
+	if raw == "" {
+		_, rest, found := strings.Cut(contentType, "boundary=")
+		if !found {
+			return "", badBoundary("multipart upload has no boundary", contentType)
+		}
+		// A parameter ends at the next semicolon; anything after is not ours.
+		if end := strings.IndexByte(rest, ';'); end >= 0 {
+			rest = rest[:end]
+		}
+		raw = rest
+	}
+
+	// One place strips the quoting, so both paths agree on what a boundary is.
+	boundary := strings.Trim(strings.TrimSpace(raw), `"'`)
+	if boundary == "" {
+		return "", badBoundary("multipart upload has an empty boundary", contentType)
+	}
+	return boundary, nil
+}
+
+func badBoundary(message, contentType string) error {
+	return gerr.Newf(gerr.InvalidArgument, "%s: %q", message, contentType).
+		WithHTTPStatus(http.StatusBadRequest).
+		WithReason("invalid")
 }
 
 // preconditionsOf reads the precondition query parameters.
