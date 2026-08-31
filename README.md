@@ -602,9 +602,23 @@ Documents, subcollections, `Set`, `Create`, `Update` with field masks,
 `not-in`, `array-contains`, `array-contains-any`, `AND`/`OR`, ordering, limit
 and offset. Values sort the way Firestore sorts them, across types.
 
-Not supported: transactions, `Listen` (real-time updates), cursors
-(`StartAt`/`EndAt`), collection-group queries, aggregations, and field
-transforms such as `Increment` and `ServerTimestamp`.
+`RunTransaction` works, and so do the field transforms real schemas rely on —
+`ServerTimestamp`, `Increment`, `ArrayUnion`, `ArrayRemove`:
+
+```go
+c.RunTransaction(ctx, func(ctx context.Context, tx *firestore.Transaction) error {
+    snap, _ := tx.Get(doc)
+    return tx.Set(doc, map[string]any{"balance": snap.Data()["balance"].(int64) - 30})
+})
+```
+
+A transaction here is serialised by the commit lock, not multi-version
+concurrency: writes apply as a unit, one commit at a time. Real Firestore also
+aborts a transaction whose reads were invalidated, and that abort never
+happens here — a test written to observe contention will not see it.
+
+Not supported: `Listen` (real-time updates), cursors (`StartAt`/`EndAt`),
+collection-group queries, and aggregations.
 
 ---
 

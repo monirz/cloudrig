@@ -19,15 +19,21 @@ func (s *Service) Commit(ctx context.Context, req *firestorepb.CommitRequest) (*
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	if err := s.closeTransaction(req.GetTransaction()); err != nil {
+		return nil, err
+	}
+
 	// Checked before anything is written, so a batch with one bad
 	// precondition leaves nothing behind.
 	staged := make([]*firestorepb.Document, 0, len(req.GetWrites()))
+	transformed := make([][]*firestorepb.Value, 0, len(req.GetWrites()))
 	for _, w := range req.GetWrites() {
-		doc, err := s.stage(ctx, w, now)
+		doc, results, err := s.stage(ctx, w, now)
 		if err != nil {
 			return nil, err
 		}
 		staged = append(staged, doc)
+		transformed = append(transformed, results)
 	}
 
 	results := make([]*firestorepb.WriteResult, 0, len(staged))
@@ -35,7 +41,7 @@ func (s *Service) Commit(ctx context.Context, req *firestorepb.CommitRequest) (*
 		if err := s.apply(ctx, w, staged[i]); err != nil {
 			return nil, err
 		}
-		result := &firestorepb.WriteResult{}
+		result := &firestorepb.WriteResult{TransformResults: transformed[i]}
 		if staged[i] != nil {
 			result.UpdateTime = staged[i].GetUpdateTime()
 		}
@@ -46,24 +52,24 @@ func (s *Service) Commit(ctx context.Context, req *firestorepb.CommitRequest) (*
 
 // stage resolves one write against current state, returning the document to
 // store, or nil for a delete. It writes nothing.
-func (s *Service) stage(ctx context.Context, w *firestorepb.Write, now *timestamppb.Timestamp) (*firestorepb.Document, error) {
+func (s *Service) stage(ctx context.Context, w *firestorepb.Write, now *timestamppb.Timestamp) (*firestorepb.Document, []*firestorepb.Value, error) {
 	name, err := targetOf(w)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if err := validDocName(name); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	current, _, exists, err := s.get(ctx, name)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if err := checkPrecondition(name, w.GetCurrentDocument(), current, exists); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if w.GetDelete() != "" {
-		return nil, nil
+		return nil, nil, nil
 	}
 
 	incoming := w.GetUpdate()
@@ -93,12 +99,28 @@ func (s *Service) stage(ctx context.Context, w *firestorepb.Write, now *timestam
 				delete(next.Fields, path)
 			}
 		}
-		return next, nil
+	} else {
+		for k, v := range incoming.GetFields() {
+			next.Fields[k] = proto.Clone(v).(*firestorepb.Value)
+		}
 	}
-	for k, v := range incoming.GetFields() {
-		next.Fields[k] = proto.Clone(v).(*firestorepb.Value)
+
+	// Transforms run last, over the document the write produced: an increment
+	// applies to what was stored, not to what the caller last read.
+	results, err := applyTransforms(next, transformsOf(w), now)
+	if err != nil {
+		return nil, nil, err
 	}
-	return next, nil
+	return next, results, nil
+}
+
+// transformsOf collects a write's transforms. The client attaches them to an
+// update as updateTransforms, and sends a bare transform as its own write.
+func transformsOf(w *firestorepb.Write) []*firestorepb.DocumentTransform_FieldTransform {
+	if t := w.GetTransform(); t != nil {
+		return t.GetFieldTransforms()
+	}
+	return w.GetUpdateTransforms()
 }
 
 // apply writes what stage resolved.
@@ -139,8 +161,10 @@ func targetOf(w *firestorepb.Write) (string, error) {
 	if doc := w.GetUpdate(); doc != nil {
 		return doc.GetName(), nil
 	}
-	return "", status.Error(codes.Unimplemented,
-		"only document updates and deletes are supported; transforms are not")
+	if t := w.GetTransform(); t != nil {
+		return t.GetDocument(), nil
+	}
+	return "", status.Error(codes.InvalidArgument, "a write must name a document")
 }
 
 // checkPrecondition enforces the exists and update-time guards that make
@@ -178,12 +202,12 @@ func (s *Service) BatchWrite(ctx context.Context, req *firestorepb.BatchWriteReq
 	statuses := make([]*spb.Status, 0, len(req.GetWrites()))
 
 	for _, w := range req.GetWrites() {
-		doc, err := s.stage(ctx, w, now)
+		doc, transformed, err := s.stage(ctx, w, now)
 		if err == nil {
 			err = s.apply(ctx, w, doc)
 		}
 
-		result := &firestorepb.WriteResult{}
+		result := &firestorepb.WriteResult{TransformResults: transformed}
 		if err == nil && doc != nil {
 			result.UpdateTime = doc.GetUpdateTime()
 		}

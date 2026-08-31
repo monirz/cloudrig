@@ -125,3 +125,54 @@ func TestFieldOfWalksMaps(t *testing.T) {
 		t.Errorf("fieldOf(__name__) = %v, %v", v, ok)
 	}
 }
+
+// TestIncrementKeepsIntegersIntegral is the trap in Increment: adding an
+// integer to an integer must not quietly produce a double, because the client
+// decodes the field back into an int64.
+func TestIncrementKeepsIntegersIntegral(t *testing.T) {
+	t.Parallel()
+
+	got := addNumbers(num(5), num(3))
+	if !isInteger(got) || got.GetIntegerValue() != 8 {
+		t.Errorf("5 + 3 = %#v, want the integer 8", got.GetValueType())
+	}
+
+	// An absent field starts from zero and keeps the delta's type.
+	if got := addNumbers(nil, num(2)); !isInteger(got) || got.GetIntegerValue() != 2 {
+		t.Errorf("nil + 2 = %#v, want the integer 2", got.GetValueType())
+	}
+	// A double anywhere makes the result a double.
+	if got := addNumbers(num(1), dbl(0.5)); isInteger(got) || got.GetDoubleValue() != 1.5 {
+		t.Errorf("1 + 0.5 = %#v, want the double 1.5", got.GetValueType())
+	}
+}
+
+// TestArrayUnionIsIdempotent is why ArrayUnion exists rather than an append.
+func TestArrayUnionIsIdempotent(t *testing.T) {
+	t.Parallel()
+
+	current := arr(str("a"), str("b"))
+	once := appendMissing(current, []*firestorepb.Value{str("b"), str("c")})
+	twice := appendMissing(once, []*firestorepb.Value{str("b"), str("c")})
+
+	if len(once.GetArrayValue().GetValues()) != 3 {
+		t.Fatalf("union = %v, want three elements", once.GetArrayValue().GetValues())
+	}
+	if len(twice.GetArrayValue().GetValues()) != 3 {
+		t.Errorf("applying the same union twice changed the array")
+	}
+}
+
+// TestArrayTransformsOnAMissingField holds that a transform works on a field
+// nobody has written, which is how a set is built from nothing.
+func TestArrayTransformsOnAMissingField(t *testing.T) {
+	t.Parallel()
+
+	got := appendMissing(nil, []*firestorepb.Value{str("first")})
+	if len(got.GetArrayValue().GetValues()) != 1 {
+		t.Errorf("union on an absent field = %v", got)
+	}
+	if got := removeAll(nil, []*firestorepb.Value{str("x")}); len(got.GetArrayValue().GetValues()) != 0 {
+		t.Errorf("remove on an absent field = %v", got)
+	}
+}

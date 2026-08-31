@@ -29,11 +29,15 @@ type Service struct {
 	// mu serialises a commit, which must apply as a unit: a batch that half
 	// applies is worse than one that fails.
 	mu sync.Mutex
+
+	// transactions holds open handles. They carry no state of their own: a
+	// transaction's writes arrive together at Commit.
+	transactions map[string]struct{}
 }
 
 // New wires a service.
 func New(kv store.Store, clk clock.Clock) *Service {
-	return &Service{kv: kv, clk: clk}
+	return &Service{kv: kv, clk: clk, transactions: map[string]struct{}{}}
 }
 
 // docKey addresses a document by its resource name, which already carries the

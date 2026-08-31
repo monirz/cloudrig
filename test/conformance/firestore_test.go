@@ -2,6 +2,7 @@ package conformance
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -397,4 +398,176 @@ func equal(a, b []string) bool {
 		}
 	}
 	return true
+}
+
+// TestFirestoreServerTimestamp is the transform real schemas use most: the
+// value comes from the server, not the caller.
+func TestFirestoreServerTimestamp(t *testing.T) {
+	c, ctx := fsClient(t)
+
+	doc := c.Collection("events").Doc("e1")
+	if _, err := doc.Set(ctx, map[string]any{
+		"name": "created",
+		"at":   firestore.ServerTimestamp,
+	}); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+
+	snap, err := doc.Get(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	at, ok := snap.Data()["at"].(time.Time)
+	if !ok {
+		t.Fatalf("at = %#v, want a time", snap.Data()["at"])
+	}
+	if at.IsZero() {
+		t.Error("the server timestamp is zero")
+	}
+}
+
+// TestFirestoreIncrement covers the transform that exists so a counter does
+// not need a read first.
+func TestFirestoreIncrement(t *testing.T) {
+	c, ctx := fsClient(t)
+
+	doc := c.Collection("counters").Doc("hits")
+
+	// On a field nobody has written yet, an increment starts from zero.
+	if _, err := doc.Set(ctx, map[string]any{"n": firestore.Increment(5)}); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+	if _, err := doc.Update(ctx, []firestore.Update{
+		{Path: "n", Value: firestore.Increment(3)},
+	}); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+
+	snap, _ := doc.Get(ctx)
+	if got := snap.Data()["n"]; got != int64(8) {
+		t.Errorf("n = %#v, want 8 as an integer", got)
+	}
+}
+
+// TestFirestoreArrayUnionAndRemove holds that ArrayUnion is idempotent, which
+// is the whole reason to use it over a read-modify-write.
+func TestFirestoreArrayUnionAndRemove(t *testing.T) {
+	c, ctx := fsClient(t)
+
+	doc := c.Collection("sets").Doc("tags")
+	if _, err := doc.Set(ctx, map[string]any{"tags": []string{"a", "b"}}); err != nil {
+		t.Fatal(err)
+	}
+
+	// "b" is already there and must not be added twice.
+	if _, err := doc.Update(ctx, []firestore.Update{
+		{Path: "tags", Value: firestore.ArrayUnion("b", "c")},
+	}); err != nil {
+		t.Fatalf("ArrayUnion: %v", err)
+	}
+	snap, _ := doc.Get(ctx)
+	if got := snap.Data()["tags"]; !equalAny(got, []any{"a", "b", "c"}) {
+		t.Errorf("after union: %#v", got)
+	}
+
+	if _, err := doc.Update(ctx, []firestore.Update{
+		{Path: "tags", Value: firestore.ArrayRemove("a", "missing")},
+	}); err != nil {
+		t.Fatalf("ArrayRemove: %v", err)
+	}
+	snap, _ = doc.Get(ctx)
+	if got := snap.Data()["tags"]; !equalAny(got, []any{"b", "c"}) {
+		t.Errorf("after remove: %#v", got)
+	}
+}
+
+func equalAny(got any, want []any) bool {
+	list, ok := got.([]any)
+	if !ok || len(list) != len(want) {
+		return false
+	}
+	for i := range want {
+		if list[i] != want[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// TestFirestoreTransaction covers the read-then-write body RunTransaction
+// exists for: the write depends on what the read found.
+func TestFirestoreTransaction(t *testing.T) {
+	c, ctx := fsClient(t)
+
+	doc := c.Collection("accounts").Doc("a1")
+	if _, err := doc.Set(ctx, map[string]any{"balance": int64(100)}); err != nil {
+		t.Fatal(err)
+	}
+
+	err := c.RunTransaction(ctx, func(ctx context.Context, tx *firestore.Transaction) error {
+		snap, err := tx.Get(doc)
+		if err != nil {
+			return err
+		}
+		balance := snap.Data()["balance"].(int64)
+		return tx.Set(doc, map[string]any{"balance": balance - 30})
+	})
+	if err != nil {
+		t.Fatalf("RunTransaction: %v", err)
+	}
+
+	snap, _ := doc.Get(ctx)
+	if got := snap.Data()["balance"]; got != int64(70) {
+		t.Errorf("balance = %v, want 70", got)
+	}
+}
+
+// TestFirestoreTransactionRollback holds that a body returning an error writes
+// nothing.
+func TestFirestoreTransactionRollback(t *testing.T) {
+	c, ctx := fsClient(t)
+
+	doc := c.Collection("accounts").Doc("a2")
+	if _, err := doc.Set(ctx, map[string]any{"balance": int64(100)}); err != nil {
+		t.Fatal(err)
+	}
+
+	wanted := errors.New("not enough")
+	err := c.RunTransaction(ctx, func(ctx context.Context, tx *firestore.Transaction) error {
+		if err := tx.Set(doc, map[string]any{"balance": int64(0)}); err != nil {
+			return err
+		}
+		return wanted
+	})
+	if !errors.Is(err, wanted) {
+		t.Fatalf("RunTransaction = %v, want the body's error", err)
+	}
+
+	snap, _ := doc.Get(ctx)
+	if got := snap.Data()["balance"]; got != int64(100) {
+		t.Errorf("balance = %v, want the abandoned transaction to have written nothing", got)
+	}
+}
+
+// TestFirestoreTransactionQuery covers a query inside a transaction, which is
+// how a body decides what to write.
+func TestFirestoreTransactionQuery(t *testing.T) {
+	c, ctx := fsClient(t)
+	col := seedQuery(t, c, ctx)
+
+	var found int
+	err := c.RunTransaction(ctx, func(ctx context.Context, tx *firestore.Transaction) error {
+		docs, err := tx.Documents(col.Where("role", "==", "eng")).GetAll()
+		if err != nil {
+			return err
+		}
+		found = len(docs)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("RunTransaction: %v", err)
+	}
+	if found != 3 {
+		t.Errorf("the query saw %d documents, want 3", found)
+	}
 }
