@@ -181,34 +181,23 @@ Works: `google_storage_bucket`, `google_storage_bucket_object`,
 
 ## Pub/Sub
 
-gRPC, on the same port as everything else:
-
-Point the client at it with the same environment variable the Google emulator
-uses, and existing code needs no change at all:
+gRPC, on the same port as everything else. Point the client at it with the
+same environment variable the Google emulator uses, and existing code needs no
+change at all:
 
 ```sh
 export PUBSUB_EMULATOR_HOST=localhost:4599   # host:port, no scheme
 ```
 
 ```go
-c, _ := pubsub.NewClient(ctx, "test-project")
-```
-
-In a test, where the port is chosen for you, pass the options instead:
-
-```go
-c, _ := pubsub.NewClient(ctx, "test-project",
-    option.WithEndpoint(emu.Endpoint()),
-    option.WithoutAuthentication(),
-    option.WithGRPCDialOption(grpc.WithTransportCredentials(insecure.NewCredentials())),
-)
+c, _ := pubsub.NewClient(ctx, "cloudrig-local")
 
 c.TopicAdminClient.CreateTopic(ctx, &pubsubpb.Topic{
-    Name: "projects/test-project/topics/orders",
+    Name: "projects/cloudrig-local/topics/orders",
 })
 c.SubscriptionAdminClient.CreateSubscription(ctx, &pubsubpb.Subscription{
-    Name:  "projects/test-project/subscriptions/worker",
-    Topic: "projects/test-project/topics/orders",
+    Name:  "projects/cloudrig-local/subscriptions/worker",
+    Topic: "projects/cloudrig-local/topics/orders",
 })
 
 c.Publisher(topic).Publish(ctx, &pubsub.Message{Data: []byte("order-42")})
@@ -219,13 +208,28 @@ c.Subscriber(sub).Receive(ctx, func(_ context.Context, m *pubsub.Message) {
 })
 ```
 
+In a Go test the port is chosen for you, so pass it as options instead of
+setting the variable:
+
+```go
+c, _ := pubsub.NewClient(ctx, "test-project",
+    option.WithEndpoint(emu.Endpoint()),
+    option.WithoutAuthentication(),
+    option.WithGRPCDialOption(grpc.WithTransportCredentials(insecure.NewCredentials())),
+)
+```
+
 Topics, subscriptions, publish, streaming pull, ack and nack. Each
 subscription gets its own copy of a message. A message that is nacked, or
 whose ack deadline passes, is redelivered. A published message can also run a
-function — see below.
+function.
+
+`examples/pubsub` is a runnable client for the two scenarios below.
 
 Not supported: push subscriptions, ordering keys, dead-letter topics, retry
 policies, snapshots, seek, schemas.
+
+---
 
 ## Upload a file, run a function
 
@@ -299,55 +303,96 @@ curl -X POST \
 
 ## Run a function on a Pub/Sub message
 
-The same thing, on the other trigger. A handler reads the message out of the
-same gen1 envelope, with the payload base64-encoded the way the wire carries
-it:
+Verified end to end; `examples/pubsub` is the publishing client.
 
-```go
+**1. A handler.** It reads the gen1 envelope, with the payload base64-encoded
+the way the wire carries it:
+
+```sh
+mkdir -p /tmp/on-message && cd /tmp/on-message
+printf 'module example.com/onmessage\n\ngo 1.25\n' > go.mod
+cat > on-message.go <<'EOF'
+package onmessage
+
+import (
+	"encoding/base64"
+	"encoding/json"
+	"fmt"
+	"net/http"
+)
+
+type event struct {
+	Data struct {
+		Data       string            `json:"data"`
+		Attributes map[string]string `json:"attributes"`
+	} `json:"data"`
+	Context struct {
+		Resource struct{ Name string } `json:"resource"`
+	} `json:"context"`
+}
+
 func Handler(w http.ResponseWriter, r *http.Request) {
-	var e struct {
-		Data struct {
-			Data       string            `json:"data"`
-			Attributes map[string]string `json:"attributes"`
-		} `json:"data"`
-		Context struct {
-			EventType string `json:"eventType"`
-		} `json:"context"`
-	}
+	var e event
 	json.NewDecoder(r.Body).Decode(&e)
-
 	body, _ := base64.StdEncoding.DecodeString(e.Data.Data)
-	fmt.Printf("%s: %s\n", e.Context.EventType, body)
+	fmt.Printf("GOT %s from %s (%v)\n", body, e.Context.Resource.Name, e.Data.Attributes)
 	w.WriteHeader(http.StatusNoContent)
 }
+EOF
 ```
 
-Deploy it against a topic, then publish:
+**2. Deploy it against a topic and publish.** The publisher never names
+cloudrig; `PUBSUB_EMULATOR_HOST` is its only configuration:
 
 ```sh
-./cloudrig fn deploy on-message --source ./on-message --trigger-topic orders
-```
+cd -                                        # back to the cloudrig checkout
+export PUBSUB_EMULATOR_HOST=localhost:4599  # host:port, no scheme
 
-Topics are gRPC-only, so publishing is a few lines of Go rather than a curl:
+./cloudrig fn deploy on-message --source /tmp/on-message \
+    --entry-point Handler --trigger-topic orders
 
-```go
-c.TopicAdminClient.CreateTopic(ctx, &pubsubpb.Topic{
-    Name: "projects/demo/topics/orders",
-})
-c.Publisher("projects/demo/topics/orders").Publish(ctx, &pubsub.Message{
-    Data: []byte("order-42"),
-})
-```
-
-```sh
+go run ./examples/pubsub -mode send -data "hello-from-pubsub"
 ./cloudrig fn logs on-message
-# google.pubsub.topic.publish: order-42
 ```
 
-The trigger fires on the publish itself, not through a subscription: the
-function sees every message on the topic, whether or not anything is
-subscribed. A subscription is still what a `Receive` loop pulls from, and the
-two do not consume each other.
+```
+trigger: google.pubsub.topic.publish on orders
+published 1 to projects/cloudrig-local/topics/orders
+GOT hello-from-pubsub from projects/cloudrig-local/topics/orders (map[source:pubsub-demo])
+```
+
+The function is compiled and run for real, in a subprocess, and the trigger
+fires on the publish itself rather than through a subscription: it sees every
+message on the topic whether or not anything is subscribed. A `Receive` loop
+still gets its own copy; the two do not consume each other.
+
+---
+
+## Watch an unacknowledged message come back
+
+The subscription's ack deadline is ten seconds. `-mode crash` takes a message
+and exits while still holding it, which is what a worker dying mid-handler
+looks like:
+
+```sh
+go run ./examples/pubsub -mode send    -topic dl -data "survives-a-crash"
+go run ./examples/pubsub -mode crash   -topic dl
+go run ./examples/pubsub -mode receive -topic dl -wait 20s
+```
+
+```
+15:36:24  id=2  survives-a-crash  <- taken, now crashing
+15:36:34  id=2  survives-a-crash
+```
+
+Ten seconds apart: the deadline lapsed and the message was redelivered.
+
+It has to be a crash, not a handler that politely returns without acking. The
+Go client waits forever for a message that is neither acked nor nacked, so a
+graceful exit hangs instead of demonstrating anything.
+
+In a Go test the deadline is on the injected clock, so redelivery happens when
+the test advances time rather than after a real ten seconds.
 
 ---
 

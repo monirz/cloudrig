@@ -17,6 +17,8 @@ import (
 
 	"cloud.google.com/go/pubsub/v2"
 	"cloud.google.com/go/pubsub/v2/apiv1/pubsubpb"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 func main() {
@@ -56,18 +58,24 @@ func main() {
 	}
 }
 
-// setup creates the topic and subscription, ignoring the AlreadyExists that a
-// second run produces.
+// setup creates the topic and subscription. A second run finds both already
+// there, which is the expected case and not worth a line of output.
 func setup(ctx context.Context, c *pubsub.Client, topic, sub string) {
-	if _, err := c.TopicAdminClient.CreateTopic(ctx, &pubsubpb.Topic{Name: topic}); err != nil {
-		log.Printf("topic: %v", err)
-	}
-	if _, err := c.SubscriptionAdminClient.CreateSubscription(ctx, &pubsubpb.Subscription{
+	_, err := c.TopicAdminClient.CreateTopic(ctx, &pubsubpb.Topic{Name: topic})
+	report("topic", err)
+
+	_, err = c.SubscriptionAdminClient.CreateSubscription(ctx, &pubsubpb.Subscription{
 		Name: sub, Topic: topic,
 		// Short, so an unacknowledged message comes back while you watch.
 		AckDeadlineSeconds: 10,
-	}); err != nil {
-		log.Printf("subscription: %v", err)
+	})
+	report("subscription", err)
+}
+
+// report prints anything except the AlreadyExists a repeated run produces.
+func report(what string, err error) {
+	if err != nil && status.Code(err) != codes.AlreadyExists {
+		log.Printf("%s: %v", what, err)
 	}
 }
 
