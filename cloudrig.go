@@ -25,6 +25,7 @@ import (
 	"cloud.google.com/go/pubsub/v2/apiv1/pubsubpb"
 	"github.com/monirz/cloudrig/core/clock"
 	"github.com/monirz/cloudrig/core/events"
+	"github.com/monirz/cloudrig/core/tmp"
 	"github.com/monirz/cloudrig/functions"
 	"google.golang.org/grpc"
 
@@ -100,6 +101,10 @@ func Start(ctx context.Context, o Options) (*Emulator, error) {
 		clk = clock.Real()
 	}
 
+	// Whatever a previous run left behind when it was killed. Only the roots
+	// of processes that are gone: a running emulator's are left alone.
+	tmp.SweepOnce()
+
 	// One bus for the whole emulator: it is the only path between services.
 	bus := events.New()
 
@@ -120,8 +125,9 @@ func Start(ctx context.Context, o Options) (*Emulator, error) {
 		return nil, fmt.Errorf("listen on %s: %w", addr, err)
 	}
 
+	handler, closeAPIs := newHandler(clk, o, reg, stack.svc, newGRPC(stack.kvStore, clk, bus))
 	srv := &http.Server{
-		Handler:   newHandler(clk, o, reg, stack.svc, newGRPC(stack.kvStore, clk, bus)),
+		Handler:   handler,
 		Protocols: transport.Protocols(), // HTTP/1.1 and h2c on one port
 	}
 	go func() {
@@ -138,6 +144,7 @@ func Start(ctx context.Context, o Options) (*Emulator, error) {
 			err := srv.Shutdown(ctx)
 			reg.StopAll()
 			stack.close()
+			closeAPIs()
 			return err
 		},
 	}, nil
@@ -221,6 +228,7 @@ func MustStart(t testing.TB, opts ...Options) *Emulator {
 		t.Fatalf("cloudrig: MustStart binds its own port; Options.Addr must be empty, got %q", o.Addr)
 	}
 
+	tmp.SweepOnce()
 	bus := events.New()
 
 	reg, err := newRegistry(context.Background(), o.Clock, bus, o)
@@ -236,7 +244,10 @@ func MustStart(t testing.TB, opts ...Options) *Emulator {
 	}
 	t.Cleanup(stack.close)
 
-	srv := httptest.NewUnstartedServer(newHandler(o.Clock, o, reg, stack.svc, newGRPC(stack.kvStore, o.Clock, bus)))
+	handler, closeAPIs := newHandler(o.Clock, o, reg, stack.svc, newGRPC(stack.kvStore, o.Clock, bus))
+	t.Cleanup(closeAPIs)
+
+	srv := httptest.NewUnstartedServer(handler)
 	srv.Config.Protocols = transport.Protocols()
 	srv.Start()
 	t.Cleanup(srv.Close)
@@ -251,6 +262,7 @@ func MustStart(t testing.TB, opts ...Options) *Emulator {
 			srv.Close()
 			reg.StopAll()
 			stack.close()
+			closeAPIs()
 			return nil
 		},
 	}
@@ -268,7 +280,9 @@ func newGRPC(kv store.Store, clk clock.Clock, bus *events.Bus) *grpc.Server {
 	return srv
 }
 
-func newHandler(clk clock.Clock, o Options, reg *functions.Registry, gcs *storage.Service, grpcSrv http.Handler) http.Handler {
+// newHandler builds the request surface and returns what it must tear down:
+// the API objects own temporary directories, and nothing else can reach them.
+func newHandler(clk clock.Clock, o Options, reg *functions.Registry, gcs *storage.Service, grpcSrv http.Handler) (http.Handler, func()) {
 	configured := o.Runner
 	if configured == "" {
 		configured = "auto"
@@ -289,15 +303,19 @@ func newHandler(clk clock.Clock, o Options, reg *functions.Registry, gcs *storag
 	for _, prefix := range cloudfunctions.Prefixes {
 		mounts[prefix] = api
 	}
+	closers := []io.Closer{api}
+
 	var gcsAPI http.Handler
 	if gcs != nil {
-		gcsAPI = storage.NewAPI(gcs)
+		storageAPI := storage.NewAPI(gcs)
+		gcsAPI = storageAPI
+		closers = append(closers, storageAPI)
 		for _, prefix := range storage.Prefixes {
-			mounts[prefix] = gcsAPI
+			mounts[prefix] = storageAPI
 		}
 	}
 
-	return transport.New(transport.Config{
+	h := transport.New(transport.Config{
 		Clock:    clk,
 		Version:  o.Version,
 		Fallback: gcsAPI,
@@ -313,6 +331,12 @@ func newHandler(clk clock.Clock, o Options, reg *functions.Registry, gcs *storag
 			return gcs.Reset(ctx, project)
 		},
 	})
+
+	return h, func() {
+		for _, c := range closers {
+			_ = c.Close()
+		}
+	}
 }
 
 // Reset clears emulator state. An empty project clears everything.

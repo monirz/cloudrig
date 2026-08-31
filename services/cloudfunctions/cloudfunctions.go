@@ -19,6 +19,8 @@ import (
 	"github.com/monirz/cloudrig/core/gerr"
 	"github.com/monirz/cloudrig/functions"
 	"github.com/monirz/cloudrig/transport"
+
+	"github.com/monirz/cloudrig/core/tmp"
 )
 
 // Prefixes are the path prefixes this service claims.
@@ -52,7 +54,7 @@ func New(reg *functions.Registry, clk clock.Clock, events io.Writer) *Service {
 	if uploads, err := newUploadStore(); err == nil {
 		s.uploads = uploads
 	}
-	if dir, err := os.MkdirTemp("", "cloudrig-source-"); err == nil {
+	if dir, err := tmp.Dir("source"); err == nil {
 		s.sources = dir
 	}
 
@@ -87,6 +89,19 @@ func New(reg *functions.Registry, clk clock.Clock, events io.Writer) *Service {
 	s.router.Handle(http.MethodGet, "/v1/operations/{operation}", s.getOperation)
 	s.router.Handle(http.MethodGet, "/v2/projects/{project}/locations/{location}/runtimes", s.listRuntimes)
 	return s
+}
+
+// Close removes the staging directories the service made. Without it they
+// outlive the emulator: nothing else knows where they are.
+func (s *Service) Close() error {
+	if s.uploads != nil {
+		s.uploads.cleanup()
+	}
+	if s.sources != "" {
+		_ = os.RemoveAll(s.sources)
+		s.sources = ""
+	}
+	return nil
 }
 
 func (s *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) { s.router.ServeHTTP(w, r) }

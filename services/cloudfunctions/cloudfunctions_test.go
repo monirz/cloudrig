@@ -40,7 +40,10 @@ func serve(t *testing.T, fns ...functions.Function) *httptest.Server {
 		}
 	}
 
-	srv := httptest.NewServer(cloudfunctions.New(reg, clock.NewFake(epoch), nil))
+	api := cloudfunctions.New(reg, clock.NewFake(epoch), nil)
+	t.Cleanup(func() { _ = api.Close() })
+
+	srv := httptest.NewServer(api)
 	t.Cleanup(srv.Close)
 	return srv
 }

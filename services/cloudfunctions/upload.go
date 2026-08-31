@@ -11,6 +11,8 @@ import (
 
 	"github.com/monirz/cloudrig/core/gerr"
 	"github.com/monirz/cloudrig/transport"
+
+	"github.com/monirz/cloudrig/core/tmp"
 )
 
 // UploadPath is where generateUploadUrl points a client.
@@ -29,7 +31,7 @@ type uploadStore struct {
 }
 
 func newUploadStore() (*uploadStore, error) {
-	dir, err := os.MkdirTemp("", "cloudrig-upload-")
+	dir, err := tmp.Dir("upload")
 	if err != nil {
 		return nil, err
 	}

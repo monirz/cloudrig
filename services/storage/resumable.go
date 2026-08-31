@@ -13,6 +13,8 @@ import (
 
 	"github.com/monirz/cloudrig/core/gerr"
 	"github.com/monirz/cloudrig/transport"
+
+	"github.com/monirz/cloudrig/core/tmp"
 )
 
 // A resumable upload arrives in chunks against a session the client opens
@@ -42,7 +44,7 @@ type sessions struct {
 }
 
 func newSessions() (*sessions, error) {
-	dir, err := os.MkdirTemp("", "cloudrig-resumable-")
+	dir, err := tmp.Dir("resumable")
 	if err != nil {
 		return nil, err
 	}

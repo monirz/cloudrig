@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/monirz/cloudrig"
+	"github.com/monirz/cloudrig/core/tmp"
 )
 
 // version is stamped at build time:
@@ -79,5 +80,9 @@ func run(args []string, env lookupEnv, stdout, stderr *os.File) error {
 	if err := emu.Shutdown(shutdownCtx); err != nil {
 		return fmt.Errorf("shutdown: %w", err)
 	}
+
+	// The server owns its process, so it can take the whole root with it.
+	// A test binary cannot: its emulators share one process.
+	_ = tmp.RemoveRoot()
 	return nil
 }

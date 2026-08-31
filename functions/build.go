@@ -11,6 +11,8 @@ import (
 	"path/filepath"
 	"strings"
 	"text/template"
+
+	"github.com/monirz/cloudrig/core/tmp"
 )
 
 // shimMarker is printed by the generated main once it is listening. The parent
@@ -115,7 +117,7 @@ func build(ctx context.Context, f Function) (bin string, cleanup func(), err err
 		return "", nil, fmt.Errorf("writing shim: %w", err)
 	}
 
-	outDir, err := os.MkdirTemp("", "cloudrig-fn-")
+	outDir, err := tmp.Dir("fn")
 	if err != nil {
 		removeGen()
 		return "", nil, fmt.Errorf("creating output dir: %w", err)

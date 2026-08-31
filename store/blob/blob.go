@@ -20,6 +20,8 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+
+	"github.com/monirz/cloudrig/core/tmp"
 )
 
 // ErrNotFound is returned for a digest the store does not hold.
@@ -61,7 +63,7 @@ func New(root string) (*Store, error) {
 
 // NewTemp opens a blob tree in a temporary directory, which Close removes.
 func NewTemp() (*Store, error) {
-	dir, err := os.MkdirTemp("", "cloudrig-blobs-")
+	dir, err := tmp.Dir("blobs")
 	if err != nil {
 		return nil, fmt.Errorf("blob: %w", err)
 	}
