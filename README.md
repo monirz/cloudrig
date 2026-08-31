@@ -140,6 +140,45 @@ Payload bytes never enter the heap: 2 GiB moves for about 1 MiB of allocation.
 
 ---
 
+## Terraform
+
+```sh
+cd examples/terraform
+terraform init
+terraform apply -auto-approve
+```
+
+```
+Apply complete! Resources: 3 added, 0 changed, 0 destroyed.
+
+Outputs:
+object_url = "http://localhost:4599/storage/v1/b/tf-bucket/o/hello.txt?alt=media"
+```
+
+```sh
+curl "$(terraform output -raw object_url)"    # from terraform
+terraform plan                                 # no changes
+terraform destroy -auto-approve
+```
+
+Two lines in the provider block do it:
+
+```hcl
+provider "google" {
+  access_token            = "cloudrig-local"
+  storage_custom_endpoint = "http://localhost:4599/storage/v1/"
+}
+```
+
+`access_token` skips credentials — real ones make the provider sign a JWT and
+exchange it at `oauth2.googleapis.com`. The emulator never looks at the token.
+Each service you use needs its own `*_custom_endpoint`.
+
+Works: `google_storage_bucket`, `google_storage_bucket_object`,
+`google_storage_bucket_iam_member`. IAM policies are stored but not enforced.
+
+---
+
 ## Upload a file, run a function
 
 The function is an ordinary HTTP handler; the event arrives as the body.
@@ -301,10 +340,6 @@ reload, logs.
 compose, listing with prefix and delimiter, every precondition the client sends,
 versioning, signed URLs, persistence. Verified against the real Go client and
 `gcloud storage`.
-
-Terraform works too — `google_storage_bucket`, `_object` and
-`_iam_member` — with `access_token = "cloudrig-local"` and
-`storage_custom_endpoint` in the provider block.
 
 **Not yet** — the XML API, `gsutil`, ACLs, batch, Pub/Sub, gen2 functions, and
 every other GCP service. IAM policies are stored but never enforced. gRPC

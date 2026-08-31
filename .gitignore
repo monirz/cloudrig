@@ -18,3 +18,8 @@ testdata/**/node_modules/
 
 # gcloud writes this into any directory it deploys from.
 .gcloudignore
+
+# Terraform working directory
+.terraform/
+.terraform.lock.hcl
+terraform.tfstate*
