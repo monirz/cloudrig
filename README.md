@@ -183,6 +183,19 @@ Works: `google_storage_bucket`, `google_storage_bucket_object`,
 
 gRPC, on the same port as everything else:
 
+Point the client at it with the same environment variable the Google emulator
+uses, and existing code needs no change at all:
+
+```sh
+export PUBSUB_EMULATOR_HOST=localhost:4599   # host:port, no scheme
+```
+
+```go
+c, _ := pubsub.NewClient(ctx, "test-project")
+```
+
+In a test, where the port is chosen for you, pass the options instead:
+
 ```go
 c, _ := pubsub.NewClient(ctx, "test-project",
     option.WithEndpoint(emu.Endpoint()),
@@ -207,8 +220,9 @@ c.Subscriber(sub).Receive(ctx, func(_ context.Context, m *pubsub.Message) {
 ```
 
 Topics, subscriptions, publish, streaming pull, ack and nack. Each
-subscription gets its own copy of a message, and a nacked message is
-redelivered. A published message can also run a function — see below.
+subscription gets its own copy of a message. A message that is nacked, or
+whose ack deadline passes, is redelivered. A published message can also run a
+function — see below.
 
 Not supported: push subscriptions, ordering keys, dead-letter topics, retry
 policies, snapshots, seek, schemas.

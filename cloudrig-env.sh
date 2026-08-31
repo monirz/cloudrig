@@ -13,4 +13,9 @@ export CLOUDSDK_API_ENDPOINT_OVERRIDES_SERVICEUSAGE="$CLOUDRIG_ENDPOINT/"
 export CLOUDSDK_API_ENDPOINT_OVERRIDES_CLOUDRESOURCEMANAGER="$CLOUDRIG_ENDPOINT/"
 export CLOUDRIG_ENDPOINT
 
+# The client libraries find Pub/Sub by this, not by an endpoint override: it is
+# host:port with no scheme, and setting it also turns off auth and TLS.
+export PUBSUB_EMULATOR_HOST="${PUBSUB_EMULATOR_HOST:-${CLOUDRIG_ENDPOINT#http://}}"
+
 echo "gcloud -> $CLOUDRIG_ENDPOINT (project $CLOUDSDK_CORE_PROJECT)"
+echo "pubsub -> $PUBSUB_EMULATOR_HOST"

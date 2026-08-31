@@ -374,3 +374,27 @@ func TestPublishToAnotherTopicDoesNotFire(t *testing.T) {
 		t.Errorf("a trigger scoped to one topic ran for another:\n%s", logged)
 	}
 }
+
+// TestPubSubEmulatorHost is the promise the env var makes: code written
+// against real Pub/Sub finds the emulator with no client options at all.
+//
+// Not parallel: it sets an environment variable, which is process-wide.
+func TestPubSubEmulatorHost(t *testing.T) {
+	emu := cloudrig.MustStart(t)
+	t.Setenv("PUBSUB_EMULATOR_HOST", emu.Endpoint())
+
+	ctx := context.Background()
+	c, err := pubsub.NewClient(ctx, "test-project")
+	if err != nil {
+		t.Fatalf("pubsub.NewClient: %v", err)
+	}
+	t.Cleanup(func() { _ = c.Close() })
+
+	const topic = "projects/test-project/topics/env"
+	if _, err := c.TopicAdminClient.CreateTopic(ctx, &pubsubpb.Topic{Name: topic}); err != nil {
+		t.Fatalf("CreateTopic: %v", err)
+	}
+	if _, err := c.Publisher(topic).Publish(ctx, &pubsub.Message{Data: []byte("x")}).Get(ctx); err != nil {
+		t.Fatalf("Publish: %v", err)
+	}
+}
