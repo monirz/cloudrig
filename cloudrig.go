@@ -125,7 +125,8 @@ func Start(ctx context.Context, o Options) (*Emulator, error) {
 		return nil, fmt.Errorf("listen on %s: %w", addr, err)
 	}
 
-	handler, closeAPIs := newHandler(clk, o, reg, stack.svc, newGRPC(stack.kvStore, clk, bus))
+	psvc := pubsub.New(stack.kvStore, clk, bus)
+	handler, closeAPIs := newHandler(clk, o, reg, stack.svc, psvc, newGRPC(psvc))
 	srv := &http.Server{
 		Handler:   handler,
 		Protocols: transport.Protocols(), // HTTP/1.1 and h2c on one port
@@ -244,7 +245,8 @@ func MustStart(t testing.TB, opts ...Options) *Emulator {
 	}
 	t.Cleanup(stack.close)
 
-	handler, closeAPIs := newHandler(o.Clock, o, reg, stack.svc, newGRPC(stack.kvStore, o.Clock, bus))
+	psvc := pubsub.New(stack.kvStore, o.Clock, bus)
+	handler, closeAPIs := newHandler(o.Clock, o, reg, stack.svc, psvc, newGRPC(psvc))
 	t.Cleanup(closeAPIs)
 
 	srv := httptest.NewUnstartedServer(handler)
@@ -268,21 +270,32 @@ func MustStart(t testing.TB, opts ...Options) *Emulator {
 	}
 }
 
-// newGRPC builds the gRPC server and registers every gRPC service on it.
+// newGRPC registers every gRPC service on a server.
 //
 // Requests reach it through the transport's h2c dispatch, so gRPC and REST
 // share the one port.
-func newGRPC(kv store.Store, clk clock.Clock, bus *events.Bus) *grpc.Server {
+func newGRPC(ps *pubsub.Service) *grpc.Server {
 	srv := grpc.NewServer()
-	ps := pubsub.New(kv, clk, bus)
 	pubsubpb.RegisterPublisherServer(srv, pubsub.NewPublisher(ps))
 	pubsubpb.RegisterSubscriberServer(srv, pubsub.NewSubscriber(ps))
 	return srv
 }
 
+// routeV1 sends a request to Pub/Sub when it has a route for it, and to Cloud
+// Functions otherwise. Both APIs are /v1/projects/{project}/...
+func routeV1(ps *pubsub.REST, fns http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if ps.Matches(r.Method, r.URL.EscapedPath()) {
+			ps.ServeHTTP(w, r)
+			return
+		}
+		fns.ServeHTTP(w, r)
+	})
+}
+
 // newHandler builds the request surface and returns what it must tear down:
 // the API objects own temporary directories, and nothing else can reach them.
-func newHandler(clk clock.Clock, o Options, reg *functions.Registry, gcs *storage.Service, grpcSrv http.Handler) (http.Handler, func()) {
+func newHandler(clk clock.Clock, o Options, reg *functions.Registry, gcs *storage.Service, psvc *pubsub.Service, grpcSrv http.Handler) (http.Handler, func()) {
 	configured := o.Runner
 	if configured == "" {
 		configured = "auto"
@@ -304,6 +317,11 @@ func newHandler(clk clock.Clock, o Options, reg *functions.Registry, gcs *storag
 		mounts[prefix] = api
 	}
 	closers := []io.Closer{api}
+
+	// Pub/Sub's JSON API lives under the same /v1/projects/{project}/ prefix
+	// as Cloud Functions, so a mount prefix cannot tell them apart: the one
+	// with a route for the request takes it.
+	mounts["/v1/"] = routeV1(pubsub.NewREST(psvc), api)
 
 	var gcsAPI http.Handler
 	if gcs != nil {

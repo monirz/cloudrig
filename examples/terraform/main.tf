@@ -13,6 +13,7 @@ provider "google" {
   access_token = "cloudrig-local"
 
   storage_custom_endpoint = "http://localhost:4599/storage/v1/"
+  pubsub_custom_endpoint  = "http://localhost:4599/v1/"
 }
 
 resource "google_storage_bucket" "demo" {
@@ -32,6 +33,17 @@ resource "google_storage_bucket_iam_member" "public_read" {
   bucket = google_storage_bucket.demo.name
   role   = "roles/storage.objectViewer"
   member = "allUsers"
+}
+
+resource "google_pubsub_topic" "orders" {
+  name   = "tf-orders"
+  labels = { env = "local" }
+}
+
+resource "google_pubsub_subscription" "worker" {
+  name                 = "tf-worker"
+  topic                = google_pubsub_topic.orders.id
+  ack_deadline_seconds = 30
 }
 
 output "object_url" {
