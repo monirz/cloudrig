@@ -40,6 +40,7 @@ Each one is a sequence you can paste, in order, against a running emulator.
 | [Watch an unacknowledged message come back](#watch-an-unacknowledged-message-come-back) | Ack deadlines and redelivery |
 | [Use in a Go test](#use-in-a-go-test) | In-process, one isolated emulator per test |
 | [Inject failures](#inject-failures) | Make a request fail, to test your error handling |
+| [Fork state](#fork-state) | Branch an emulator, cheaply, mid-test |
 
 ## Reference
 
@@ -540,6 +541,36 @@ rather than sit through.
 
 ---
 
+## Fork state
+
+Build a fixture once, then branch it per case:
+
+```go
+base := cloudrig.MustStart(t)
+seed(base)                     // buckets, objects, whatever the suite needs
+
+t.Run("deletes it", func(t *testing.T) {
+    emu := base.Fork(t)        // its own port, its own state
+    ...
+})
+t.Run("overwrites it", func(t *testing.T) {
+    emu := base.Fork(t)        // unaffected by the case above
+    ...
+})
+```
+
+A fork copies metadata and **hardlinks** object payloads, so branching a
+hundred gigabytes of objects costs the size of the metadata. Neither side can
+see the other's writes, and neither can delete the other's bytes.
+
+What travels is state, not processes: deployed functions, armed faults and the
+clock stay behind. The fork starts with none deployed and gets its own port,
+event bus and fault set.
+
+Only an in-memory emulator can fork; one started with `--data-dir` cannot.
+
+---
+
 ## Commands
 
 ```
@@ -601,6 +632,9 @@ the client libraries, REST for Terraform, one service behind both.
 
 **Fault injection** — `emu.Faults()` fails chosen requests, so error paths and
 retries can be tested.
+
+**State forking** — `emu.Fork(t)` branches an emulator, copying metadata and
+hardlinking payloads.
 
 **Not yet** — the XML API, `gsutil`, ACLs, batch, Pub/Sub push subscriptions,
 gen2 functions, and every other GCP service. IAM policies are stored but never

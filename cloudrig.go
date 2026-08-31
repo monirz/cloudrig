@@ -85,6 +85,12 @@ type Emulator struct {
 	fns      *functions.Registry
 	storage  *storage.Service
 	bus      *events.Bus
+
+	// Kept for Fork: the state to copy, the blobs to share, and the options
+	// the copy should be raised with.
+	kv    store.Store
+	blobs *blob.Store
+	opts  Options
 }
 
 // Start runs the emulator on a real listener; the caller owns shutdown. ctx
@@ -234,8 +240,23 @@ func MustStart(t testing.TB, opts ...Options) *Emulator {
 	}
 
 	tmp.SweepOnce()
+
+	// Never persisted: state surviving a test is a bug, not a feature.
+	stack, err := newStorage(o.Clock, events.New(), "")
+	if err != nil {
+		t.Fatalf("%v", err)
+	}
+	return serveForTest(t, o, stack)
+}
+
+// serveForTest raises one in-process emulator around a prepared store. It is
+// shared by MustStart and Fork, which differ only in where the store came from.
+func serveForTest(t testing.TB, o Options, stack storageStack) *Emulator {
+	t.Helper()
+
 	bus := events.New()
 	flt := faults.New()
+	stack.svc = storage.New(stack.kvStore, stack.blobs, o.Clock, bus)
 
 	reg, err := newRegistry(context.Background(), o.Clock, bus, o)
 	if err != nil {
@@ -243,11 +264,6 @@ func MustStart(t testing.TB, opts ...Options) *Emulator {
 	}
 	t.Cleanup(reg.StopAll)
 
-	// Never persisted: state surviving a test is a bug, not a feature.
-	stack, err := newStorage(o.Clock, bus, "")
-	if err != nil {
-		t.Fatalf("%v", err)
-	}
 	t.Cleanup(stack.close)
 
 	psvc := pubsub.New(stack.kvStore, o.Clock, bus)
@@ -266,6 +282,9 @@ func MustStart(t testing.TB, opts ...Options) *Emulator {
 		fns:     reg,
 		storage: stack.svc,
 		bus:     bus,
+		kv:      stack.kvStore,
+		blobs:   stack.blobs,
+		opts:    o,
 		shutdown: func(context.Context) error {
 			srv.Close()
 			reg.StopAll()
@@ -274,6 +293,35 @@ func MustStart(t testing.TB, opts ...Options) *Emulator {
 			return nil
 		},
 	}
+}
+
+// Fork returns a second emulator carrying a copy of this one's state.
+//
+// Metadata is copied; object payloads are shared, because they are
+// content-addressed and immutable — the same bytes under the same name. So a
+// fork of a hundred gigabytes of objects costs the size of the metadata.
+//
+// What is copied is state, not processes: deployed functions, armed faults and
+// the clock do not travel. The fork gets its own port, its own event bus and
+// its own fault set, and starts with no functions deployed.
+func (e *Emulator) Fork(t testing.TB) *Emulator {
+	t.Helper()
+
+	mem, ok := e.kv.(*store.Memory)
+	if !ok {
+		t.Fatal("cloudrig: only an in-memory emulator can fork; one started with a DataDir cannot")
+	}
+
+	copied := store.NewMemory()
+	copied.Restore(mem.Snapshot())
+
+	// Hardlinked, not shared: the parent releases a blob when its last
+	// reference goes, and a fork still pointing at it must not lose the bytes.
+	blobs, err := e.blobs.Fork()
+	if err != nil {
+		t.Fatalf("cloudrig: forking blobs: %v", err)
+	}
+	return serveForTest(t, e.opts, storageStack{kvStore: copied, blobs: blobs})
 }
 
 // newGRPC registers every gRPC service on a server.

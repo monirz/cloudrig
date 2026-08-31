@@ -18,6 +18,7 @@ import (
 	"hash"
 	"hash/crc32"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 
@@ -204,4 +205,51 @@ func (h hashes) ref(size int64) Ref {
 		CRC32C: base64.StdEncoding.EncodeToString(crcBytes[:]),
 		MD5:    base64.StdEncoding.EncodeToString(h.md5.Sum(nil)),
 	}
+}
+
+// Fork returns a new store holding the same content, in its own directory.
+//
+// The files are hardlinked, not copied: content here is immutable and
+// addressed by its own hash, so two trees can share the bytes on disk. What
+// they do not share is the right to delete — dropping the last reference in
+// one store removes only that store's link, leaving the other's intact. That
+// is the whole difficulty a shared tree has: a parent overwriting an object
+// would otherwise pull the content out from under a fork still pointing at it.
+func (s *Store) Fork() (*Store, error) {
+	dir, err := tmp.Dir("blobs")
+	if err != nil {
+		return nil, fmt.Errorf("blob: %w", err)
+	}
+	fork, err := New(dir)
+	if err != nil {
+		_ = os.RemoveAll(dir)
+		return nil, err
+	}
+	fork.owned = true
+
+	blobs := filepath.Join(s.root, "blobs")
+	err = filepath.WalkDir(blobs, func(path string, d fs.DirEntry, err error) error {
+		switch {
+		case err != nil:
+			return err
+		case d.IsDir():
+			return nil
+		}
+
+		rel, err := filepath.Rel(blobs, path)
+		if err != nil {
+			return err
+		}
+		target := filepath.Join(fork.root, "blobs", rel)
+		if err := os.MkdirAll(filepath.Dir(target), 0o750); err != nil {
+			return err
+		}
+		// A copy would defeat the point; the fork must cost metadata only.
+		return os.Link(path, target)
+	})
+	if err != nil && !os.IsNotExist(err) {
+		_ = fork.Close()
+		return nil, fmt.Errorf("blob: forking %s: %w", s.root, err)
+	}
+	return fork, nil
 }
