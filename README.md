@@ -51,6 +51,7 @@ Each one is a sequence you can paste, in order, against a running emulator.
 | [Test](#test) | Running cloudrig's own suite |
 | [What works](#what-works) | Supported surface, and what is missing |
 | [Troubleshooting](#troubleshooting) | When something does not start |
+| [License](#license) | MIT |
 
 ---
 
@@ -653,3 +654,9 @@ pkill -f 'cloudrig start'
 
 `cloudrig fn invoke` reporting "does not exist" usually means a project
 mismatch — the error names where the function actually is.
+
+---
+
+## License
+
+MIT. See [LICENSE](LICENSE).
