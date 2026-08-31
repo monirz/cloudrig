@@ -2,6 +2,7 @@ package pubsub
 
 import (
 	"io"
+	"time"
 
 	"cloud.google.com/go/pubsub/v2/apiv1/pubsubpb"
 	"google.golang.org/grpc/codes"
@@ -27,9 +28,11 @@ func (b *Subscriber) StreamingPull(stream pubsubpb.Subscriber_StreamingPullServe
 		return status.Error(codes.InvalidArgument, "the first StreamingPull request must name a subscription")
 	}
 	ctx := stream.Context()
-	if _, err := b.svc.getSubscription(ctx, name); err != nil {
+	sub, err := b.svc.getSubscription(ctx, name)
+	if err != nil {
 		return err
 	}
+	deadline := deadlineOf(sub)
 	b.handleAcks(name, first)
 
 	// Acks arrive on their own goroutine so a quiet subscription still
@@ -48,7 +51,7 @@ func (b *Subscriber) StreamingPull(stream pubsubpb.Subscriber_StreamingPullServe
 
 	wait := b.svc.waitCh(name)
 	for {
-		if messages := b.svc.take(name, streamBatch); len(messages) > 0 {
+		if messages := b.svc.take(name, streamBatch, deadline); len(messages) > 0 {
 			if err := stream.Send(&pubsubpb.StreamingPullResponse{ReceivedMessages: messages}); err != nil {
 				return err
 			}
@@ -76,19 +79,33 @@ func (b *Subscriber) handleAcks(subscription string, req *pubsubpb.StreamingPull
 	defer b.svc.mu.Unlock()
 
 	for _, id := range req.GetAckIds() {
-		delete(b.svc.outstanding[subscription], id)
+		if l, ok := b.svc.outstanding[subscription][id]; ok {
+			l.timer.Stop()
+			delete(b.svc.outstanding[subscription], id)
+		}
 	}
 
-	// A modify-deadline of zero is a nack: the message goes back to the front
-	// of the queue, since it is the oldest thing still waiting.
+	// A modify-deadline of zero is a nack; anything else restarts the lease,
+	// which is how the client keeps a message it is still working on.
 	for i, id := range req.GetModifyDeadlineAckIds() {
-		if i >= len(req.GetModifyDeadlineSeconds()) || req.GetModifyDeadlineSeconds()[i] != 0 {
+		if i >= len(req.GetModifyDeadlineSeconds()) {
 			continue
 		}
-		if msg, ok := b.svc.outstanding[subscription][id]; ok {
-			delete(b.svc.outstanding[subscription], id)
-			b.svc.backlog[subscription] = append([]*pubsubpb.PubsubMessage{msg}, b.svc.backlog[subscription]...)
-			b.svc.signal(subscription)
+		secs := req.GetModifyDeadlineSeconds()[i]
+		if secs == 0 {
+			b.svc.redeliver(subscription, id)
+			continue
 		}
+		l, ok := b.svc.outstanding[subscription][id]
+		if !ok {
+			continue
+		}
+		// A timer that has already fired cannot be stopped, and its message is
+		// back on the queue: extending it would lease a message twice.
+		if l.timer != nil && !l.timer.Stop() {
+			continue
+		}
+		l.timer = b.svc.clk.AfterFunc(time.Duration(secs)*time.Second,
+			func() { b.svc.expire(subscription, id) })
 	}
 }

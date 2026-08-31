@@ -6,6 +6,7 @@ import (
 	"errors"
 	"sort"
 	"strings"
+	"time"
 
 	"cloud.google.com/go/pubsub/v2/apiv1/pubsubpb"
 	"github.com/monirz/cloudrig/store"
@@ -96,7 +97,8 @@ func (b *Subscriber) DeleteSubscription(ctx context.Context, req *pubsubpb.Delet
 // is how a client waits for messages anyway.
 func (b *Subscriber) Pull(ctx context.Context, req *pubsubpb.PullRequest) (*pubsubpb.PullResponse, error) {
 	name := req.GetSubscription()
-	if _, err := b.svc.getSubscription(ctx, name); err != nil {
+	sub, err := b.svc.getSubscription(ctx, name)
+	if err != nil {
 		return nil, err
 	}
 
@@ -104,11 +106,21 @@ func (b *Subscriber) Pull(ctx context.Context, req *pubsubpb.PullRequest) (*pubs
 	if max <= 0 {
 		max = 1
 	}
-	return &pubsubpb.PullResponse{ReceivedMessages: b.svc.take(name, max)}, nil
+	return &pubsubpb.PullResponse{ReceivedMessages: b.svc.take(name, max, deadlineOf(sub))}, nil
 }
 
-// take moves up to n messages from the backlog into outstanding.
-func (s *Service) take(subscription string, n int) []*pubsubpb.ReceivedMessage {
+// deadlineOf is how long a subscriber holds a message before it is redelivered.
+func deadlineOf(sub *pubsubpb.Subscription) time.Duration {
+	secs := sub.GetAckDeadlineSeconds()
+	if secs <= 0 {
+		secs = 10
+	}
+	return time.Duration(secs) * time.Second
+}
+
+// take moves up to n messages from the backlog into outstanding, each leased
+// for deadline.
+func (s *Service) take(subscription string, n int, deadline time.Duration) []*pubsubpb.ReceivedMessage {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -123,7 +135,7 @@ func (s *Service) take(subscription string, n int) []*pubsubpb.ReceivedMessage {
 	s.backlog[subscription] = rest
 
 	if s.outstanding[subscription] == nil {
-		s.outstanding[subscription] = map[string]*pubsubpb.PubsubMessage{}
+		s.outstanding[subscription] = map[string]*lease{}
 	}
 
 	out := make([]*pubsubpb.ReceivedMessage, 0, len(taken))
@@ -131,7 +143,12 @@ func (s *Service) take(subscription string, n int) []*pubsubpb.ReceivedMessage {
 		// The ack id is the message id: an emulator has no reason to make
 		// them differ, and a readable ack id helps when a test prints one.
 		ackID := msg.GetMessageId()
-		s.outstanding[subscription][ackID] = msg
+		s.outstanding[subscription][ackID] = &lease{
+			msg: msg,
+			// Through the injected clock, so a test drives redelivery by
+			// advancing time rather than waiting out a deadline.
+			timer: s.clk.AfterFunc(deadline, func() { s.expire(subscription, ackID) }),
+		}
 		out = append(out, &pubsubpb.ReceivedMessage{AckId: ackID, Message: msg})
 	}
 	return out
@@ -146,34 +163,43 @@ func (b *Subscriber) Acknowledge(ctx context.Context, req *pubsubpb.AcknowledgeR
 
 	b.svc.mu.Lock()
 	for _, id := range req.GetAckIds() {
-		delete(b.svc.outstanding[name], id)
+		if l, ok := b.svc.outstanding[name][id]; ok {
+			l.timer.Stop()
+			delete(b.svc.outstanding[name], id)
+		}
 	}
 	b.svc.mu.Unlock()
 	return &emptypb.Empty{}, nil
 }
 
 // ModifyAckDeadline with a deadline of zero is a nack: the message goes back
-// on the queue for redelivery. Any other deadline is accepted and ignored,
-// since nothing here expires an outstanding message.
+// on the queue at once. Any other deadline restarts the lease, which is how a
+// subscriber still working on a message keeps it.
 func (b *Subscriber) ModifyAckDeadline(ctx context.Context, req *pubsubpb.ModifyAckDeadlineRequest) (*emptypb.Empty, error) {
 	name := req.GetSubscription()
 	if _, err := b.svc.getSubscription(ctx, name); err != nil {
 		return nil, err
 	}
-	if req.GetAckDeadlineSeconds() != 0 {
-		return &emptypb.Empty{}, nil
-	}
+	extend := time.Duration(req.GetAckDeadlineSeconds()) * time.Second
 
 	b.svc.mu.Lock()
+	defer b.svc.mu.Unlock()
+
 	for _, id := range req.GetAckIds() {
-		if msg, ok := b.svc.outstanding[name][id]; ok {
-			delete(b.svc.outstanding[name], id)
-			// Returned to the front: a nacked message is the oldest thing
-			// waiting, not the newest.
-			b.svc.backlog[name] = append([]*pubsubpb.PubsubMessage{msg}, b.svc.backlog[name]...)
-			b.svc.signal(name)
+		if extend == 0 {
+			b.svc.redeliver(name, id)
+			continue
 		}
+		l, ok := b.svc.outstanding[name][id]
+		if !ok {
+			continue
+		}
+		// A timer that has already fired cannot be stopped, and its message is
+		// back on the queue: extending it would lease a message twice.
+		if l.timer != nil && !l.timer.Stop() {
+			continue
+		}
+		l.timer = b.svc.clk.AfterFunc(extend, func() { b.svc.expire(name, id) })
 	}
-	b.svc.mu.Unlock()
 	return &emptypb.Empty{}, nil
 }

@@ -1,6 +1,7 @@
 package pubsub
 
 import (
+	"context"
 	"encoding/base64"
 	"reflect"
 	"strings"
@@ -75,7 +76,7 @@ func TestTakeMovesMessagesToOutstanding(t *testing.T) {
 		})
 	}
 
-	got := s.take(sub, 2)
+	got := s.take(sub, 2, time.Minute)
 	if len(got) != 2 || string(got[0].GetMessage().GetData()) != "a" {
 		t.Fatalf("take = %d messages, first %q", len(got), got[0].GetMessage().GetData())
 	}
@@ -88,10 +89,10 @@ func TestTakeMovesMessagesToOutstanding(t *testing.T) {
 		t.Errorf("outstanding = %d, want 2", len(s.outstanding[sub]))
 	}
 
-	if rest := s.take(sub, 10); len(rest) != 1 {
+	if rest := s.take(sub, 10, time.Minute); len(rest) != 1 {
 		t.Errorf("take of the remainder = %d, want 1", len(rest))
 	}
-	if empty := s.take(sub, 10); empty != nil {
+	if empty := s.take(sub, 10, time.Minute); empty != nil {
 		t.Errorf("take on an empty backlog = %v, want nil", empty)
 	}
 }
@@ -202,5 +203,122 @@ func TestSourceOfMatchesATopicTrigger(t *testing.T) {
 	}
 	if !strings.HasSuffix(src, "/orders") {
 		t.Errorf("a trigger on the bare name %q would not match %q", "orders", src)
+	}
+}
+
+// leased publishes one message and takes it, returning the fake clock so a
+// test can decide what the deadline does.
+func leased(t *testing.T, deadline time.Duration) (*Service, *clock.FakeClock, string) {
+	t.Helper()
+
+	clk := clock.NewFake(epoch)
+	s := New(store.NewMemory(), clk, nil)
+	const sub = "projects/p/subscriptions/s"
+	s.backlog[sub] = []*pubsubpb.PubsubMessage{{MessageId: "1", Data: []byte("a")}}
+
+	if got := s.take(sub, 1, deadline); len(got) != 1 {
+		t.Fatalf("take = %d messages, want 1", len(got))
+	}
+	return s, clk, sub
+}
+
+// TestDeadlineRedelivers is the case a subscriber that dies mid-handler
+// depends on: nothing acked, so the message must come back.
+func TestDeadlineRedelivers(t *testing.T) {
+	t.Parallel()
+
+	s, clk, sub := leased(t, 10*time.Second)
+
+	clk.Advance(9 * time.Second)
+	s.mu.Lock()
+	held := len(s.outstanding[sub])
+	s.mu.Unlock()
+	if held != 1 {
+		t.Errorf("the message was returned before its deadline: outstanding = %d", held)
+	}
+
+	clk.Advance(2 * time.Second)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.outstanding[sub]) != 0 {
+		t.Errorf("outstanding = %d after the deadline, want 0", len(s.outstanding[sub]))
+	}
+	if len(s.backlog[sub]) != 1 {
+		t.Fatalf("backlog = %d after the deadline, want the message back", len(s.backlog[sub]))
+	}
+	if got := string(s.backlog[sub][0].GetData()); got != "a" {
+		t.Errorf("redelivered %q, want a", got)
+	}
+}
+
+// TestAckStopsTheDeadline is the other half: an acknowledged message must not
+// reappear when its deadline would have passed.
+func TestAckStopsTheDeadline(t *testing.T) {
+	t.Parallel()
+
+	s, clk, sub := leased(t, 10*time.Second)
+
+	b := NewSubscriber(s)
+	subscribe(t, s, sub)
+	if _, err := b.Acknowledge(context.Background(), &pubsubpb.AcknowledgeRequest{
+		Subscription: sub, AckIds: []string{"1"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	clk.Advance(time.Minute)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.backlog[sub]) != 0 {
+		t.Errorf("an acknowledged message came back: backlog = %d", len(s.backlog[sub]))
+	}
+	if n := clk.Pending(); n != 0 {
+		t.Errorf("%d timers left pending after an ack", n)
+	}
+}
+
+// TestExtendPostponesRedelivery covers the keep-alive the client sends while a
+// handler is still running.
+func TestExtendPostponesRedelivery(t *testing.T) {
+	t.Parallel()
+
+	s, clk, sub := leased(t, 10*time.Second)
+
+	b := NewSubscriber(s)
+	subscribe(t, s, sub)
+	if _, err := b.ModifyAckDeadline(context.Background(), &pubsubpb.ModifyAckDeadlineRequest{
+		Subscription: sub, AckIds: []string{"1"}, AckDeadlineSeconds: 60,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	clk.Advance(30 * time.Second) // past the original deadline, inside the new one
+	s.mu.Lock()
+	held := len(s.outstanding[sub])
+	s.mu.Unlock()
+	if held != 1 {
+		t.Fatalf("the extension was ignored: outstanding = %d", held)
+	}
+
+	clk.Advance(40 * time.Second)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.backlog[sub]) != 1 {
+		t.Errorf("the extended deadline never expired: backlog = %d", len(s.backlog[sub]))
+	}
+}
+
+// subscribe writes the topic and subscription records the RPCs look up.
+func subscribe(t *testing.T, s *Service, name string) {
+	t.Helper()
+
+	const topic = "projects/p/topics/t"
+	if _, err := NewPublisher(s).CreateTopic(context.Background(),
+		&pubsubpb.Topic{Name: topic}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewSubscriber(s).CreateSubscription(context.Background(),
+		&pubsubpb.Subscription{Name: name, Topic: topic}); err != nil {
+		t.Fatal(err)
 	}
 }

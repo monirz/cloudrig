@@ -36,7 +36,7 @@ type Service struct {
 	backlog map[string][]*pubsubpb.PubsubMessage
 	// outstanding holds messages delivered but not yet acknowledged, so a nack
 	// or an expired deadline can return them.
-	outstanding map[string]map[string]*pubsubpb.PubsubMessage
+	outstanding map[string]map[string]*lease
 	// waiters wakes streaming pulls when a message arrives. A stream waits on
 	// a signal rather than polling, so nothing here needs a wall clock and a
 	// fake one cannot stall delivery.
@@ -51,9 +51,44 @@ func New(kv store.Store, clk clock.Clock, bus *events.Bus) *Service {
 		clk:         clk,
 		bus:         bus,
 		backlog:     map[string][]*pubsubpb.PubsubMessage{},
-		outstanding: map[string]map[string]*pubsubpb.PubsubMessage{},
+		outstanding: map[string]map[string]*lease{},
 		waiters:     map[string]chan struct{}{},
 	}
+}
+
+// lease is a delivered message and the timer that takes it back. A subscriber
+// that never acks must not hold a message forever: real Pub/Sub redelivers
+// once the deadline passes, and a test that relies on that would otherwise
+// pass here and fail in production.
+type lease struct {
+	msg   *pubsubpb.PubsubMessage
+	timer clock.Timer
+}
+
+// redeliver returns a leased message to the front of the queue. The caller
+// holds the lock.
+func (s *Service) redeliver(subscription, ackID string) {
+	l, ok := s.outstanding[subscription][ackID]
+	if !ok {
+		return
+	}
+	if l.timer != nil {
+		l.timer.Stop()
+	}
+	delete(s.outstanding[subscription], ackID)
+
+	// To the front: a returned message is the oldest thing waiting, not the
+	// newest.
+	s.backlog[subscription] = append([]*pubsubpb.PubsubMessage{l.msg}, s.backlog[subscription]...)
+	s.signal(subscription)
+}
+
+// expire is what a lapsed deadline runs. It re-checks under the lock, because
+// an ack may have arrived while the timer was firing.
+func (s *Service) expire(subscription, ackID string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.redeliver(subscription, ackID)
 }
 
 // Key layout. Topics and subscriptions are addressed by their resource names,
