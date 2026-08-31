@@ -38,6 +38,9 @@ type Config struct {
 
 	// Reset clears emulator state. An empty project clears everything.
 	Reset func(ctx context.Context, project string) error
+
+	// GRPC handles requests on the gRPC branch. Nil answers them with 501.
+	GRPC http.Handler
 }
 
 // FunctionHost serves deployed functions and their admin API.
@@ -71,6 +74,7 @@ type Handler struct {
 	mounts   map[string]http.Handler
 	fallback http.Handler
 	reset    func(context.Context, string) error
+	grpc     http.Handler
 }
 
 // New builds the front door. Routes register here so the endpoint set is
@@ -96,6 +100,7 @@ func New(cfg Config) *Handler {
 		fns:      cfg.Functions,
 		mounts:   cfg.Mounts,
 		fallback: cfg.Fallback,
+		grpc:     cfg.GRPC,
 	}
 	h.rest.Handle(http.MethodGet, "/_emu/health", h.health)
 	if cfg.Reset != nil {
@@ -178,9 +183,14 @@ func mustUnescape(p string) string {
 	return unescaped
 }
 
-// serveGRPC answers 501 until a service is registered. Not a placeholder: the
-// gRPC HTTP/2 spec maps 501 onto UNIMPLEMENTED, so real clients read it right.
+// serveGRPC hands the request to the gRPC server, or answers 501 when none is
+// registered. 501 is the honest answer rather than a placeholder: the gRPC
+// HTTP/2 spec maps it onto UNIMPLEMENTED, so a real client reads it right.
 func (h *Handler) serveGRPC(w http.ResponseWriter, r *http.Request) {
+	if h.grpc != nil {
+		h.grpc.ServeHTTP(w, r)
+		return
+	}
 	gerr.WriteJSON(w, gerr.NewUnimplemented(
 		"gRPC "+r.URL.EscapedPath()+": no gRPC services are registered"))
 }

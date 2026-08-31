@@ -22,10 +22,14 @@ import (
 	"path/filepath"
 	"testing"
 
+	"cloud.google.com/go/pubsub/v2/apiv1/pubsubpb"
 	"github.com/monirz/cloudrig/core/clock"
 	"github.com/monirz/cloudrig/core/events"
 	"github.com/monirz/cloudrig/functions"
+	"google.golang.org/grpc"
+
 	"github.com/monirz/cloudrig/services/cloudfunctions"
+	"github.com/monirz/cloudrig/services/pubsub"
 	"github.com/monirz/cloudrig/services/storage"
 	"github.com/monirz/cloudrig/store"
 	"github.com/monirz/cloudrig/store/blob"
@@ -117,7 +121,7 @@ func Start(ctx context.Context, o Options) (*Emulator, error) {
 	}
 
 	srv := &http.Server{
-		Handler:   newHandler(clk, o, reg, stack.svc),
+		Handler:   newHandler(clk, o, reg, stack.svc, newGRPC(stack.kvStore, clk, bus)),
 		Protocols: transport.Protocols(), // HTTP/1.1 and h2c on one port
 	}
 	go func() {
@@ -141,9 +145,10 @@ func Start(ctx context.Context, o Options) (*Emulator, error) {
 
 // storageStack is the Cloud Storage service and what it must tear down.
 type storageStack struct {
-	svc   *storage.Service
-	blobs *blob.Store
-	kv    io.Closer // non-nil only when persisting
+	svc     *storage.Service
+	blobs   *blob.Store
+	kv      io.Closer // non-nil only when persisting
+	kvStore store.Store
 }
 
 func (s storageStack) close() {
@@ -163,7 +168,8 @@ func newStorage(clk clock.Clock, bus *events.Bus, dataDir string) (storageStack,
 		if err != nil {
 			return storageStack{}, fmt.Errorf("cloudrig: %w", err)
 		}
-		return storageStack{svc: storage.New(store.NewMemory(), blobs, clk, bus), blobs: blobs}, nil
+		kv := store.NewMemory()
+		return storageStack{svc: storage.New(kv, blobs, clk, bus), blobs: blobs, kvStore: kv}, nil
 	}
 
 	blobs, err := blob.New(filepath.Join(dataDir, "storage"))
@@ -175,7 +181,7 @@ func newStorage(clk clock.Clock, bus *events.Bus, dataDir string) (storageStack,
 		_ = blobs.Close()
 		return storageStack{}, fmt.Errorf("cloudrig: %w", err)
 	}
-	return storageStack{svc: storage.New(kv, blobs, clk, bus), blobs: blobs, kv: kv}, nil
+	return storageStack{svc: storage.New(kv, blobs, clk, bus), blobs: blobs, kv: kv, kvStore: kv}, nil
 }
 
 // newRegistry deploys everything configured up front, tearing down whatever
@@ -230,7 +236,7 @@ func MustStart(t testing.TB, opts ...Options) *Emulator {
 	}
 	t.Cleanup(stack.close)
 
-	srv := httptest.NewUnstartedServer(newHandler(o.Clock, o, reg, stack.svc))
+	srv := httptest.NewUnstartedServer(newHandler(o.Clock, o, reg, stack.svc, newGRPC(stack.kvStore, o.Clock, bus)))
 	srv.Config.Protocols = transport.Protocols()
 	srv.Start()
 	t.Cleanup(srv.Close)
@@ -250,7 +256,19 @@ func MustStart(t testing.TB, opts ...Options) *Emulator {
 	}
 }
 
-func newHandler(clk clock.Clock, o Options, reg *functions.Registry, gcs *storage.Service) http.Handler {
+// newGRPC builds the gRPC server and registers every gRPC service on it.
+//
+// Requests reach it through the transport's h2c dispatch, so gRPC and REST
+// share the one port.
+func newGRPC(kv store.Store, clk clock.Clock, bus *events.Bus) *grpc.Server {
+	srv := grpc.NewServer()
+	ps := pubsub.New(kv, clk, bus)
+	pubsubpb.RegisterPublisherServer(srv, pubsub.NewPublisher(ps))
+	pubsubpb.RegisterSubscriberServer(srv, pubsub.NewSubscriber(ps))
+	return srv
+}
+
+func newHandler(clk clock.Clock, o Options, reg *functions.Registry, gcs *storage.Service, grpcSrv http.Handler) http.Handler {
 	configured := o.Runner
 	if configured == "" {
 		configured = "auto"
@@ -287,6 +305,7 @@ func newHandler(clk clock.Clock, o Options, reg *functions.Registry, gcs *storag
 		Runner:    transport.RunnerInfo{Configured: configured, Mode: mode},
 		Functions: reg,
 		Mounts:    mounts,
+		GRPC:      grpcSrv,
 		Reset: func(ctx context.Context, project string) error {
 			if gcs == nil {
 				return nil

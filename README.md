@@ -179,6 +179,40 @@ Works: `google_storage_bucket`, `google_storage_bucket_object`,
 
 ---
 
+## Pub/Sub
+
+gRPC, on the same port as everything else:
+
+```go
+c, _ := pubsub.NewClient(ctx, "test-project",
+    option.WithEndpoint(emu.Endpoint()),
+    option.WithoutAuthentication(),
+    option.WithGRPCDialOption(grpc.WithTransportCredentials(insecure.NewCredentials())),
+)
+
+c.TopicAdminClient.CreateTopic(ctx, &pubsubpb.Topic{
+    Name: "projects/test-project/topics/orders",
+})
+c.SubscriptionAdminClient.CreateSubscription(ctx, &pubsubpb.Subscription{
+    Name:  "projects/test-project/subscriptions/worker",
+    Topic: "projects/test-project/topics/orders",
+})
+
+c.Publisher(topic).Publish(ctx, &pubsub.Message{Data: []byte("order-42")})
+
+c.Subscriber(sub).Receive(ctx, func(_ context.Context, m *pubsub.Message) {
+    fmt.Println(string(m.Data))
+    m.Ack()
+})
+```
+
+Topics, subscriptions, publish, streaming pull, ack and nack. Each
+subscription gets its own copy of a message, and a nacked message is
+redelivered.
+
+Not supported: push subscriptions, ordering keys, dead-letter topics, retry
+policies, snapshots, seek, schemas.
+
 ## Upload a file, run a function
 
 The function is an ordinary HTTP handler; the event arrives as the body.
@@ -341,8 +375,11 @@ compose, listing with prefix and delimiter, every precondition the client sends,
 versioning, signed URLs, persistence. Verified against the real Go client and
 `gcloud storage`.
 
-**Not yet** — the XML API, `gsutil`, ACLs, batch, Pub/Sub, gen2 functions, and
-every other GCP service. IAM policies are stored but never enforced. gRPC
+**Pub/Sub** — topics, subscriptions, publish, streaming pull, ack and nack,
+over gRPC.
+
+**Not yet** — the XML API, `gsutil`, ACLs, batch, Pub/Sub push subscriptions,
+gen2 functions, and every other GCP service. IAM policies are stored but never enforced. gRPC
 returns 501. See [UNSUPPORTED.md](UNSUPPORTED.md).
 
 ---
