@@ -22,6 +22,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"cloud.google.com/go/firestore/apiv1/firestorepb"
 	"cloud.google.com/go/pubsub/v2/apiv1/pubsubpb"
 	"github.com/monirz/cloudrig/core/clock"
 	"github.com/monirz/cloudrig/core/events"
@@ -31,6 +32,7 @@ import (
 	"google.golang.org/grpc"
 
 	"github.com/monirz/cloudrig/services/cloudfunctions"
+	"github.com/monirz/cloudrig/services/firestore"
 	"github.com/monirz/cloudrig/services/pubsub"
 	"github.com/monirz/cloudrig/services/storage"
 	"github.com/monirz/cloudrig/store"
@@ -135,7 +137,8 @@ func Start(ctx context.Context, o Options) (*Emulator, error) {
 	}
 
 	psvc := pubsub.New(stack.kvStore, clk, bus)
-	handler, closeAPIs := newHandler(clk, o, reg, stack.svc, psvc, newGRPC(psvc), flt)
+	fsvc := firestore.New(stack.kvStore, clk)
+	handler, closeAPIs := newHandler(clk, o, reg, stack.svc, psvc, newGRPC(psvc, fsvc), flt)
 	srv := &http.Server{
 		Handler:   handler,
 		Protocols: transport.Protocols(), // HTTP/1.1 and h2c on one port
@@ -267,7 +270,8 @@ func serveForTest(t testing.TB, o Options, stack storageStack) *Emulator {
 	t.Cleanup(stack.close)
 
 	psvc := pubsub.New(stack.kvStore, o.Clock, bus)
-	handler, closeAPIs := newHandler(o.Clock, o, reg, stack.svc, psvc, newGRPC(psvc), flt)
+	fsvc := firestore.New(stack.kvStore, o.Clock)
+	handler, closeAPIs := newHandler(o.Clock, o, reg, stack.svc, psvc, newGRPC(psvc, fsvc), flt)
 	t.Cleanup(closeAPIs)
 
 	srv := httptest.NewUnstartedServer(handler)
@@ -328,10 +332,11 @@ func (e *Emulator) Fork(t testing.TB) *Emulator {
 //
 // Requests reach it through the transport's h2c dispatch, so gRPC and REST
 // share the one port.
-func newGRPC(ps *pubsub.Service) *grpc.Server {
+func newGRPC(ps *pubsub.Service, fs *firestore.Service) *grpc.Server {
 	srv := grpc.NewServer()
 	pubsubpb.RegisterPublisherServer(srv, pubsub.NewPublisher(ps))
 	pubsubpb.RegisterSubscriberServer(srv, pubsub.NewSubscriber(ps))
+	firestorepb.RegisterFirestoreServer(srv, fs)
 	return srv
 }
 

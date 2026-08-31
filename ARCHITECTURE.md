@@ -56,6 +56,7 @@ process the same way they would reach Google.
 | `services/cloudfunctions` | The Cloud Functions v1 REST API |
 | `services/storage` | Cloud Storage semantics: buckets, objects, generations |
 | `services/pubsub` | Pub/Sub over gRPC, plus the JSON API Terraform drives |
+| `services/firestore` | Firestore documents and queries, over gRPC |
 | `lint` | Build-time invariants enforced as tests |
 
 ---

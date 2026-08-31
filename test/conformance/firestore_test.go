@@ -1,0 +1,664 @@
+package conformance
+
+import (
+	"context"
+	"errors"
+	"testing"
+	"time"
+
+	"cloud.google.com/go/firestore"
+	"github.com/monirz/cloudrig"
+	"google.golang.org/api/option"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/status"
+)
+
+// fsClient points the real Firestore client at an in-process emulator.
+func fsClient(t *testing.T) (*firestore.Client, context.Context) {
+	t.Helper()
+	t.Parallel()
+
+	emu := cloudrig.MustStart(t)
+	ctx := context.Background()
+
+	c, err := firestore.NewClient(ctx, "test-project",
+		option.WithEndpoint(emu.Endpoint()),
+		option.WithoutAuthentication(),
+		option.WithGRPCDialOption(grpc.WithTransportCredentials(insecure.NewCredentials())),
+	)
+	if err != nil {
+		t.Fatalf("firestore.NewClient: %v", err)
+	}
+	t.Cleanup(func() { _ = c.Close() })
+	return c, ctx
+}
+
+type person struct {
+	Name  string    `firestore:"name"`
+	Age   int64     `firestore:"age"`
+	Tags  []string  `firestore:"tags"`
+	Since time.Time `firestore:"since"`
+}
+
+// TestFirestoreSetAndGet is the vertical slice: a document written by the real
+// client, read back through it, with the types intact.
+func TestFirestoreSetAndGet(t *testing.T) {
+	c, ctx := fsClient(t)
+
+	want := person{
+		Name:  "Ada",
+		Age:   36,
+		Tags:  []string{"maths", "engines"},
+		Since: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+	}
+	if _, err := c.Collection("people").Doc("ada").Set(ctx, want); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+
+	snap, err := c.Collection("people").Doc("ada").Get(ctx)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	var got person
+	if err := snap.DataTo(&got); err != nil {
+		t.Fatalf("DataTo: %v", err)
+	}
+
+	if got.Name != want.Name || got.Age != want.Age {
+		t.Errorf("got %+v, want %+v", got, want)
+	}
+	if len(got.Tags) != 2 || got.Tags[0] != "maths" {
+		t.Errorf("tags = %v", got.Tags)
+	}
+	if !got.Since.Equal(want.Since) {
+		t.Errorf("since = %v, want %v", got.Since, want.Since)
+	}
+	if !snap.Exists() {
+		t.Error("Exists() = false for a document just written")
+	}
+}
+
+// TestFirestoreMissingDocument pins the error the client turns a missing
+// document into, which is how application code tests for absence.
+func TestFirestoreMissingDocument(t *testing.T) {
+	c, ctx := fsClient(t)
+
+	_, err := c.Collection("people").Doc("nobody").Get(ctx)
+	if status.Code(err) != codes.NotFound {
+		t.Errorf("err = %v, want NotFound", err)
+	}
+}
+
+// TestFirestoreCreateIsExclusive covers the precondition that makes Create
+// different from Set.
+func TestFirestoreCreateIsExclusive(t *testing.T) {
+	c, ctx := fsClient(t)
+
+	doc := c.Collection("people").Doc("once")
+	if _, err := doc.Create(ctx, map[string]any{"n": 1}); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if _, err := doc.Create(ctx, map[string]any{"n": 2}); status.Code(err) != codes.AlreadyExists {
+		t.Errorf("second Create = %v, want AlreadyExists", err)
+	}
+}
+
+// TestFirestoreUpdateTouchesNamedFields is the difference between Set and
+// Update: an unmentioned field must survive.
+func TestFirestoreUpdateTouchesNamedFields(t *testing.T) {
+	c, ctx := fsClient(t)
+
+	doc := c.Collection("people").Doc("grace")
+	if _, err := doc.Set(ctx, map[string]any{"name": "Grace", "age": int64(45)}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := doc.Update(ctx, []firestore.Update{{Path: "age", Value: int64(46)}}); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+
+	snap, err := doc.Get(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := snap.Data()["age"]; got != int64(46) {
+		t.Errorf("age = %v, want 46", got)
+	}
+	if got := snap.Data()["name"]; got != "Grace" {
+		t.Errorf("name = %v, want it untouched by the update", got)
+	}
+}
+
+// TestFirestoreSetReplaces holds the other half: Set without options replaces
+// the document rather than merging into it.
+func TestFirestoreSetReplaces(t *testing.T) {
+	c, ctx := fsClient(t)
+
+	doc := c.Collection("people").Doc("alan")
+	if _, err := doc.Set(ctx, map[string]any{"name": "Alan", "age": int64(41)}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := doc.Set(ctx, map[string]any{"name": "Alan"}); err != nil {
+		t.Fatal(err)
+	}
+
+	snap, _ := doc.Get(ctx)
+	if _, ok := snap.Data()["age"]; ok {
+		t.Errorf("age survived a replacing Set: %v", snap.Data())
+	}
+}
+
+// TestFirestoreUpdateNeedsADocument covers Update's own precondition.
+func TestFirestoreUpdateNeedsADocument(t *testing.T) {
+	c, ctx := fsClient(t)
+
+	_, err := c.Collection("people").Doc("ghost").
+		Update(ctx, []firestore.Update{{Path: "x", Value: 1}})
+	if status.Code(err) != codes.NotFound {
+		t.Errorf("err = %v, want NotFound", err)
+	}
+}
+
+func TestFirestoreDelete(t *testing.T) {
+	c, ctx := fsClient(t)
+
+	doc := c.Collection("people").Doc("temp")
+	if _, err := doc.Set(ctx, map[string]any{"n": 1}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := doc.Delete(ctx); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	if _, err := doc.Get(ctx); status.Code(err) != codes.NotFound {
+		t.Errorf("the document survived a delete: %v", err)
+	}
+	// Deleting again is not an error, as in real Firestore.
+	if _, err := doc.Delete(ctx); err != nil {
+		t.Errorf("deleting an absent document: %v", err)
+	}
+}
+
+// TestFirestoreBatch covers several writes arriving as one Commit.
+func TestFirestoreBatch(t *testing.T) {
+	c, ctx := fsClient(t)
+
+	b := c.BulkWriter(ctx)
+	for _, name := range []string{"a", "b", "c"} {
+		if _, err := b.Set(c.Collection("batch").Doc(name), map[string]any{"id": name}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	b.End()
+
+	for _, name := range []string{"a", "b", "c"} {
+		snap, err := c.Collection("batch").Doc(name).Get(ctx)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if snap.Data()["id"] != name {
+			t.Errorf("%s: data = %v", name, snap.Data())
+		}
+	}
+}
+
+// TestFirestoreEmulatorHost is the promise the env var makes: existing code,
+// unmodified, finds the emulator.
+//
+// Not parallel: it sets an environment variable, which is process-wide.
+func TestFirestoreEmulatorHost(t *testing.T) {
+	emu := cloudrig.MustStart(t)
+	t.Setenv("FIRESTORE_EMULATOR_HOST", emu.Endpoint())
+
+	ctx := context.Background()
+	c, err := firestore.NewClient(ctx, "test-project")
+	if err != nil {
+		t.Fatalf("firestore.NewClient: %v", err)
+	}
+	t.Cleanup(func() { _ = c.Close() })
+
+	if _, err := c.Collection("env").Doc("d").Set(ctx, map[string]any{"ok": true}); err != nil {
+		t.Fatalf("Set through the env var: %v", err)
+	}
+	snap, err := c.Collection("env").Doc("d").Get(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snap.Data()["ok"] != true {
+		t.Errorf("data = %v", snap.Data())
+	}
+}
+
+// TestFirestoreNestedValues covers the encoding that is most of the work: a
+// Value is a oneof, and nested maps and arrays must survive the store.
+func TestFirestoreNestedValues(t *testing.T) {
+	c, ctx := fsClient(t)
+
+	in := map[string]any{
+		"nil":    nil,
+		"bool":   true,
+		"float":  1.5,
+		"bytes":  []byte{1, 2, 3},
+		"nested": map[string]any{"deep": map[string]any{"n": int64(7)}},
+		"list":   []any{int64(1), "two", map[string]any{"three": true}},
+	}
+	if _, err := c.Collection("shapes").Doc("all").Set(ctx, in); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+
+	snap, err := c.Collection("shapes").Doc("all").Get(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := snap.Data()
+
+	if got["nil"] != nil || got["bool"] != true || got["float"] != 1.5 {
+		t.Errorf("scalars = %v", got)
+	}
+	if b, ok := got["bytes"].([]byte); !ok || len(b) != 3 || b[0] != 1 {
+		t.Errorf("bytes = %#v", got["bytes"])
+	}
+	deep, _ := got["nested"].(map[string]any)
+	inner, _ := deep["deep"].(map[string]any)
+	if inner["n"] != int64(7) {
+		t.Errorf("nested = %#v", got["nested"])
+	}
+	list, _ := got["list"].([]any)
+	if len(list) != 3 || list[1] != "two" {
+		t.Errorf("list = %#v", got["list"])
+	}
+}
+
+// seedQuery fills a collection with documents a query can sort and filter.
+func seedQuery(t *testing.T, c *firestore.Client, ctx context.Context) *firestore.CollectionRef {
+	t.Helper()
+
+	col := c.Collection("crew")
+	for _, m := range []map[string]any{
+		{"name": "ada", "age": int64(36), "role": "eng", "tags": []any{"maths", "engines"}},
+		{"name": "alan", "age": int64(41), "role": "eng", "tags": []any{"maths", "logic"}},
+		{"name": "grace", "age": int64(45), "role": "cmdr", "tags": []any{"compilers"}},
+		{"name": "katherine", "age": int64(52), "role": "eng", "tags": []any{"orbits"}},
+	} {
+		if _, err := col.Doc(m["name"].(string)).Set(ctx, m); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return col
+}
+
+func names(t *testing.T, docs []*firestore.DocumentSnapshot) []string {
+	t.Helper()
+
+	out := make([]string, 0, len(docs))
+	for _, d := range docs {
+		out = append(out, d.Ref.ID)
+	}
+	return out
+}
+
+func TestFirestoreQueryAll(t *testing.T) {
+	c, ctx := fsClient(t)
+	col := seedQuery(t, c, ctx)
+
+	docs, err := col.Documents(ctx).GetAll()
+	if err != nil {
+		t.Fatalf("GetAll: %v", err)
+	}
+	// No order-by, so documents come back in name order.
+	if got := names(t, docs); !equal(got, []string{"ada", "alan", "grace", "katherine"}) {
+		t.Errorf("names = %v", got)
+	}
+}
+
+func TestFirestoreQueryFilters(t *testing.T) {
+	c, ctx := fsClient(t)
+	col := seedQuery(t, c, ctx)
+
+	cases := []struct {
+		name  string
+		query firestore.Query
+		want  []string
+	}{
+		{"equal", col.Where("role", "==", "eng"), []string{"ada", "alan", "katherine"}},
+		{"not equal", col.Where("role", "!=", "eng"), []string{"grace"}},
+		{"greater than", col.Where("age", ">", 41), []string{"grace", "katherine"}},
+		{"at most", col.Where("age", "<=", 41), []string{"ada", "alan"}},
+		{"in", col.Where("name", "in", []string{"ada", "grace"}), []string{"ada", "grace"}},
+		{"array contains", col.Where("tags", "array-contains", "maths"), []string{"ada", "alan"}},
+		{"array contains any", col.Where("tags", "array-contains-any", []string{"orbits", "logic"}),
+			[]string{"alan", "katherine"}},
+		{"two filters", col.Where("role", "==", "eng").Where("age", ">", 36),
+			[]string{"alan", "katherine"}},
+		{"a field nothing has", col.Where("missing", "==", 1), nil},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			docs, err := tc.query.Documents(ctx).GetAll()
+			if err != nil {
+				t.Fatalf("GetAll: %v", err)
+			}
+			if got := names(t, docs); !equal(got, tc.want) {
+				t.Errorf("names = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestFirestoreQueryOrderAndLimit(t *testing.T) {
+	c, ctx := fsClient(t)
+	col := seedQuery(t, c, ctx)
+
+	docs, err := col.OrderBy("age", firestore.Desc).Limit(2).Documents(ctx).GetAll()
+	if err != nil {
+		t.Fatalf("GetAll: %v", err)
+	}
+	if got := names(t, docs); !equal(got, []string{"katherine", "grace"}) {
+		t.Errorf("names = %v, want the two oldest, oldest first", got)
+	}
+
+	// Offset walks past the front of the same ordering.
+	docs, err = col.OrderBy("age", firestore.Asc).Offset(2).Documents(ctx).GetAll()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := names(t, docs); !equal(got, []string{"grace", "katherine"}) {
+		t.Errorf("names = %v", got)
+	}
+}
+
+// TestFirestoreQueryIgnoresSubcollections holds that a query over a collection
+// returns its own documents, not those of a collection beneath it.
+func TestFirestoreQueryIgnoresSubcollections(t *testing.T) {
+	c, ctx := fsClient(t)
+	col := seedQuery(t, c, ctx)
+
+	if _, err := col.Doc("ada").Collection("pets").Doc("cat").
+		Set(ctx, map[string]any{"name": "cat"}); err != nil {
+		t.Fatal(err)
+	}
+
+	docs, err := col.Documents(ctx).GetAll()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := names(t, docs); len(got) != 4 {
+		t.Errorf("names = %v, want only the four documents in the collection", got)
+	}
+}
+
+func equal(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// TestFirestoreServerTimestamp is the transform real schemas use most: the
+// value comes from the server, not the caller.
+func TestFirestoreServerTimestamp(t *testing.T) {
+	c, ctx := fsClient(t)
+
+	doc := c.Collection("events").Doc("e1")
+	if _, err := doc.Set(ctx, map[string]any{
+		"name": "created",
+		"at":   firestore.ServerTimestamp,
+	}); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+
+	snap, err := doc.Get(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	at, ok := snap.Data()["at"].(time.Time)
+	if !ok {
+		t.Fatalf("at = %#v, want a time", snap.Data()["at"])
+	}
+	if at.IsZero() {
+		t.Error("the server timestamp is zero")
+	}
+}
+
+// TestFirestoreIncrement covers the transform that exists so a counter does
+// not need a read first.
+func TestFirestoreIncrement(t *testing.T) {
+	c, ctx := fsClient(t)
+
+	doc := c.Collection("counters").Doc("hits")
+
+	// On a field nobody has written yet, an increment starts from zero.
+	if _, err := doc.Set(ctx, map[string]any{"n": firestore.Increment(5)}); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+	if _, err := doc.Update(ctx, []firestore.Update{
+		{Path: "n", Value: firestore.Increment(3)},
+	}); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+
+	snap, _ := doc.Get(ctx)
+	if got := snap.Data()["n"]; got != int64(8) {
+		t.Errorf("n = %#v, want 8 as an integer", got)
+	}
+}
+
+// TestFirestoreArrayUnionAndRemove holds that ArrayUnion is idempotent, which
+// is the whole reason to use it over a read-modify-write.
+func TestFirestoreArrayUnionAndRemove(t *testing.T) {
+	c, ctx := fsClient(t)
+
+	doc := c.Collection("sets").Doc("tags")
+	if _, err := doc.Set(ctx, map[string]any{"tags": []string{"a", "b"}}); err != nil {
+		t.Fatal(err)
+	}
+
+	// "b" is already there and must not be added twice.
+	if _, err := doc.Update(ctx, []firestore.Update{
+		{Path: "tags", Value: firestore.ArrayUnion("b", "c")},
+	}); err != nil {
+		t.Fatalf("ArrayUnion: %v", err)
+	}
+	snap, _ := doc.Get(ctx)
+	if got := snap.Data()["tags"]; !equalAny(got, []any{"a", "b", "c"}) {
+		t.Errorf("after union: %#v", got)
+	}
+
+	if _, err := doc.Update(ctx, []firestore.Update{
+		{Path: "tags", Value: firestore.ArrayRemove("a", "missing")},
+	}); err != nil {
+		t.Fatalf("ArrayRemove: %v", err)
+	}
+	snap, _ = doc.Get(ctx)
+	if got := snap.Data()["tags"]; !equalAny(got, []any{"b", "c"}) {
+		t.Errorf("after remove: %#v", got)
+	}
+}
+
+func equalAny(got any, want []any) bool {
+	list, ok := got.([]any)
+	if !ok || len(list) != len(want) {
+		return false
+	}
+	for i := range want {
+		if list[i] != want[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// TestFirestoreTransaction covers the read-then-write body RunTransaction
+// exists for: the write depends on what the read found.
+func TestFirestoreTransaction(t *testing.T) {
+	c, ctx := fsClient(t)
+
+	doc := c.Collection("accounts").Doc("a1")
+	if _, err := doc.Set(ctx, map[string]any{"balance": int64(100)}); err != nil {
+		t.Fatal(err)
+	}
+
+	err := c.RunTransaction(ctx, func(ctx context.Context, tx *firestore.Transaction) error {
+		snap, err := tx.Get(doc)
+		if err != nil {
+			return err
+		}
+		balance := snap.Data()["balance"].(int64)
+		return tx.Set(doc, map[string]any{"balance": balance - 30})
+	})
+	if err != nil {
+		t.Fatalf("RunTransaction: %v", err)
+	}
+
+	snap, _ := doc.Get(ctx)
+	if got := snap.Data()["balance"]; got != int64(70) {
+		t.Errorf("balance = %v, want 70", got)
+	}
+}
+
+// TestFirestoreTransactionRollback holds that a body returning an error writes
+// nothing.
+func TestFirestoreTransactionRollback(t *testing.T) {
+	c, ctx := fsClient(t)
+
+	doc := c.Collection("accounts").Doc("a2")
+	if _, err := doc.Set(ctx, map[string]any{"balance": int64(100)}); err != nil {
+		t.Fatal(err)
+	}
+
+	wanted := errors.New("not enough")
+	err := c.RunTransaction(ctx, func(ctx context.Context, tx *firestore.Transaction) error {
+		if err := tx.Set(doc, map[string]any{"balance": int64(0)}); err != nil {
+			return err
+		}
+		return wanted
+	})
+	if !errors.Is(err, wanted) {
+		t.Fatalf("RunTransaction = %v, want the body's error", err)
+	}
+
+	snap, _ := doc.Get(ctx)
+	if got := snap.Data()["balance"]; got != int64(100) {
+		t.Errorf("balance = %v, want the abandoned transaction to have written nothing", got)
+	}
+}
+
+// TestFirestoreTransactionQuery covers a query inside a transaction, which is
+// how a body decides what to write.
+func TestFirestoreTransactionQuery(t *testing.T) {
+	c, ctx := fsClient(t)
+	col := seedQuery(t, c, ctx)
+
+	var found int
+	err := c.RunTransaction(ctx, func(ctx context.Context, tx *firestore.Transaction) error {
+		docs, err := tx.Documents(col.Where("role", "==", "eng")).GetAll()
+		if err != nil {
+			return err
+		}
+		found = len(docs)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("RunTransaction: %v", err)
+	}
+	if found != 3 {
+		t.Errorf("the query saw %d documents, want 3", found)
+	}
+}
+
+// TestFirestoreNestedUpdate is a field path naming a field inside a map. It
+// must change that field and leave its siblings, rather than writing a
+// top-level field whose name happens to contain a dot.
+func TestFirestoreNestedUpdate(t *testing.T) {
+	c, ctx := fsClient(t)
+
+	doc := c.Collection("nested").Doc("d")
+	if _, err := doc.Set(ctx, map[string]any{
+		"profile": map[string]any{"name": "ada", "city": "london"},
+		"other":   int64(1),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := doc.Update(ctx, []firestore.Update{
+		{Path: "profile.name", Value: "grace"},
+	}); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+
+	snap, _ := doc.Get(ctx)
+	profile, ok := snap.Data()["profile"].(map[string]any)
+	if !ok {
+		t.Fatalf("profile = %#v", snap.Data()["profile"])
+	}
+	if profile["name"] != "grace" {
+		t.Errorf("profile.name = %v, want grace", profile["name"])
+	}
+	if profile["city"] != "london" {
+		t.Errorf("the sibling field was lost: %v", profile["city"])
+	}
+	if _, leaked := snap.Data()["profile.name"]; leaked {
+		t.Error(`a literal "profile.name" field was written`)
+	}
+}
+
+// TestFirestoreNestedTransform holds the same for a transform, which resolves
+// its own path.
+func TestFirestoreNestedTransform(t *testing.T) {
+	c, ctx := fsClient(t)
+
+	doc := c.Collection("nested").Doc("counters")
+	if _, err := doc.Set(ctx, map[string]any{
+		"stats": map[string]any{"hits": int64(5), "name": "page"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := doc.Update(ctx, []firestore.Update{
+		{Path: "stats.hits", Value: firestore.Increment(2)},
+	}); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+
+	snap, _ := doc.Get(ctx)
+	stats, _ := snap.Data()["stats"].(map[string]any)
+	if stats["hits"] != int64(7) {
+		t.Errorf("stats.hits = %v, want 7", stats["hits"])
+	}
+	if stats["name"] != "page" {
+		t.Errorf("the sibling field was lost: %v", stats["name"])
+	}
+}
+
+// TestFirestoreOrderExcludesMissingField holds Firestore's rule that ordering
+// by a field also filters by having it. Getting this wrong lets an invalid
+// document displace a valid one when a limit applies.
+func TestFirestoreOrderExcludesMissingField(t *testing.T) {
+	c, ctx := fsClient(t)
+
+	col := c.Collection("ordered")
+	for _, d := range []struct {
+		id   string
+		data map[string]any
+	}{
+		{"has1", map[string]any{"age": int64(30)}},
+		{"has2", map[string]any{"age": int64(40)}},
+		{"lacks", map[string]any{"other": true}},
+	} {
+		if _, err := col.Doc(d.id).Set(ctx, d.data); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	docs, err := col.OrderBy("age", firestore.Asc).Documents(ctx).GetAll()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := names(t, docs); !equal(got, []string{"has1", "has2"}) {
+		t.Errorf("names = %v, want only the documents that have the field", got)
+	}
+}

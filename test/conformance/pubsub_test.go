@@ -315,7 +315,7 @@ func TestPublishFiresAFunction(t *testing.T) {
 	if !ok {
 		t.Fatal("the function is not deployed")
 	}
-	logged := strings.Join(inst.LogSnapshot(), "\n")
+	logged := waitForLog(t, inst, "FIRED")
 	for _, want := range []string{
 		"FIRED",
 		pubsub2.EventPublish,

@@ -41,6 +41,7 @@ Each one is a sequence you can paste, in order, against a running emulator.
 | [Use in a Go test](#use-in-a-go-test) | In-process, one isolated emulator per test |
 | [Inject failures](#inject-failures) | Make a request fail, to test your error handling |
 | [Fork state](#fork-state) | Branch an emulator, cheaply, mid-test |
+| [Firestore](#firestore) | Documents and queries, over gRPC |
 
 ## Reference
 
@@ -500,6 +501,12 @@ emu.Functions().Deploy(ctx, functions.Function{...})
 emu.SyncEvents()
 ```
 
+`SyncEvents` waits for delivery — the handler has run and answered. It does
+**not** wait for the handler's output: a function is a child process whose
+stdout is drained by another goroutine, so a log line can arrive shortly
+after. Assert on a function's log by polling for what you expect, not by
+reading it once.
+
 Shutdown is registered with `t.Cleanup`. State is never persisted under
 `MustStart`.
 
@@ -572,6 +579,55 @@ Only an in-memory emulator can fork; one started with `--data-dir` cannot.
 
 ---
 
+## Firestore
+
+gRPC, on the same port. The env var is all the configuration a client needs:
+
+```sh
+export FIRESTORE_EMULATOR_HOST=localhost:4599   # host:port, no scheme
+```
+
+```go
+c, _ := firestore.NewClient(ctx, "cloudrig-local")
+
+c.Collection("crew").Doc("ada").Set(ctx, map[string]any{
+    "name": "ada", "age": 36, "role": "eng",
+})
+
+snap, _ := c.Collection("crew").Doc("ada").Get(ctx)
+
+docs, _ := c.Collection("crew").
+    Where("role", "==", "eng").
+    OrderBy("age", firestore.Desc).
+    Limit(10).
+    Documents(ctx).GetAll()
+```
+
+Documents, subcollections, `Set`, `Create`, `Update` with field masks,
+`Delete`, `BulkWriter`, and queries: `==`, `!=`, `<`, `<=`, `>`, `>=`, `in`,
+`not-in`, `array-contains`, `array-contains-any`, `AND`/`OR`, ordering, limit
+and offset. Values sort the way Firestore sorts them, across types.
+
+`RunTransaction` works, and so do the field transforms real schemas rely on —
+`ServerTimestamp`, `Increment`, `ArrayUnion`, `ArrayRemove`:
+
+```go
+c.RunTransaction(ctx, func(ctx context.Context, tx *firestore.Transaction) error {
+    snap, _ := tx.Get(doc)
+    return tx.Set(doc, map[string]any{"balance": snap.Data()["balance"].(int64) - 30})
+})
+```
+
+A transaction here is serialised by the commit lock, not multi-version
+concurrency: writes apply as a unit, one commit at a time. Real Firestore also
+aborts a transaction whose reads were invalidated, and that abort never
+happens here — a test written to observe contention will not see it.
+
+Not supported: `Listen` (real-time updates), cursors (`StartAt`/`EndAt`),
+collection-group queries, and aggregations.
+
+---
+
 ## Commands
 
 ```
@@ -630,6 +686,9 @@ versioning, signed URLs, persistence. Verified against the real Go client and
 **Pub/Sub** — topics, subscriptions, publish, streaming pull, ack and nack,
 deadline expiry, and `--trigger-topic` to run a function on a message. gRPC for
 the client libraries, REST for Terraform, one service behind both.
+
+**Firestore** — documents, subcollections and queries over gRPC, found through
+`FIRESTORE_EMULATOR_HOST`.
 
 **Fault injection** — `emu.Faults()` fails chosen requests, so error paths and
 retries can be tested.

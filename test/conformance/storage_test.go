@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"cloud.google.com/go/storage"
 	"github.com/monirz/cloudrig"
@@ -429,7 +430,7 @@ func TestUploadFiresAFunction(t *testing.T) {
 	if !ok {
 		t.Fatal("the function is not deployed")
 	}
-	logged := strings.Join(inst.LogSnapshot(), "\n")
+	logged := waitForLog(t, inst, "FIRED")
 	for _, want := range []string{
 		"FIRED",
 		storage2.EventFinalized,
@@ -823,5 +824,28 @@ func TestIAMPolicy(t *testing.T) {
 	members := got.Members("roles/storage.objectViewer")
 	if len(members) != 1 || members[0] != "allUsers" {
 		t.Errorf("members = %v, want [allUsers]", members)
+	}
+}
+
+// waitForLog returns a function's log once it contains want.
+//
+// SyncEvents proves the event was delivered and the handler answered. It
+// cannot prove the handler's output has arrived: a function is a child
+// process, its stdout is a pipe, and the goroutine draining that pipe runs
+// after the response. On a loaded machine that gap is wide enough to read an
+// empty log, which is what made this flaky in CI and never here.
+func waitForLog(t *testing.T, inst *functions.Instance, want string) string {
+	t.Helper()
+
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		logged := strings.Join(inst.LogSnapshot(), "\n")
+		if strings.Contains(logged, want) {
+			return logged
+		}
+		if time.Now().After(deadline) {
+			return logged
+		}
+		time.Sleep(5 * time.Millisecond)
 	}
 }
