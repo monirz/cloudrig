@@ -46,6 +46,11 @@ func NewAPI(svc *Service) *API {
 	a.router.Handle(http.MethodPut, "/storage/v1/b/{bucket}/o/{object}", a.patchObject)
 	a.router.Handle(http.MethodDelete, "/storage/v1/b/{bucket}/o/{object}", a.deleteObject)
 
+	const object = "/storage/v1/b/{bucket}/o/{object}"
+	a.router.Handle(http.MethodPost, object+"/copyTo/b/{dstBucket}/o/{dstObject}", a.copyObject)
+	a.router.Handle(http.MethodPost, object+"/rewriteTo/b/{dstBucket}/o/{dstObject}", a.rewriteObject)
+	a.router.Handle(http.MethodPost, object+"/compose", a.composeObject)
+
 	a.router.Handle(http.MethodPost, "/upload/storage/v1/b/{bucket}/o", a.upload)
 	// A chunk may arrive as PUT from clients that prefer it; the Go client
 	// POSTs to the session URI.
@@ -313,6 +318,128 @@ func (a *API) deleteObject(w http.ResponseWriter, r *http.Request, p transport.P
 	}
 	w.WriteHeader(http.StatusNoContent)
 	return nil
+}
+
+// copyObject serves copyTo, answering with the new object.
+func (a *API) copyObject(w http.ResponseWriter, r *http.Request, p transport.Params) error {
+	obj, err := a.copy(r, p)
+	if err != nil {
+		return err
+	}
+	return writeJSON(w, http.StatusOK, toAPIObject(obj, baseURL(r)))
+}
+
+// rewriteObject serves rewriteTo, which is copyTo reported differently: real
+// GCS may rewrite in several calls, so it answers with progress and a done
+// flag. A copy here is metadata-only, so it is always done in one.
+func (a *API) rewriteObject(w http.ResponseWriter, r *http.Request, p transport.Params) error {
+	obj, err := a.copy(r, p)
+	if err != nil {
+		return err
+	}
+	return writeJSON(w, http.StatusOK, map[string]any{
+		"kind":                "storage#rewriteResponse",
+		"totalBytesRewritten": strconv.FormatInt(obj.Size, 10),
+		"objectSize":          strconv.FormatInt(obj.Size, 10),
+		"done":                true,
+		"resource":            toAPIObject(obj, baseURL(r)),
+	})
+}
+
+func (a *API) copy(r *http.Request, p transport.Params) (Object, error) {
+	project, err := a.svc.ProjectOf(r.Context(), p["bucket"])
+	if err != nil {
+		return Object{}, err
+	}
+	var body objectRequest
+	if err := decodeJSON(r, &body); err != nil {
+		return Object{}, err
+	}
+
+	q := r.URL.Query()
+	pre, err := destinationPreconditions(q)
+	if err != nil {
+		return Object{}, err
+	}
+	generation, err := optionalNamed(q, "sourceGeneration")
+	if err != nil {
+		return Object{}, err
+	}
+
+	return a.svc.CopyObject(r.Context(), project,
+		Source{Bucket: p["bucket"], Name: p["object"], Generation: generation},
+		Write{
+			Bucket:        p["dstBucket"],
+			Name:          p["dstObject"],
+			ContentType:   body.ContentType,
+			Metadata:      body.Metadata,
+			Preconditions: pre,
+		})
+}
+
+// composeObject concatenates the named sources into this object.
+func (a *API) composeObject(w http.ResponseWriter, r *http.Request, p transport.Params) error {
+	project, err := a.svc.ProjectOf(r.Context(), p["bucket"])
+	if err != nil {
+		return err
+	}
+
+	var body composeRequest
+	if err := decodeJSON(r, &body); err != nil {
+		return err
+	}
+	pre, err := destinationPreconditions(r.URL.Query())
+	if err != nil {
+		return err
+	}
+
+	sources := make([]Source, len(body.SourceObjects))
+	for i, src := range body.SourceObjects {
+		sources[i] = Source{Bucket: p["bucket"], Name: src.Name}
+		if src.Generation != 0 {
+			generation := src.Generation
+			sources[i].Generation = &generation
+		}
+	}
+
+	obj, err := a.svc.ComposeObject(r.Context(), project, sources, Write{
+		Bucket:        p["bucket"],
+		Name:          p["object"],
+		ContentType:   body.Destination.ContentType,
+		Metadata:      body.Destination.Metadata,
+		Preconditions: pre,
+	})
+	if err != nil {
+		return err
+	}
+	return writeJSON(w, http.StatusOK, toAPIObject(obj, baseURL(r)))
+}
+
+// destinationPreconditions reads the conditions that apply to the object being
+// written. Copy and compose also accept ifSource* conditions, which are not
+// implemented and would be wrong to silently ignore.
+func destinationPreconditions(q url.Values) (Preconditions, error) {
+	for _, unsupported := range []string{
+		"ifSourceGenerationMatch", "ifSourceGenerationNotMatch",
+		"ifSourceMetagenerationMatch", "ifSourceMetagenerationNotMatch",
+	} {
+		if q.Get(unsupported) != "" {
+			return Preconditions{}, gerr.NewUnimplemented("storage.objects.copy with " + unsupported)
+		}
+	}
+	return preconditionsOf(q)
+}
+
+func optionalNamed(q url.Values, name string) (*int64, error) {
+	raw := q.Get(name)
+	if raw == "" {
+		return nil, nil
+	}
+	n, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil {
+		return nil, invalidParam(name, raw)
+	}
+	return &n, nil
 }
 
 // upload handles uploadType=media and uploadType=multipart.

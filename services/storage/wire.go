@@ -103,3 +103,14 @@ func toAPIObject(o Object, base string) apiObject {
 }
 
 func rfc3339(t time.Time) string { return t.UTC().Format(time.RFC3339Nano) }
+
+// composeRequest is the body of a compose.
+type composeRequest struct {
+	SourceObjects []composeSource `json:"sourceObjects"`
+	Destination   objectRequest   `json:"destination"`
+}
+
+type composeSource struct {
+	Name       string `json:"name"`
+	Generation int64  `json:"generation,omitempty"`
+}
