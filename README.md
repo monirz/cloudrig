@@ -1,7 +1,8 @@
 # cloudrig
 
 A local emulator for Google Cloud. Runs as a binary, or in-process inside a Go
-test — no Docker, no daemon.
+test. Cloud Storage, Cloud Functions and Pub/Sub run natively — a subprocess
+per function, everything else in-process.
 
 **Functions really run.** `gcloud functions call` starts your code as a process
 and returns what it printed — it is not a recorded response or a stubbed
@@ -552,8 +553,9 @@ versioning, signed URLs, persistence. Verified against the real Go client and
 over gRPC, and `--trigger-topic` to run a function on a message.
 
 **Not yet** — the XML API, `gsutil`, ACLs, batch, Pub/Sub push subscriptions,
-gen2 functions, and every other GCP service. IAM policies are stored but never enforced. gRPC
-returns 501. See [UNSUPPORTED.md](UNSUPPORTED.md).
+gen2 functions, and every other GCP service. IAM policies are stored but never
+enforced. Cloud Run and anything else container-backed would need a container
+runtime and is not emulated. See [UNSUPPORTED.md](UNSUPPORTED.md).
 
 ---
 
