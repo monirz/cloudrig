@@ -44,6 +44,7 @@ Each one is a sequence you can paste, in order, against a running emulator.
 
 | | |
 |---|---|
+| [Architecture](ARCHITECTURE.md) | How cloudrig is put together |
 | [Commands](#commands) | Every subcommand and flag |
 | [Test](#test) | Running cloudrig's own suite |
 | [What works](#what-works) | Supported surface, and what is missing |
@@ -223,7 +224,13 @@ exchange it at `oauth2.googleapis.com`. The emulator never looks at the token.
 Each service you use needs its own `*_custom_endpoint`.
 
 Works: `google_storage_bucket`, `google_storage_bucket_object`,
-`google_storage_bucket_iam_member`. IAM policies are stored but not enforced.
+`google_storage_bucket_iam_member`, `google_pubsub_topic`,
+`google_pubsub_subscription` — create, update in place, and destroy. IAM
+policies are stored but not enforced.
+
+The provider speaks REST for every resource, so Pub/Sub needs
+`pubsub_custom_endpoint` even though the client libraries reach the same
+service over gRPC.
 
 ---
 
@@ -270,8 +277,9 @@ c, _ := pubsub.NewClient(ctx, "test-project",
 )
 ```
 
-Topics, subscriptions, publish, streaming pull, ack and nack. Each
-subscription gets its own copy of a message. A message that is nacked, or
+Topics, subscriptions, publish, streaming pull, ack and nack, over gRPC — plus
+a JSON API on the same port for Terraform. Each subscription gets its own copy
+of a message. A message that is nacked, or
 whose ack deadline passes, is redelivered. A published message can also run a
 function.
 
@@ -550,12 +558,13 @@ versioning, signed URLs, persistence. Verified against the real Go client and
 `gcloud storage`.
 
 **Pub/Sub** — topics, subscriptions, publish, streaming pull, ack and nack,
-over gRPC, and `--trigger-topic` to run a function on a message.
+deadline expiry, and `--trigger-topic` to run a function on a message. gRPC for
+the client libraries, REST for Terraform, one service behind both.
 
 **Not yet** — the XML API, `gsutil`, ACLs, batch, Pub/Sub push subscriptions,
 gen2 functions, and every other GCP service. IAM policies are stored but never
 enforced. Cloud Run and anything else container-backed would need a container
-runtime and is not emulated. See [UNSUPPORTED.md](UNSUPPORTED.md).
+runtime and is not emulated. See [ARCHITECTURE.md](ARCHITECTURE.md).
 
 ---
 
