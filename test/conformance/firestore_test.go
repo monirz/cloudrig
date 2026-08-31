@@ -571,3 +571,94 @@ func TestFirestoreTransactionQuery(t *testing.T) {
 		t.Errorf("the query saw %d documents, want 3", found)
 	}
 }
+
+// TestFirestoreNestedUpdate is a field path naming a field inside a map. It
+// must change that field and leave its siblings, rather than writing a
+// top-level field whose name happens to contain a dot.
+func TestFirestoreNestedUpdate(t *testing.T) {
+	c, ctx := fsClient(t)
+
+	doc := c.Collection("nested").Doc("d")
+	if _, err := doc.Set(ctx, map[string]any{
+		"profile": map[string]any{"name": "ada", "city": "london"},
+		"other":   int64(1),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := doc.Update(ctx, []firestore.Update{
+		{Path: "profile.name", Value: "grace"},
+	}); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+
+	snap, _ := doc.Get(ctx)
+	profile, ok := snap.Data()["profile"].(map[string]any)
+	if !ok {
+		t.Fatalf("profile = %#v", snap.Data()["profile"])
+	}
+	if profile["name"] != "grace" {
+		t.Errorf("profile.name = %v, want grace", profile["name"])
+	}
+	if profile["city"] != "london" {
+		t.Errorf("the sibling field was lost: %v", profile["city"])
+	}
+	if _, leaked := snap.Data()["profile.name"]; leaked {
+		t.Error(`a literal "profile.name" field was written`)
+	}
+}
+
+// TestFirestoreNestedTransform holds the same for a transform, which resolves
+// its own path.
+func TestFirestoreNestedTransform(t *testing.T) {
+	c, ctx := fsClient(t)
+
+	doc := c.Collection("nested").Doc("counters")
+	if _, err := doc.Set(ctx, map[string]any{
+		"stats": map[string]any{"hits": int64(5), "name": "page"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := doc.Update(ctx, []firestore.Update{
+		{Path: "stats.hits", Value: firestore.Increment(2)},
+	}); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+
+	snap, _ := doc.Get(ctx)
+	stats, _ := snap.Data()["stats"].(map[string]any)
+	if stats["hits"] != int64(7) {
+		t.Errorf("stats.hits = %v, want 7", stats["hits"])
+	}
+	if stats["name"] != "page" {
+		t.Errorf("the sibling field was lost: %v", stats["name"])
+	}
+}
+
+// TestFirestoreOrderExcludesMissingField holds Firestore's rule that ordering
+// by a field also filters by having it. Getting this wrong lets an invalid
+// document displace a valid one when a limit applies.
+func TestFirestoreOrderExcludesMissingField(t *testing.T) {
+	c, ctx := fsClient(t)
+
+	col := c.Collection("ordered")
+	for _, d := range []struct {
+		id   string
+		data map[string]any
+	}{
+		{"has1", map[string]any{"age": int64(30)}},
+		{"has2", map[string]any{"age": int64(40)}},
+		{"lacks", map[string]any{"other": true}},
+	} {
+		if _, err := col.Doc(d.id).Set(ctx, d.data); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	docs, err := col.OrderBy("age", firestore.Asc).Documents(ctx).GetAll()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := names(t, docs); !equal(got, []string{"has1", "has2"}) {
+		t.Errorf("names = %v, want only the documents that have the field", got)
+	}
+}

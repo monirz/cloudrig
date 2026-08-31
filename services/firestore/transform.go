@@ -25,16 +25,16 @@ func applyTransforms(doc *firestorepb.Document, transforms []*firestorepb.Docume
 	results := make([]*firestorepb.Value, 0, len(transforms))
 	for _, tr := range transforms {
 		path := tr.GetFieldPath()
-		current := doc.Fields[path]
+		current, _ := lookup(doc.Fields, path)
 
 		value, err := evaluate(tr, current, now)
 		if err != nil {
 			return nil, err
 		}
 		if value == nil {
-			delete(doc.Fields, path)
+			deletePath(doc.Fields, path)
 		} else {
-			doc.Fields[path] = value
+			setPath(doc.Fields, path, value)
 		}
 		results = append(results, value)
 	}

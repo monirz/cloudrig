@@ -6,6 +6,7 @@ import (
 
 	"cloud.google.com/go/firestore/apiv1/firestorepb"
 	"google.golang.org/protobuf/types/known/timestamppb"
+	"google.golang.org/protobuf/types/known/wrapperspb"
 	"time"
 )
 
@@ -174,5 +175,50 @@ func TestArrayTransformsOnAMissingField(t *testing.T) {
 	}
 	if got := removeAll(nil, []*firestorepb.Value{str("x")}); len(got.GetArrayValue().GetValues()) != 0 {
 		t.Errorf("remove on an absent field = %v", got)
+	}
+}
+
+// TestWindowRejectsNegativeBounds keeps a request-supplied limit from becoming
+// a slice bound that panics. RunQuery rejects one before reaching here; this
+// holds the floor under it.
+func TestWindowRejectsNegativeBounds(t *testing.T) {
+	t.Parallel()
+
+	docs := []*firestorepb.Document{{Name: "a"}, {Name: "b"}}
+
+	if got := window(docs, 0, wrapperspb.Int32(-1)); len(got) != 2 {
+		t.Errorf("a negative limit returned %d documents, want it ignored", len(got))
+	}
+	if got := window(docs, -5, nil); len(got) != 2 {
+		t.Errorf("a negative offset returned %d documents, want it ignored", len(got))
+	}
+	if got := window(docs, 0, wrapperspb.Int32(1)); len(got) != 1 {
+		t.Errorf("a valid limit was not applied: %d", len(got))
+	}
+}
+
+// TestSetPathBuildsNesting covers the path a mask or transform takes when the
+// map it names does not exist yet.
+func TestSetPathBuildsNesting(t *testing.T) {
+	t.Parallel()
+
+	fields := map[string]*firestorepb.Value{}
+	setPath(fields, "a.b.c", str("deep"))
+
+	if v, ok := lookup(fields, "a.b.c"); !ok || v.GetStringValue() != "deep" {
+		t.Fatalf("lookup(a.b.c) = %v, %v", v, ok)
+	}
+	// A sibling written later must not disturb the first.
+	setPath(fields, "a.b.d", str("other"))
+	if v, ok := lookup(fields, "a.b.c"); !ok || v.GetStringValue() != "deep" {
+		t.Errorf("the sibling write lost a.b.c: %v, %v", v, ok)
+	}
+
+	deletePath(fields, "a.b.c")
+	if _, ok := lookup(fields, "a.b.c"); ok {
+		t.Error("deletePath left the value behind")
+	}
+	if _, ok := lookup(fields, "a.b.d"); !ok {
+		t.Error("deletePath removed a sibling")
 	}
 }

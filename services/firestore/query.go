@@ -28,6 +28,15 @@ func (s *Service) RunQuery(req *firestorepb.RunQueryRequest, stream firestorepb.
 		return status.Error(codes.Unimplemented, "collection-group queries are not supported")
 	}
 
+	// Checked before anything is sliced: a negative bound reaches here
+	// straight from the request, and a slice would panic on it.
+	if q.GetOffset() < 0 {
+		return status.Errorf(codes.InvalidArgument, "offset must not be negative, got %d", q.GetOffset())
+	}
+	if limit := q.GetLimit(); limit != nil && limit.GetValue() < 0 {
+		return status.Errorf(codes.InvalidArgument, "limit must not be negative, got %d", limit.GetValue())
+	}
+
 	docs, err := s.collection(stream.Context(), req.GetParent(), from.GetCollectionId())
 	if err != nil {
 		return err
@@ -44,6 +53,9 @@ func (s *Service) RunQuery(req *firestorepb.RunQueryRequest, stream firestorepb.
 		}
 	}
 
+	// Firestore returns only documents that have every ordered field, so a
+	// document missing one is not merely sorted oddly: it is not a result.
+	kept = withOrderedFields(kept, q.GetOrderBy())
 	if err := order(kept, q.GetOrderBy()); err != nil {
 		return err
 	}
@@ -89,6 +101,28 @@ func (s *Service) collection(ctx context.Context, parent, collection string) ([]
 	return out, nil
 }
 
+// withOrderedFields drops documents that lack a field the query orders by.
+func withOrderedFields(docs []*firestorepb.Document, clauses []*firestorepb.StructuredQuery_Order) []*firestorepb.Document {
+	if len(clauses) == 0 {
+		return docs
+	}
+
+	kept := docs[:0]
+	for _, doc := range docs {
+		complete := true
+		for _, c := range clauses {
+			if _, ok := fieldOf(doc, c.GetField().GetFieldPath()); !ok {
+				complete = false
+				break
+			}
+		}
+		if complete {
+			kept = append(kept, doc)
+		}
+	}
+	return kept
+}
+
 // order sorts by the query's order-by clauses, leaving name order where the
 // clauses tie.
 func order(docs []*firestorepb.Document, clauses []*firestorepb.StructuredQuery_Order) error {
@@ -122,6 +156,8 @@ func order(docs []*firestorepb.Document, clauses []*firestorepb.StructuredQuery_
 }
 
 // window applies offset and limit, in that order.
+// The bounds are validated by the caller; the guards here are so that a future
+// caller cannot turn a bad request into a panic.
 func window(docs []*firestorepb.Document, offset int32, limit *wrapperspb.Int32Value) []*firestorepb.Document {
 	if offset > 0 {
 		if int(offset) >= len(docs) {
@@ -129,7 +165,7 @@ func window(docs []*firestorepb.Document, offset int32, limit *wrapperspb.Int32V
 		}
 		docs = docs[offset:]
 	}
-	if limit != nil && int(limit.GetValue()) < len(docs) {
+	if limit != nil && limit.GetValue() >= 0 && int(limit.GetValue()) < len(docs) {
 		docs = docs[:limit.GetValue()]
 	}
 	return docs

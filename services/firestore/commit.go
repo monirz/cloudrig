@@ -92,11 +92,13 @@ func (s *Service) stage(ctx context.Context, w *firestorepb.Write, now *timestam
 
 	if mask := w.GetUpdateMask(); mask != nil {
 		// A field named by the mask but absent from the write is a delete.
+		// The path is walked, not used as a key: "profile.name" names a field
+		// inside profile, and the write carries it nested the same way.
 		for _, path := range mask.GetFieldPaths() {
-			if v, ok := incoming.GetFields()[path]; ok {
-				next.Fields[path] = proto.Clone(v).(*firestorepb.Value)
+			if v, ok := lookup(incoming.GetFields(), path); ok {
+				setPath(next.Fields, path, proto.Clone(v).(*firestorepb.Value))
 			} else {
-				delete(next.Fields, path)
+				deletePath(next.Fields, path)
 			}
 		}
 	} else {

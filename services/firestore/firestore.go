@@ -10,6 +10,7 @@ import (
 	"context"
 	"strings"
 	"sync"
+	"time"
 
 	"cloud.google.com/go/firestore/apiv1/firestorepb"
 	"github.com/monirz/cloudrig/core/clock"
@@ -30,14 +31,15 @@ type Service struct {
 	// applies is worse than one that fails.
 	mu sync.Mutex
 
-	// transactions holds open handles. They carry no state of their own: a
+	// transactions holds open handles against the time they were opened, so
+	// abandoned ones can be expired. They carry no state of their own: a
 	// transaction's writes arrive together at Commit.
-	transactions map[string]struct{}
+	transactions map[string]time.Time
 }
 
 // New wires a service.
 func New(kv store.Store, clk clock.Clock) *Service {
-	return &Service{kv: kv, clk: clk, transactions: map[string]struct{}{}}
+	return &Service{kv: kv, clk: clk, transactions: map[string]time.Time{}}
 }
 
 // docKey addresses a document by its resource name, which already carries the

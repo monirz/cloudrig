@@ -142,22 +142,5 @@ func fieldOf(doc *firestorepb.Document, path string) (*firestorepb.Value, bool) 
 			ValueType: &firestorepb.Value_ReferenceValue{ReferenceValue: doc.GetName()},
 		}, true
 	}
-
-	fields := doc.GetFields()
-	segments := strings.Split(path, ".")
-	for i, seg := range segments {
-		v, ok := fields[seg]
-		if !ok {
-			return nil, false
-		}
-		if i == len(segments)-1 {
-			return v, true
-		}
-		m, ok := v.GetValueType().(*firestorepb.Value_MapValue)
-		if !ok {
-			return nil, false
-		}
-		fields = m.MapValue.GetFields()
-	}
-	return nil, false
+	return lookup(doc.GetFields(), path)
 }

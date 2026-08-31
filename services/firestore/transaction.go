@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/base64"
+	"time"
 
 	"cloud.google.com/go/firestore/apiv1/firestorepb"
 	"google.golang.org/grpc/codes"
@@ -26,9 +27,42 @@ func (s *Service) BeginTransaction(ctx context.Context, req *firestorepb.BeginTr
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.transactions[string(id)] = struct{}{}
+
+	// A client that begins transactions and neither commits nor rolls them
+	// back would otherwise leave a handle behind for every one, for as long as
+	// the emulator runs.
+	s.expireTransactions()
+	if len(s.transactions) >= MaxOpenTransactions {
+		return nil, status.Errorf(codes.ResourceExhausted,
+			"too many open transactions (%d); commit or roll back before opening more",
+			MaxOpenTransactions)
+	}
+	s.transactions[string(id)] = s.clk.Now()
 
 	return &firestorepb.BeginTransactionResponse{Transaction: id}, nil
+}
+
+// Transactions are bounded two ways, because a local emulator should fail
+// loudly rather than grow quietly.
+const (
+	// MaxOpenTransactions is how many may be open at once.
+	MaxOpenTransactions = 1000
+
+	// TransactionTTL is how long an untouched handle survives. Real Firestore
+	// gives a transaction about a minute before it expires.
+	TransactionTTL = time.Minute
+)
+
+// expireTransactions forgets handles older than the TTL. The caller holds the
+// lock. It runs on the injected clock, so a test drives expiry by advancing
+// time rather than waiting.
+func (s *Service) expireTransactions() {
+	cutoff := s.clk.Now().Add(-TransactionTTL)
+	for id, started := range s.transactions {
+		if started.Before(cutoff) {
+			delete(s.transactions, id)
+		}
+	}
 }
 
 // Rollback discards a transaction. Nothing has been written, so this only
