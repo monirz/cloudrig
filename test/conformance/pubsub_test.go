@@ -2,6 +2,7 @@ package conformance
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -9,6 +10,8 @@ import (
 	"cloud.google.com/go/pubsub/v2"
 	"cloud.google.com/go/pubsub/v2/apiv1/pubsubpb"
 	"github.com/monirz/cloudrig"
+	"github.com/monirz/cloudrig/functions"
+	pubsub2 "github.com/monirz/cloudrig/services/pubsub"
 	"google.golang.org/api/option"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -257,4 +260,117 @@ func TestPubSubErrors(t *testing.T) {
 			t.Errorf("code = %v, want NotFound", code)
 		}
 	})
+}
+
+// TestPublishFiresAFunction is the pair to TestUploadFiresAFunction: a message
+// published through the real client runs a function, in one process, with no
+// Docker and no push endpoint.
+func TestPublishFiresAFunction(t *testing.T) {
+	if testing.Short() {
+		t.Skip("compiles a function")
+	}
+	t.Parallel()
+
+	emu := cloudrig.MustStart(t)
+	ctx := context.Background()
+
+	if _, err := emu.Functions().Deploy(ctx, functions.Function{
+		Name:   "on-message",
+		Source: "../../testdata/go-pubsub",
+		Trigger: functions.EventTrigger{
+			EventType: pubsub2.EventPublish,
+			Resource:  "orders",
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	c, err := pubsub.NewClient(ctx, "test-project",
+		option.WithEndpoint(emu.Endpoint()),
+		option.WithoutAuthentication(),
+		option.WithGRPCDialOption(grpc.WithTransportCredentials(insecure.NewCredentials())),
+	)
+	if err != nil {
+		t.Fatalf("pubsub.NewClient: %v", err)
+	}
+	t.Cleanup(func() { _ = c.Close() })
+
+	const topic = "projects/test-project/topics/orders"
+	if _, err := c.TopicAdminClient.CreateTopic(ctx, &pubsubpb.Topic{Name: topic}); err != nil {
+		t.Fatalf("CreateTopic: %v", err)
+	}
+
+	res := c.Publisher(topic).Publish(ctx, &pubsub.Message{
+		Data:       []byte("order-42"),
+		Attributes: map[string]string{"region": "eu"},
+	})
+	if _, err := res.Get(ctx); err != nil {
+		t.Fatalf("Publish: %v", err)
+	}
+
+	// Delivery is asynchronous so the publish never waits on it.
+	emu.SyncEvents()
+
+	inst, ok := emu.Functions().Instance("", "", "on-message")
+	if !ok {
+		t.Fatal("the function is not deployed")
+	}
+	logged := strings.Join(inst.LogSnapshot(), "\n")
+	for _, want := range []string{
+		"FIRED",
+		pubsub2.EventPublish,
+		`"order-42"`,
+		topic,
+		"pubsub.googleapis.com",
+		"region:eu",
+	} {
+		if !strings.Contains(logged, want) {
+			t.Errorf("the function log is missing %q:\n%s", want, logged)
+		}
+	}
+}
+
+// TestPublishToAnotherTopicDoesNotFire holds the other half: a trigger scoped
+// to one topic must not run for another.
+func TestPublishToAnotherTopicDoesNotFire(t *testing.T) {
+	if testing.Short() {
+		t.Skip("compiles a function")
+	}
+	t.Parallel()
+
+	emu := cloudrig.MustStart(t)
+	ctx := context.Background()
+
+	if _, err := emu.Functions().Deploy(ctx, functions.Function{
+		Name:    "scoped",
+		Source:  "../../testdata/go-pubsub",
+		Trigger: functions.EventTrigger{EventType: pubsub2.EventPublish, Resource: "wanted"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	c, err := pubsub.NewClient(ctx, "test-project",
+		option.WithEndpoint(emu.Endpoint()),
+		option.WithoutAuthentication(),
+		option.WithGRPCDialOption(grpc.WithTransportCredentials(insecure.NewCredentials())),
+	)
+	if err != nil {
+		t.Fatalf("pubsub.NewClient: %v", err)
+	}
+	t.Cleanup(func() { _ = c.Close() })
+
+	const topic = "projects/test-project/topics/unwanted"
+	if _, err := c.TopicAdminClient.CreateTopic(ctx, &pubsubpb.Topic{Name: topic}); err != nil {
+		t.Fatalf("CreateTopic: %v", err)
+	}
+	res := c.Publisher(topic).Publish(ctx, &pubsub.Message{Data: []byte("x")})
+	if _, err := res.Get(ctx); err != nil {
+		t.Fatalf("Publish: %v", err)
+	}
+	emu.SyncEvents()
+
+	inst, _ := emu.Functions().Instance("", "", "scoped")
+	if logged := strings.Join(inst.LogSnapshot(), "\n"); strings.Contains(logged, "FIRED") {
+		t.Errorf("a trigger scoped to one topic ran for another:\n%s", logged)
+	}
 }

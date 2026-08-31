@@ -208,7 +208,7 @@ c.Subscriber(sub).Receive(ctx, func(_ context.Context, m *pubsub.Message) {
 
 Topics, subscriptions, publish, streaming pull, ack and nack. Each
 subscription gets its own copy of a message, and a nacked message is
-redelivered.
+redelivered. A published message can also run a function — see below.
 
 Not supported: push subscriptions, ordering keys, dead-letter topics, retry
 policies, snapshots, seek, schemas.
@@ -283,6 +283,60 @@ curl -X POST \
 
 ---
 
+## Run a function on a Pub/Sub message
+
+The same thing, on the other trigger. A handler reads the message out of the
+same gen1 envelope, with the payload base64-encoded the way the wire carries
+it:
+
+```go
+func Handler(w http.ResponseWriter, r *http.Request) {
+	var e struct {
+		Data struct {
+			Data       string            `json:"data"`
+			Attributes map[string]string `json:"attributes"`
+		} `json:"data"`
+		Context struct {
+			EventType string `json:"eventType"`
+		} `json:"context"`
+	}
+	json.NewDecoder(r.Body).Decode(&e)
+
+	body, _ := base64.StdEncoding.DecodeString(e.Data.Data)
+	fmt.Printf("%s: %s\n", e.Context.EventType, body)
+	w.WriteHeader(http.StatusNoContent)
+}
+```
+
+Deploy it against a topic, then publish:
+
+```sh
+./cloudrig fn deploy on-message --source ./on-message --trigger-topic orders
+```
+
+Topics are gRPC-only, so publishing is a few lines of Go rather than a curl:
+
+```go
+c.TopicAdminClient.CreateTopic(ctx, &pubsubpb.Topic{
+    Name: "projects/demo/topics/orders",
+})
+c.Publisher("projects/demo/topics/orders").Publish(ctx, &pubsub.Message{
+    Data: []byte("order-42"),
+})
+```
+
+```sh
+./cloudrig fn logs on-message
+# google.pubsub.topic.publish: order-42
+```
+
+The trigger fires on the publish itself, not through a subscription: the
+function sees every message on the topic, whether or not anything is
+subscribed. A subscription is still what a `Receive` loop pulls from, and the
+two do not consume each other.
+
+---
+
 ## Use in a Go test
 
 No Docker, no daemon, one isolated instance per test:
@@ -328,7 +382,8 @@ cloudrig start [--port N] [--runner MODE] [--data-dir DIR]
 
 cloudrig fn deploy <name> --source DIR [--runtime R] [--entry-point F]
                           [--project P] [--region L] [--watch]
-                          [--trigger-bucket B] [--trigger-event E]
+                          [--trigger-bucket B] [--trigger-topic T]
+                          [--trigger-event E]
 cloudrig fn invoke <name> [--data JSON]
 cloudrig fn logs   <name> [-f]
 cloudrig fn list | describe <name> | delete <name>
@@ -376,7 +431,7 @@ versioning, signed URLs, persistence. Verified against the real Go client and
 `gcloud storage`.
 
 **Pub/Sub** — topics, subscriptions, publish, streaming pull, ack and nack,
-over gRPC.
+over gRPC, and `--trigger-topic` to run a function on a message.
 
 **Not yet** — the XML API, `gsutil`, ACLs, batch, Pub/Sub push subscriptions,
 gen2 functions, and every other GCP service. IAM policies are stored but never enforced. gRPC

@@ -99,7 +99,7 @@ usage:
   cloudrig %s [--port N] [--runner %v]
 
   cloudrig %s deploy <name> --source DIR [--runtime R] [--entry-point F]
-                            [--watch] [--trigger-bucket B]
+                            [--watch] [--trigger-bucket B] [--trigger-topic T]
   cloudrig %s list
   cloudrig %s describe <name>
   cloudrig %s delete <name>
@@ -116,6 +116,7 @@ fn flags:
   --entry-point F   handler to serve (Go: detected when there is only one)
   --watch           redeploy when the source changes
   --trigger-bucket B  run on changes to a Cloud Storage bucket
+  --trigger-topic T   run on messages published to a Pub/Sub topic
   --endpoint URL    emulator to talk to (default %s, env CLOUDRIG_ENDPOINT)
 
 fn deploy, list, describe and delete talk to a running emulator.

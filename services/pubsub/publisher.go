@@ -11,6 +11,7 @@ import (
 	"github.com/monirz/cloudrig/store"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/emptypb"
 )
 
@@ -89,27 +90,37 @@ func (p *Publisher) Publish(ctx context.Context, req *pubsubpb.PublishRequest) (
 	}
 
 	ids := make([]string, 0, len(req.GetMessages()))
+	published := make([]*pubsubpb.PubsubMessage, 0, len(req.GetMessages()))
+
 	p.svc.mu.Lock()
 	for _, msg := range req.GetMessages() {
 		id := p.svc.nextMessageID()
 		ids = append(ids, id)
 
+		stamped := &pubsubpb.PubsubMessage{
+			Data:        msg.GetData(),
+			Attributes:  msg.GetAttributes(),
+			MessageId:   id,
+			OrderingKey: msg.GetOrderingKey(),
+			PublishTime: timestampOf(p.svc.clk.Now()),
+		}
+		published = append(published, stamped)
+
 		// Each subscription gets its own copy, so acknowledging on one does
 		// not consume another's.
 		for _, sub := range subs {
-			delivered := &pubsubpb.PubsubMessage{
-				Data:        msg.GetData(),
-				Attributes:  msg.GetAttributes(),
-				MessageId:   id,
-				OrderingKey: msg.GetOrderingKey(),
-				PublishTime: timestampOf(p.svc.clk.Now()),
-			}
+			delivered := proto.Clone(stamped).(*pubsubpb.PubsubMessage)
 			p.svc.backlog[sub] = append(p.svc.backlog[sub], delivered)
 			p.svc.signal(sub)
 		}
 	}
 	p.svc.mu.Unlock()
 
+	// Announced after the lock is dropped: a triggered function must not run
+	// while the service that woke it is holding its own mutex.
+	for _, msg := range published {
+		p.svc.notify(ctx, req.GetTopic(), msg)
+	}
 	return &pubsubpb.PublishResponse{MessageIds: ids}, nil
 }
 

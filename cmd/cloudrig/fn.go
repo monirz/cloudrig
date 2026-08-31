@@ -16,6 +16,7 @@ import (
 
 	"github.com/monirz/cloudrig"
 	"github.com/monirz/cloudrig/functions"
+	"github.com/monirz/cloudrig/services/pubsub"
 	"github.com/monirz/cloudrig/services/storage"
 )
 
@@ -134,6 +135,7 @@ type deployFlags struct {
 	watch         bool
 	triggerEvent  string
 	triggerBucket string
+	triggerTopic  string
 }
 
 // fnDeploy sends a function to a running emulator.
@@ -151,6 +153,8 @@ func fnDeploy(args []string, env lookupEnv, stdout, stderr *os.File) error {
 	fs.BoolVar(&f.watch, "watch", false, "redeploy when the source changes")
 	fs.StringVar(&f.triggerBucket, "trigger-bucket", "",
 		"run on changes to this Cloud Storage bucket")
+	fs.StringVar(&f.triggerTopic, "trigger-topic", "",
+		"run on messages published to this Pub/Sub topic")
 	fs.StringVar(&f.triggerEvent, "trigger-event", "",
 		"the event type to run on (default: "+storage.EventFinalized+")")
 
@@ -245,18 +249,26 @@ func fnInvoke(args []string, env lookupEnv, stdout, stderr *os.File) error {
 	return nil
 }
 
-// trigger builds the event trigger from the deploy flags. Naming a bucket is
-// enough: the common case is an object being written, so that is the default
-// event.
+// trigger builds the event trigger from the deploy flags. Naming a resource is
+// enough: each kind has one obvious event — an object written, a message
+// published — so that is the default.
 func trigger(f deployFlags) functions.EventTrigger {
-	if f.triggerBucket == "" && f.triggerEvent == "" {
-		return functions.EventTrigger{}
+	switch {
+	case f.triggerTopic != "":
+		eventType := f.triggerEvent
+		if eventType == "" {
+			eventType = pubsub.EventPublish
+		}
+		return functions.EventTrigger{EventType: eventType, Resource: f.triggerTopic}
+
+	case f.triggerBucket != "", f.triggerEvent != "":
+		eventType := f.triggerEvent
+		if eventType == "" {
+			eventType = storage.EventFinalized
+		}
+		return functions.EventTrigger{EventType: eventType, Resource: f.triggerBucket}
 	}
-	eventType := f.triggerEvent
-	if eventType == "" {
-		eventType = storage.EventFinalized
-	}
-	return functions.EventTrigger{EventType: eventType, Resource: f.triggerBucket}
+	return functions.EventTrigger{}
 }
 
 // fnLogs prints a function's output, following it with -f until interrupted.

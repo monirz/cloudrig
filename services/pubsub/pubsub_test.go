@@ -1,6 +1,8 @@
 package pubsub
 
 import (
+	"encoding/base64"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -8,6 +10,7 @@ import (
 	"cloud.google.com/go/pubsub/v2/apiv1/pubsubpb"
 	"github.com/monirz/cloudrig/core/clock"
 	"github.com/monirz/cloudrig/store"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 var epoch = time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
@@ -154,5 +157,50 @@ func TestKeysAreNamespaced(t *testing.T) {
 	}
 	if !strings.HasPrefix(topicKey("projects/p/topics/x"), topicPrefix) {
 		t.Error("the topic key is not under the topic prefix")
+	}
+}
+
+// TestMessagePayloadIsGen1Shaped pins the envelope a first-generation function
+// reads. Data is base64 on the wire, so a handler that decodes it must find
+// something to decode.
+func TestMessagePayloadIsGen1Shaped(t *testing.T) {
+	msg := &pubsubpb.PubsubMessage{
+		Data:        []byte("order-42"),
+		Attributes:  map[string]string{"region": "eu"},
+		MessageId:   "7",
+		PublishTime: timestamppb.New(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)),
+	}
+
+	got := messagePayload(msg)
+	want := map[string]any{
+		"@type":       MessageType,
+		"data":        base64.StdEncoding.EncodeToString([]byte("order-42")),
+		"messageId":   "7",
+		"publishTime": "2026-01-01T00:00:00Z",
+		"attributes":  map[string]string{"region": "eu"},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("payload =\n%#v\nwant\n%#v", got, want)
+	}
+}
+
+// TestMessagePayloadOmitsEmptyAttributes keeps the envelope close to the real
+// one, which has no attributes key when a message carries none.
+func TestMessagePayloadOmitsEmptyAttributes(t *testing.T) {
+	got := messagePayload(&pubsubpb.PubsubMessage{Data: []byte("x")})
+	if _, ok := got["attributes"]; ok {
+		t.Errorf("attributes present for a message with none: %#v", got)
+	}
+}
+
+// TestSourceOfMatchesATopicTrigger is the join between the two packages: a
+// trigger scoped to a bare topic name has to match the source this builds.
+func TestSourceOfMatchesATopicTrigger(t *testing.T) {
+	src := SourceOf("projects/p/topics/orders")
+	if want := "//pubsub.googleapis.com/projects/p/topics/orders"; src != want {
+		t.Fatalf("SourceOf = %q, want %q", src, want)
+	}
+	if !strings.HasSuffix(src, "/orders") {
+		t.Errorf("a trigger on the bare name %q would not match %q", "orders", src)
 	}
 }
