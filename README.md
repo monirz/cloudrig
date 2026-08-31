@@ -501,6 +501,12 @@ emu.Functions().Deploy(ctx, functions.Function{...})
 emu.SyncEvents()
 ```
 
+`SyncEvents` waits for delivery — the handler has run and answered. It does
+**not** wait for the handler's output: a function is a child process whose
+stdout is drained by another goroutine, so a log line can arrive shortly
+after. Assert on a function's log by polling for what you expect, not by
+reading it once.
+
 Shutdown is registered with `t.Cleanup`. State is never persisted under
 `MustStart`.
 
