@@ -29,8 +29,14 @@ var forbidden = map[string]string{
 }
 
 // exempt lists directories allowed to touch the real clock.
+//
+// The rule is about the emulator's own code, which must read time through the
+// injected clock or a FakeClock cannot control it. An example is a client
+// program: it runs against the emulator rather than inside it, and reads the
+// wall clock like any application would.
 var exempt = []string{
 	"core/clock",
+	"examples",
 }
 
 func TestNoDirectTimeUse(t *testing.T) {
