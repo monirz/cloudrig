@@ -2,6 +2,11 @@ module github.com/monirz/cloudrig
 
 go 1.25.0
 
+// Pinned to the newest 1.25 patch: every vulnerability govulncheck found was
+// in the standard library, none in this module or its dependencies, so the
+// toolchain is what fixes them.
+toolchain go1.25.13
+
 require (
 	cloud.google.com/go/cloudtasks v1.19.0
 	cloud.google.com/go/firestore v1.25.0

@@ -977,6 +977,7 @@ cloudrig fn run <dir>      # starts its own emulator, no daemon
 
 ```sh
 make check              # build, vet, lint, gofmt, race — about 40s
+make vuln               # govulncheck, call paths only
 go test -short ./...    # skip the slow ones — about 6s
 
 go test -v ./test/conformance/          # the real cloud.google.com/go client
