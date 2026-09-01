@@ -50,6 +50,7 @@ Each one is a sequence you can paste, in order, against a running emulator.
 | | |
 |---|---|
 | [Architecture](ARCHITECTURE.md) | How cloudrig is put together |
+| [Unsupported](UNSUPPORTED.md) | Every gap, in one place |
 | [Commands](#commands) | Every subcommand and flag |
 | [Test](#test) | Running cloudrig's own suite |
 | [What works](#what-works) | Supported surface, and what is missing |
@@ -813,7 +814,8 @@ hardlinking payloads.
 **Not yet** — the XML API, `gsutil`, ACLs, batch, Pub/Sub push subscriptions,
 gen2 functions, and every other GCP service. IAM policies are stored but never
 enforced. Cloud Run and anything else container-backed would need a container
-runtime and is not emulated. See [ARCHITECTURE.md](ARCHITECTURE.md).
+runtime and is not emulated. [UNSUPPORTED.md](UNSUPPORTED.md) is the full list,
+including what is accepted and ignored.
 
 ---
 
