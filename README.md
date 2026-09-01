@@ -43,6 +43,7 @@ Each one is a sequence you can paste, in order, against a running emulator.
 | [Fork state](#fork-state) | Branch an emulator, cheaply, mid-test |
 | [Firestore](#firestore) | Documents and queries, over gRPC |
 | [Cloud Run](#cloud-run) | Deploy a container, and call it |
+| [Run a service without Docker](#run-a-service-without-docker) | The same service as a process |
 
 ## Reference
 
@@ -631,63 +632,102 @@ collection-group queries, and aggregations.
 
 ## Cloud Run
 
-**1. Point gcloud at the emulator.** Cloud Run is regional, and gcloud builds
-its endpoint by prefixing the region onto the hostname — an override of
-`localhost` becomes `us-central1-localhost`, which does not resolve.
-`cloudrig-env.sh` handles it:
+`examples/cloudrun` is a runnable service — an HTTP server on `$PORT`, which is
+all Cloud Run asks of your code.
+
+**1. Build the image.** `FROM scratch`, so nothing is pulled:
+
+```sh
+cd examples/cloudrun && ./build.sh && cd -
+```
+
+The script compiles for the *daemon's* architecture, not this machine's. They
+differ whenever Docker runs in a VM, and a mismatch shows up as an exec format
+error inside the container rather than at build time.
+
+**2. Point gcloud at the emulator:**
 
 ```sh
 export CLOUDSDK_CORE_PROJECT=cloudrig-local
-. ./cloudrig-env.sh          # sets run -> http://127.0.0.1.nip.io:4599/
+. ./cloudrig-env.sh
 ```
 
-**2. Deploy an image and call it:**
+Source it, do not pipe it — `. ./cloudrig-env.sh | tail` runs in a subshell and
+silently loses every export.
+
+Cloud Run is regional, and gcloud builds its endpoint by prefixing the region
+onto the hostname: an override of `localhost` becomes `us-central1-localhost`,
+which does not resolve. The script points it at `127.0.0.1.nip.io` instead,
+whose wildcard DNS answers the prefixed name with `127.0.0.1`.
+
+**3. Deploy, and call it:**
 
 ```sh
-gcloud run deploy hello --image=my-image:latest --region=us-central1 --quiet
+gcloud run deploy hello --image=cloudrun-demo:latest --region=us-central1 \
+  --memory=256Mi --cpu=500m --quiet
 
-# Service [hello] revision [hello-00001-cri] has been deployed
-# Service URL: http://us-central1-127.0.0.1.nip.io:4599/us-central1-cloudrig-local/hello
+curl "$(gcloud run services describe hello --region=us-central1 \
+        --format='value(status.url)')/"
+# hello from hello (hello-00001-cri)
+```
 
-curl "$(gcloud run services describe hello --region=us-central1 --format='value(status.url)')"
+That is a real container. The limits are real too:
 
+```sh
+docker inspect $(docker ps -q --filter label=cloudrig.service=hello) \
+  --format 'memory={{.HostConfig.Memory}} nanocpus={{.HostConfig.NanoCpus}}'
+# memory=268435456 nanocpus=500000000      # exactly 256Mi and half a core
+```
+
+A service that would be killed for exceeding its memory is killed here too.
+`--concurrency` and `--max-instances` are accepted and **ignored**: one
+container is one container, and faking local autoscaling would teach the wrong
+thing.
+
+**4. The rest of the lifecycle:**
+
+```sh
 gcloud run services list
-gcloud run services update hello --region=us-central1 --update-env-vars=A=1
-gcloud run revisions list --region=us-central1
+gcloud run services update hello --region=us-central1 --update-env-vars=TIER=gold
+gcloud run revisions list --region=us-central1     # hello-00002-cri
 gcloud run services delete hello --region=us-central1 --quiet
 ```
 
-That runs a real container through Docker, with `PORT`, `K_SERVICE` and
-`K_REVISION` set as Cloud Run sets them.
+`delete` removes the container.
 
-`--memory` and `--cpu` are applied to the container, so a service that would be
-killed for exceeding its memory is killed here too:
+---
 
-```sh
-gcloud run deploy hello --image=my-image:latest --region=us-central1 \
-  --memory=512Mi --cpu=500m
-```
+## Run a service without Docker
 
-`--concurrency` and `--max-instances` are accepted and **ignored**: one
-container is one container, and local autoscaling would teach the wrong thing.
-
-**A source directory instead of an image** runs as a process — no Docker, no
-build, much faster:
+The same example, deployed as a source directory instead of an image, runs as a
+process — no build, no container:
 
 ```go
 emu.CloudRun().Deploy(ctx, cloudrun.Service{
-    Name:   "hello",
-    Source: "./my-service",   // an HTTP server listening on $PORT
+    Name:   "fast",
+    Source: "./examples/cloudrun",
 }, cloudrun.Options{})
 ```
 
-That is a convenience, not an emulation of Cloud Run: it honours the contract
-your code sees, but nothing about the container is exercised. Use an image when
-the container is what you are testing.
+Over HTTP, `source:` in the image field means the same thing:
+
+```sh
+curl -X POST localhost:4599/apis/serving.knative.dev/v1/namespaces/cloudrig-local/services \
+  -H 'Content-Type: application/json' \
+  -d "{\"metadata\":{\"name\":\"fast\"},\"spec\":{\"template\":{\"spec\":{\"containers\":
+      [{\"image\":\"source:$PWD/examples/cloudrun\"}]}}}}"
+
+curl localhost:4599/us-central1-cloudrig-local/fast/
+# hello from fast (fast-00001-cri)
+```
+
+Same answer, no container used. It honours the contract your code sees, but
+nothing about your image is exercised — use it while iterating on code, and an
+image when the container is what you are testing.
 
 Only one revision exists at a time: a deploy replaces what was running rather
 than keeping the old container alive, so `revisions list` shows the current one
-and there is no history to roll back to.
+and there is nothing to roll back to.
 
 Not supported: building an image from source (`gcloud run deploy --source`),
 traffic splitting between revisions, concurrency and instance scaling, jobs, and
