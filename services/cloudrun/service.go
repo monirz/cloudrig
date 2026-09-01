@@ -23,6 +23,13 @@ type Service struct {
 	// Env is what the service sees, as KEY=VALUE.
 	Env []string
 
+	// Memory and CPU are Kubernetes quantities, as gcloud sends them:
+	// "512Mi", "1Gi", "1", "500m". They are applied to the container, so a
+	// service that would be killed for exceeding its memory is killed here
+	// too. They mean nothing to a source deploy, which is not a container.
+	Memory string
+	CPU    string
+
 	// Generation counts deploys, so each one names a new revision the way
 	// Cloud Run does.
 	Generation int

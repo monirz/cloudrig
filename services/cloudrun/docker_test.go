@@ -240,3 +240,45 @@ func TestDeployNeedsAnImageOrSource(t *testing.T) {
 		t.Errorf("err = %v, want it to reject an image and a source together", err)
 	}
 }
+
+// TestContainerResourceLimits is why this exists: gcloud accepts --memory, and
+// a limit that is accepted but not applied means a service that would be
+// killed in production runs happily here.
+func TestContainerResourceLimits(t *testing.T) {
+	if testing.Short() {
+		t.Skip("builds an image")
+	}
+	dockerOrSkip(t)
+	t.Parallel()
+
+	tag := testImage(t)
+	r := registry(t)
+
+	if _, err := r.Deploy(context.Background(), cloudrun.Service{
+		Name:   "limited",
+		Image:  tag,
+		Memory: "512Mi",
+		CPU:    "500m",
+	}, cloudrun.Options{}); err != nil {
+		t.Fatalf("Deploy: %v", err)
+	}
+
+	cli, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cli.Close()
+
+	inst, _ := r.Instance("", "", "limited")
+	inspected, err := cli.ContainerInspect(context.Background(), inst.ContainerID())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if got := inspected.HostConfig.Memory; got != 512<<20 {
+		t.Errorf("memory = %d, want %d — the limit never reached the container", got, 512<<20)
+	}
+	if got := inspected.HostConfig.NanoCPUs; got != 5e8 {
+		t.Errorf("cpu = %d, want 5e8", got)
+	}
+}

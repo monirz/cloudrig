@@ -71,6 +71,19 @@ func startContainer(ctx context.Context, svc Service, o Options) (*Instance, err
 		return nil, err
 	}
 
+	// Applied to the container, so a service that would be killed for
+	// exceeding its memory is killed here too. Accepting the flag and
+	// dropping it is worse than refusing it: the deploy looks right and the
+	// limit silently is not there.
+	memory, err := memoryBytes(svc.Memory)
+	if err != nil {
+		return nil, fmt.Errorf("service %s: %w", svc.Name, err)
+	}
+	cpus, err := cpuNanos(svc.CPU)
+	if err != nil {
+		return nil, fmt.Errorf("service %s: %w", svc.Name, err)
+	}
+
 	port := nat.Port(strconv.Itoa(ContainerPort) + "/tcp")
 	created, err := cli.ContainerCreate(ctx,
 		&container.Config{
@@ -89,6 +102,7 @@ func startContainer(ctx context.Context, svc Service, o Options) (*Instance, err
 			// several services never collide.
 			PortBindings: nat.PortMap{port: []nat.PortBinding{{HostIP: "127.0.0.1", HostPort: "0"}}},
 			AutoRemove:   false,
+			Resources:    container.Resources{Memory: memory, NanoCPUs: cpus},
 		},
 		nil, nil, "")
 	if err != nil {

@@ -223,6 +223,10 @@ func (i *Instance) Revision() string      { return i.revision }
 func (i *Instance) URL() string           { return "http://" + i.addr }
 func (i *Instance) LogSnapshot() []string { return i.logs.Snapshot() }
 
+// ContainerID is the container behind a service, or empty for one running as a
+// process.
+func (i *Instance) ContainerID() string { return i.containerID }
+
 // Stop kills the service and removes what building it left behind.
 func (i *Instance) Stop() error {
 	i.stopOnce.Do(func() {

@@ -37,9 +37,16 @@ type knativeTemplateSpec struct {
 }
 
 type knativeContainer struct {
-	Image string        `json:"image,omitempty"`
-	Env   []knativeEnv  `json:"env,omitempty"`
-	Ports []knativePort `json:"ports,omitempty"`
+	Image     string            `json:"image,omitempty"`
+	Env       []knativeEnv      `json:"env,omitempty"`
+	Ports     []knativePort     `json:"ports,omitempty"`
+	Resources *knativeResources `json:"resources,omitempty"`
+}
+
+// knativeResources is where --memory and --cpu arrive, as Kubernetes quantity
+// strings: "512Mi", "1", "500m".
+type knativeResources struct {
+	Limits map[string]string `json:"limits,omitempty"`
 }
 
 type knativeEnv struct {
@@ -98,6 +105,16 @@ const SourcePrefix = "source:"
 // and reports the URL from here.
 func toKnative(svc Service, url string) knativeService {
 	container := knativeContainer{Image: svc.Image}
+	if svc.Memory != "" || svc.CPU != "" {
+		limits := map[string]string{}
+		if svc.Memory != "" {
+			limits["memory"] = svc.Memory
+		}
+		if svc.CPU != "" {
+			limits["cpu"] = svc.CPU
+		}
+		container.Resources = &knativeResources{Limits: limits}
+	}
 	for _, kv := range svc.Env {
 		if name, value, ok := splitEnv(kv); ok {
 			container.Env = append(container.Env, knativeEnv{Name: name, Value: value})
@@ -167,6 +184,9 @@ func fromKnative(k knativeService, project, location string) Service {
 		for _, e := range containers[0].Env {
 			svc.Env = append(svc.Env, e.Name+"="+e.Value)
 		}
+		if limits := containers[0].Resources.GetLimits(); limits != nil {
+			svc.Memory, svc.CPU = limits["memory"], limits["cpu"]
+		}
 	}
 	return svc
 }
@@ -211,4 +231,12 @@ func toRevision(svc Service) knativeRevision {
 		Spec:   knativeTemplateSpec{Containers: []knativeContainer{{Image: image}}},
 		Status: &knativeStatus{Conditions: []knativeCondition{{Type: "Ready", Status: "True"}}},
 	}
+}
+
+// GetLimits reads the limits from a resources block that may be absent.
+func (r *knativeResources) GetLimits() map[string]string {
+	if r == nil {
+		return nil
+	}
+	return r.Limits
 }

@@ -660,6 +660,17 @@ gcloud run services delete hello --region=us-central1 --quiet
 That runs a real container through Docker, with `PORT`, `K_SERVICE` and
 `K_REVISION` set as Cloud Run sets them.
 
+`--memory` and `--cpu` are applied to the container, so a service that would be
+killed for exceeding its memory is killed here too:
+
+```sh
+gcloud run deploy hello --image=my-image:latest --region=us-central1 \
+  --memory=512Mi --cpu=500m
+```
+
+`--concurrency` and `--max-instances` are accepted and **ignored**: one
+container is one container, and local autoscaling would teach the wrong thing.
+
 **A source directory instead of an image** runs as a process — no Docker, no
 build, much faster:
 
@@ -679,7 +690,7 @@ than keeping the old container alive, so `revisions list` shows the current one
 and there is no history to roll back to.
 
 Not supported: building an image from source (`gcloud run deploy --source`),
-traffic splitting between revisions, concurrency and CPU limits, jobs, and
+traffic splitting between revisions, concurrency and instance scaling, jobs, and
 authenticated invocation — every IAM permission asked for is granted, because
 there is no authentication here to enforce.
 
