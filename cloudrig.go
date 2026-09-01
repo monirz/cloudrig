@@ -144,7 +144,7 @@ func Start(ctx context.Context, o Options) (*Emulator, error) {
 	fsvc := firestore.New(stack.kvStore, clk)
 	smsvc := secretmanager.New(stack.kvStore, clk)
 	runReg := cloudrun.NewRegistry()
-	handler, closeAPIs := newHandler(clk, o, reg, runReg, stack.svc, psvc, newGRPC(psvc, fsvc, smsvc), flt)
+	handler, closeAPIs := newHandler(clk, o, reg, runReg, stack.svc, psvc, smsvc, newGRPC(psvc, fsvc, smsvc), flt)
 	srv := &http.Server{
 		Handler:   handler,
 		Protocols: transport.Protocols(), // HTTP/1.1 and h2c on one port
@@ -282,7 +282,7 @@ func serveForTest(t testing.TB, o Options, stack storageStack) *Emulator {
 	smsvc := secretmanager.New(stack.kvStore, o.Clock)
 	runReg := cloudrun.NewRegistry()
 	t.Cleanup(runReg.StopAll)
-	handler, closeAPIs := newHandler(o.Clock, o, reg, runReg, stack.svc, psvc, newGRPC(psvc, fsvc, smsvc), flt)
+	handler, closeAPIs := newHandler(o.Clock, o, reg, runReg, stack.svc, psvc, smsvc, newGRPC(psvc, fsvc, smsvc), flt)
 	t.Cleanup(closeAPIs)
 
 	srv := httptest.NewUnstartedServer(handler)
@@ -361,12 +361,12 @@ type matcher interface {
 }
 
 // routeV1 gives a request to the first service with a route for it, and to
-// Cloud Functions otherwise. Pub/Sub, Cloud Run and Cloud Functions all serve
-// /v1/projects/{project}/..., so the prefix cannot separate them.
-func routeV1(first, second matcher, fallback http.Handler) http.Handler {
+// fallback otherwise. Four services now serve /v1/projects/{project}/..., so
+// the mount prefix cannot separate them: each is asked in turn.
+func routeV1(fallback http.Handler, services ...matcher) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		path := r.URL.EscapedPath()
-		for _, m := range []matcher{first, second} {
+		for _, m := range services {
 			if m.Matches(r.Method, path) {
 				m.ServeHTTP(w, r)
 				return
@@ -378,7 +378,7 @@ func routeV1(first, second matcher, fallback http.Handler) http.Handler {
 
 // newHandler builds the request surface and returns what it must tear down:
 // the API objects own temporary directories, and nothing else can reach them.
-func newHandler(clk clock.Clock, o Options, reg *functions.Registry, runReg *cloudrun.Registry, gcs *storage.Service, psvc *pubsub.Service, grpcSrv http.Handler, flt *faults.Set) (http.Handler, func()) {
+func newHandler(clk clock.Clock, o Options, reg *functions.Registry, runReg *cloudrun.Registry, gcs *storage.Service, psvc *pubsub.Service, smsvc *secretmanager.Service, grpcSrv http.Handler, flt *faults.Set) (http.Handler, func()) {
 	configured := o.Runner
 	if configured == "" {
 		configured = "auto"
@@ -407,7 +407,8 @@ func newHandler(clk clock.Clock, o Options, reg *functions.Registry, runReg *clo
 	for _, prefix := range cloudrun.Prefixes {
 		mounts[prefix] = runAPI
 	}
-	mounts["/v1/"] = routeV1(pubsub.NewREST(psvc), runAPI, api)
+	mounts["/v1/"] = routeV1(api,
+		pubsub.NewREST(psvc), runAPI, secretmanager.NewREST(smsvc))
 
 	var gcsAPI http.Handler
 	if gcs != nil {

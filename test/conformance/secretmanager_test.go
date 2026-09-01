@@ -1,7 +1,11 @@
 package conformance
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"io"
+	"net/http"
 	"testing"
 
 	secretmanager "cloud.google.com/go/secretmanager/apiv1"
@@ -272,5 +276,144 @@ func TestListSecretsAndVersions(t *testing.T) {
 	}
 	if count != 2 {
 		t.Errorf("versions = %d, want 2", count)
+	}
+}
+
+// post sends a JSON request to the emulator and returns the decoded reply.
+func post(t *testing.T, method, url, body string) (int, map[string]any) {
+	t.Helper()
+
+	var rdr io.Reader
+	if body != "" {
+		rdr = bytes.NewBufferString(body)
+	}
+	req, err := http.NewRequest(method, url, rdr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	raw, _ := io.ReadAll(resp.Body)
+	out := map[string]any{}
+	if len(bytes.TrimSpace(raw)) > 0 {
+		if err := json.Unmarshal(raw, &out); err != nil {
+			t.Fatalf("%s %s: body %q: %v", method, url, raw, err)
+		}
+	}
+	return resp.StatusCode, out
+}
+
+// TestSecretRESTLifecycle is the surface gcloud uses: create, add a version,
+// read it back, and the :verb forms that ride on the name segment.
+func TestSecretRESTLifecycle(t *testing.T) {
+	t.Parallel()
+
+	emu := cloudrig.MustStart(t)
+	base := emu.BaseURL() + "/v1/projects/p/secrets"
+
+	if code, _ := post(t, http.MethodPost, base+"?secretId=cfg",
+		`{"replication":{"automatic":{}}}`); code != http.StatusOK {
+		t.Fatalf("create = %d", code)
+	}
+
+	code, version := post(t, http.MethodPost, base+"/cfg:addVersion",
+		`{"payload":{"data":"czNjcjN0"}}`)
+	if code != http.StatusOK {
+		t.Fatalf("addVersion = %d %v", code, version)
+	}
+	if version["name"] != "projects/p/secrets/cfg/versions/1" {
+		t.Errorf("version name = %v", version["name"])
+	}
+
+	code, accessed := post(t, http.MethodGet, base+"/cfg/versions/latest:access", "")
+	if code != http.StatusOK {
+		t.Fatalf("access = %d %v", code, accessed)
+	}
+	payload, _ := accessed["payload"].(map[string]any)
+	if payload["data"] != "czNjcjN0" {
+		t.Errorf("payload = %v", payload)
+	}
+
+	if code, _ := post(t, http.MethodPost, base+"/cfg/versions/1:disable", ""); code != http.StatusOK {
+		t.Errorf("disable = %d", code)
+	}
+	// A disabled version refuses to be read, and there is no other version to
+	// fall back to.
+	if code, _ := post(t, http.MethodGet, base+"/cfg/versions/1:access", ""); code == http.StatusOK {
+		t.Error("a disabled version was readable")
+	}
+
+	if code, _ := post(t, http.MethodDelete, base+"/cfg", ""); code != http.StatusOK {
+		t.Errorf("delete = %d", code)
+	}
+	if code, _ := post(t, http.MethodGet, base+"/cfg", ""); code != http.StatusNotFound {
+		t.Errorf("get after delete = %d", code)
+	}
+}
+
+// TestSecretChecksumIsConfirmed holds a field gcloud reads to decide whether
+// the value it sent arrived intact. Without it every `gcloud secrets versions
+// add` reports data corruption, however intact the value is.
+func TestSecretChecksumIsConfirmed(t *testing.T) {
+	t.Parallel()
+
+	emu := cloudrig.MustStart(t)
+	base := emu.BaseURL() + "/v1/projects/p/secrets"
+	post(t, http.MethodPost, base+"?secretId=summed", `{"replication":{"automatic":{}}}`)
+
+	// crc32c("s3cr3t"), Castagnoli.
+	code, version := post(t, http.MethodPost, base+"/summed:addVersion",
+		`{"payload":{"data":"czNjcjN0","dataCrc32c":"825573743"}}`)
+	if code != http.StatusOK {
+		t.Fatalf("addVersion = %d %v", code, version)
+	}
+	if version["clientSpecifiedPayloadChecksum"] != true {
+		t.Errorf("the checksum was not confirmed back: %v", version)
+	}
+
+	// A checksum that does not match the data is refused.
+	if code, _ := post(t, http.MethodPost, base+"/summed:addVersion",
+		`{"payload":{"data":"czNjcjN0","dataCrc32c":"1"}}`); code != http.StatusBadRequest {
+		t.Errorf("a wrong checksum = %d, want 400", code)
+	}
+}
+
+// TestSecretRESTAndGRPCShareState is the claim worth holding: one service
+// behind two APIs.
+func TestSecretRESTAndGRPCShareState(t *testing.T) {
+	t.Parallel()
+
+	emu := cloudrig.MustStart(t)
+	ctx := context.Background()
+
+	c, err := secretmanager.NewClient(ctx,
+		option.WithEndpoint(emu.Endpoint()),
+		option.WithoutAuthentication(),
+		option.WithGRPCDialOption(grpc.WithTransportCredentials(insecure.NewCredentials())),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = c.Close() })
+
+	// Made over REST, the way gcloud would.
+	base := emu.BaseURL() + "/v1/projects/test-project/secrets"
+	post(t, http.MethodPost, base+"?secretId=shared", `{"replication":{"automatic":{}}}`)
+	post(t, http.MethodPost, base+"/shared:addVersion", `{"payload":{"data":"czNjcjN0"}}`)
+
+	got, err := c.AccessSecretVersion(ctx, &secretmanagerpb.AccessSecretVersionRequest{
+		Name: "projects/test-project/secrets/shared/versions/latest",
+	})
+	if err != nil {
+		t.Fatalf("a secret made over REST is invisible to gRPC: %v", err)
+	}
+	if string(got.GetPayload().GetData()) != "s3cr3t" {
+		t.Errorf("value = %q", got.GetPayload().GetData())
 	}
 }

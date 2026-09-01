@@ -83,8 +83,8 @@ Secret Manager:
 
 - IAM policies on secrets, user-managed replication, CMEK, rotation schedules,
   expiry, and version aliases other than `latest`.
-- `UpdateSecret` and the REST surface gcloud uses: the Go client speaks gRPC,
-  which is what is served. `gcloud secrets` is not supported yet.
+- `UpdateSecret`, so `gcloud secrets update` fails. Everything else `gcloud
+  secrets` does is served.
 
 Cloud Run:
 

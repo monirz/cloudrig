@@ -653,6 +653,23 @@ got, _ := c.AccessSecretVersion(ctx, &secretmanagerpb.AccessSecretVersionRequest
 })
 ```
 
+`gcloud secrets` works against it too — the Go client speaks gRPC, gcloud
+speaks REST, and both reach the same service:
+
+```sh
+export CLOUDSDK_CORE_PROJECT=cloudrig-local
+. ./cloudrig-env.sh
+
+gcloud secrets create api-key --replication-policy=automatic
+printf 's3cr3t' | gcloud secrets versions add api-key --data-file=-
+gcloud secrets versions access latest --secret=api-key
+# s3cr3t
+
+gcloud secrets versions disable 1 --secret=api-key
+gcloud secrets versions list api-key
+gcloud secrets delete api-key
+```
+
 A secret is a container; the value lives in numbered versions beneath it, and
 `latest` is an alias for the newest one still enabled. Rotating a secret adds a
 version, and code reading `latest` picks it up without changing.
@@ -662,8 +679,9 @@ rotation that went wrong stops serving the bad value. A disabled version still
 exists and refuses to be read; a destroyed one also loses its bytes, keeps its
 number, and cannot be brought back.
 
-Not supported: IAM policies on secrets, user-managed replication, CMEK,
-rotation schedules, expiry, and version aliases other than `latest`.
+Not supported: IAM policies on secrets, `gcloud secrets update`, user-managed
+replication, CMEK, rotation schedules, expiry, and version aliases other than
+`latest`.
 
 ---
 
@@ -836,7 +854,8 @@ deadline expiry, and `--trigger-topic` to run a function on a message. gRPC for
 the client libraries, REST for Terraform, one service behind both.
 
 **Secret Manager** — secrets, versions, the `latest` alias, and disable,
-enable and destroy, over gRPC.
+enable and destroy. gRPC for the client libraries, REST for `gcloud secrets`,
+one service behind both.
 
 **Cloud Run** — deploy an image and it runs as a container through Docker,
 driven by real `gcloud run`. A source directory runs as a process instead.

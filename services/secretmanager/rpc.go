@@ -112,8 +112,14 @@ func (s *Service) AddSecretVersion(ctx context.Context, req *secretmanagerpb.Add
 	}
 
 	payload := req.GetPayload().GetData()
-	if got := req.GetPayload().GetDataCrc32C(); got != 0 {
-		if want := int64(crc32.Checksum(payload, crc32.MakeTable(crc32.Castagnoli))); got != want {
+
+	// A client that sent a checksum is told its checksum was honoured. gcloud
+	// reads this back and reports data corruption if it is missing, however
+	// intact the value actually is.
+	checked := req.GetPayload().DataCrc32C != nil
+	if checked {
+		want := int64(crc32.Checksum(payload, crc32.MakeTable(crc32.Castagnoli)))
+		if req.GetPayload().GetDataCrc32C() != want {
 			return nil, status.Error(codes.InvalidArgument,
 				"the payload checksum does not match its data")
 		}
@@ -131,6 +137,10 @@ func (s *Service) AddSecretVersion(ctx context.Context, req *secretmanagerpb.Add
 		Name:       req.GetParent() + "/versions/" + strconv.FormatInt(next, 10),
 		CreateTime: timestamppb.New(s.clk.Now()),
 		State:      secretmanagerpb.SecretVersion_ENABLED,
+		// Confirms back that the checksum was honoured. gcloud reads this and
+		// reports data corruption when it is missing, however intact the
+		// value actually is.
+		ClientSpecifiedPayloadChecksum: checked,
 		ReplicationStatus: &secretmanagerpb.ReplicationStatus{
 			ReplicationStatus: &secretmanagerpb.ReplicationStatus_Automatic{
 				Automatic: &secretmanagerpb.ReplicationStatus_AutomaticStatus{},
