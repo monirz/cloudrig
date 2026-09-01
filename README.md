@@ -638,12 +638,17 @@ all Cloud Run asks of your code.
 **1. Build the image.** `FROM scratch`, so nothing is pulled:
 
 ```sh
-cd examples/cloudrun && ./build.sh && cd -
-```
+cd examples/cloudrun
 
-The script compiles for the *daemon's* architecture, not this machine's. They
-differ whenever Docker runs in a VM, and a mismatch shows up as an exec format
-error inside the container rather than at build time.
+# For the daemon's architecture, not this machine's: they differ whenever
+# Docker runs in a VM, and a mismatch is an exec format error inside the
+# container rather than a build failure.
+ARCH=$(docker info --format '{{.Architecture}}' | sed 's/aarch64/arm64/;s/x86_64/amd64/')
+
+CGO_ENABLED=0 GOOS=linux GOARCH=$ARCH GOWORK=off go build -o server .
+docker build -t cloudrun-demo:latest .
+rm server && cd -
+```
 
 **2. Point gcloud at the emulator:**
 
