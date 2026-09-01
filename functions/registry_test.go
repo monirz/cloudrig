@@ -620,7 +620,8 @@ func TestTriggerFires(t *testing.T) {
 	})
 	bus.Sync()
 
-	if got := strings.Join(inst.LogSnapshot(), "\n"); !strings.Contains(got, "DELIVERY 1") {
+	got := awaitLog(t, inst, func(log string) bool { return strings.Contains(log, "DELIVERY 1") })
+	if !strings.Contains(got, "DELIVERY 1") {
 		t.Errorf("the function was not delivered to; its log:\n%s", got)
 	}
 }
@@ -688,8 +689,10 @@ func TestTriggerRetries(t *testing.T) {
 	bus.Publish(context.Background(), events.Event{Type: "e", Time: epoch})
 	drain(t, bus, clk)
 
-	deliveries := strings.Count(strings.Join(inst.LogSnapshot(), "\n"), "DELIVERY")
-	if deliveries != 3 {
+	logged := awaitLog(t, inst, func(log string) bool {
+		return strings.Count(log, "DELIVERY") >= 3
+	})
+	if deliveries := strings.Count(logged, "DELIVERY"); deliveries != 3 {
 		t.Errorf("the function saw %d deliveries, want 3 (two failures then success)", deliveries)
 	}
 	if !strings.Contains(log.String(), "delivered on attempt 3") {
@@ -722,7 +725,10 @@ func TestTriggerGivesUp(t *testing.T) {
 	drain(t, bus, clk)
 
 	// Bounded: an event that never succeeds must not be retried forever.
-	if got := strings.Count(strings.Join(inst.LogSnapshot(), "\n"), "DELIVERY"); got != functions.MaxDeliveryAttempts {
+	logged := awaitLog(t, inst, func(log string) bool {
+		return strings.Count(log, "DELIVERY") >= functions.MaxDeliveryAttempts
+	})
+	if got := strings.Count(logged, "DELIVERY"); got != functions.MaxDeliveryAttempts {
 		t.Errorf("the function saw %d deliveries, want %d", got, functions.MaxDeliveryAttempts)
 	}
 	if !strings.Contains(log.String(), "giving up") {
@@ -752,5 +758,28 @@ func drain(t *testing.T, bus *events.Bus, clk *clock.FakeClock) {
 			clk.Advance(functions.RetryBackoff * 64)
 			time.Sleep(time.Millisecond)
 		}
+	}
+}
+
+// awaitLog returns a function's log once want holds, or after a deadline.
+//
+// Delivery being finished does not mean the function's output has arrived:
+// a function is a child process, its stdout is a pipe, and the goroutine
+// draining that pipe runs after the handler has answered. On an idle machine
+// the gap is invisible; under load it is wide enough to read an empty log,
+// which is how this failed in CI and never here.
+//
+// It returns whatever it has on timeout, so a real failure still prints the
+// log rather than a bare deadline.
+func awaitLog(t *testing.T, inst *functions.Instance, want func(string) bool) string {
+	t.Helper()
+
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		logged := strings.Join(inst.LogSnapshot(), "\n")
+		if want(logged) || time.Now().After(deadline) {
+			return logged
+		}
+		time.Sleep(5 * time.Millisecond)
 	}
 }

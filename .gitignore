@@ -6,6 +6,7 @@ go.work.sum
 # Build output
 /cloudrig
 /pubsub
+examples/cloudrun/server
 
 # Working notes and briefs, not part of the published module.
 .claude/

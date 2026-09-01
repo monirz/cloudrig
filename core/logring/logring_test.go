@@ -1,4 +1,4 @@
-package functions
+package logring
 
 import (
 	"strings"
@@ -25,7 +25,7 @@ func TestLogRingSplitsLines(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			ring := newLogRing(100)
+			ring := New(100)
 			for _, w := range tc.writes {
 				if _, err := ring.Write([]byte(w)); err != nil {
 					t.Fatal(err)
@@ -42,7 +42,7 @@ func TestLogRingIsBounded(t *testing.T) {
 	t.Parallel()
 
 	// A chatty function must not grow the emulator without bound.
-	ring := newLogRing(3)
+	ring := New(3)
 	for _, line := range []string{"1", "2", "3", "4", "5"} {
 		ring.Write([]byte(line + "\n"))
 	}
@@ -54,7 +54,7 @@ func TestLogRingIsBounded(t *testing.T) {
 func TestLogRingTail(t *testing.T) {
 	t.Parallel()
 
-	ring := newLogRing(100)
+	ring := New(100)
 	for _, line := range []string{"a", "b", "c"} {
 		ring.Write([]byte(line + "\n"))
 	}
@@ -69,7 +69,7 @@ func TestLogRingTail(t *testing.T) {
 func TestLogRingFollow(t *testing.T) {
 	t.Parallel()
 
-	ring := newLogRing(100)
+	ring := New(100)
 	ring.Write([]byte("before\n"))
 
 	lines, stop := ring.Follow()
@@ -98,7 +98,7 @@ func TestLogRingFollow(t *testing.T) {
 func TestLogRingStopIsIdempotent(t *testing.T) {
 	t.Parallel()
 
-	ring := newLogRing(10)
+	ring := New(10)
 	_, stop := ring.Follow()
 	stop()
 	stop()
@@ -109,7 +109,7 @@ func TestLogRingDoesNotBlockOnASlowFollower(t *testing.T) {
 
 	// A follower that never reads must lose lines rather than stall the
 	// function that is producing them.
-	ring := newLogRing(10)
+	ring := New(10)
 	_, stop := ring.Follow()
 	defer stop()
 
@@ -130,7 +130,7 @@ func TestLogRingDoesNotBlockOnASlowFollower(t *testing.T) {
 func TestLogRingIsConcurrencySafe(t *testing.T) {
 	t.Parallel()
 
-	ring := newLogRing(100)
+	ring := New(100)
 	var wg sync.WaitGroup
 	for i := 0; i < 16; i++ {
 		wg.Add(1)

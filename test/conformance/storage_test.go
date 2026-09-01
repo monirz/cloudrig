@@ -42,6 +42,20 @@ func client(t *testing.T) (*storage.Client, context.Context) {
 	t.Helper()
 	t.Parallel()
 
+	return newClient(t)
+}
+
+// serialClient is client without the parallelism, for a test that measures
+// something process-wide.
+func serialClient(t *testing.T) (*storage.Client, context.Context) {
+	t.Helper()
+
+	return newClient(t)
+}
+
+func newClient(t *testing.T) (*storage.Client, context.Context) {
+	t.Helper()
+
 	emu := cloudrig.MustStart(t)
 	bases.Store(t.Name(), emu.BaseURL())
 	t.Cleanup(func() { bases.Delete(t.Name()) })
@@ -766,7 +780,12 @@ func TestCopyIsMetadataOnly(t *testing.T) {
 		t.Skip("uploads tens of megabytes")
 	}
 
-	c, ctx := client(t)
+	// Deliberately not parallel. ReadMemStats counts the whole process, so a
+	// test measuring allocation cannot run beside tests that allocate: Go
+	// holds parallel tests until the sequential ones are done, which is what
+	// gives this one the process to itself. Run in parallel it read eight
+	// times the churn — all of it someone else's.
+	c, ctx := serialClient(t)
 	b := bucket(t, c, ctx, "cheap-copy")
 
 	const size = 32 << 20

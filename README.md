@@ -42,6 +42,8 @@ Each one is a sequence you can paste, in order, against a running emulator.
 | [Inject failures](#inject-failures) | Make a request fail, to test your error handling |
 | [Fork state](#fork-state) | Branch an emulator, cheaply, mid-test |
 | [Firestore](#firestore) | Documents and queries, over gRPC |
+| [Cloud Run](#cloud-run) | Deploy a container, and call it |
+| [Run a service without Docker](#run-a-service-without-docker) | The same service as a process |
 
 ## Reference
 
@@ -628,6 +630,115 @@ collection-group queries, and aggregations.
 
 ---
 
+## Cloud Run
+
+`examples/cloudrun` is a runnable service — an HTTP server on `$PORT`, which is
+all Cloud Run asks of your code.
+
+**1. Build the image.** `FROM scratch`, so nothing is pulled:
+
+```sh
+# For the daemon's architecture, not this machine's: they differ whenever
+# Docker runs in a VM, and a mismatch is an exec format error inside the
+# container rather than a build failure.
+ARCH=$(docker info --format '{{.Architecture}}' | sed 's/aarch64/arm64/;s/x86_64/amd64/')
+
+CGO_ENABLED=0 GOOS=linux GOARCH=$ARCH GOWORK=off \
+  go build -C examples/cloudrun -o server .
+docker build -t cloudrun-demo:latest examples/cloudrun
+rm examples/cloudrun/server
+```
+
+**2. Point gcloud at the emulator:**
+
+```sh
+export CLOUDSDK_CORE_PROJECT=cloudrig-local
+. ./cloudrig-env.sh
+```
+
+Source it, do not pipe it — `. ./cloudrig-env.sh | tail` runs in a subshell and
+silently loses every export.
+
+Cloud Run is regional, and gcloud builds its endpoint by prefixing the region
+onto the hostname: an override of `localhost` becomes `us-central1-localhost`,
+which does not resolve. The script points it at `127.0.0.1.nip.io` instead,
+whose wildcard DNS answers the prefixed name with `127.0.0.1`.
+
+**3. Deploy, and call it:**
+
+```sh
+gcloud run deploy hello --image=cloudrun-demo:latest --region=us-central1 \
+  --memory=256Mi --cpu=500m --quiet
+
+curl "$(gcloud run services describe hello --region=us-central1 \
+        --format='value(status.url)')/"
+# hello from hello (hello-00001-cri)
+```
+
+That is a real container. The limits are real too:
+
+```sh
+docker inspect $(docker ps -q --filter label=cloudrig.service=hello) \
+  --format 'memory={{.HostConfig.Memory}} nanocpus={{.HostConfig.NanoCpus}}'
+# memory=268435456 nanocpus=500000000      # exactly 256Mi and half a core
+```
+
+A service that would be killed for exceeding its memory is killed here too.
+`--concurrency` and `--max-instances` are accepted and **ignored**: one
+container is one container, and faking local autoscaling would teach the wrong
+thing.
+
+**4. The rest of the lifecycle:**
+
+```sh
+gcloud run services list
+gcloud run services update hello --region=us-central1 --update-env-vars=TIER=gold
+gcloud run revisions list --region=us-central1     # hello-00002-cri
+gcloud run services delete hello --region=us-central1 --quiet
+```
+
+`delete` removes the container.
+
+---
+
+## Run a service without Docker
+
+The same example, deployed as a source directory instead of an image, runs as a
+process — no build, no container:
+
+```go
+emu.CloudRun().Deploy(ctx, cloudrun.Service{
+    Name:   "fast",
+    Source: "./examples/cloudrun",
+}, cloudrun.Options{})
+```
+
+```sh
+curl localhost:4599/us-central1-cloudrig-local/fast/
+# hello from fast (fast-00001-cri)
+```
+
+Same answer, no container used.
+
+**Only from Go, never over the API.** A source directory names a path on the
+machine running the emulator, and the deploy runs a program from it. Accepting
+that from an HTTP request would let anything that can reach the port execute
+code as whoever started the emulator — the daemon binds every interface and
+enforces no IAM. A request carrying `source:` is refused. It honours the contract your code sees, but
+nothing about your image is exercised — use it while iterating on code, and an
+image when the container is what you are testing.
+
+Only one revision exists at a time: a deploy replaces what was running rather
+than keeping the old container alive, so `revisions list` shows the current one
+and there is nothing to roll back to.
+
+Not supported: building an image from source (`gcloud run deploy --source`),
+traffic splitting between revisions, concurrency and instance scaling, jobs, and
+authenticated invocation — every IAM permission asked for is granted, because
+there is no authentication here to enforce.
+
+---
+
 ## Commands
 
 ```
@@ -686,6 +797,9 @@ versioning, signed URLs, persistence. Verified against the real Go client and
 **Pub/Sub** — topics, subscriptions, publish, streaming pull, ack and nack,
 deadline expiry, and `--trigger-topic` to run a function on a message. gRPC for
 the client libraries, REST for Terraform, one service behind both.
+
+**Cloud Run** — deploy an image and it runs as a container through Docker,
+driven by real `gcloud run`. A source directory runs as a process instead.
 
 **Firestore** — documents, subcollections and queries over gRPC, found through
 `FIRESTORE_EMULATOR_HOST`.
