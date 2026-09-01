@@ -24,6 +24,7 @@ import (
 
 	"cloud.google.com/go/firestore/apiv1/firestorepb"
 	"cloud.google.com/go/pubsub/v2/apiv1/pubsubpb"
+	"cloud.google.com/go/secretmanager/apiv1/secretmanagerpb"
 	"github.com/monirz/cloudrig/core/clock"
 	"github.com/monirz/cloudrig/core/events"
 	"github.com/monirz/cloudrig/core/faults"
@@ -35,6 +36,7 @@ import (
 	"github.com/monirz/cloudrig/services/cloudrun"
 	"github.com/monirz/cloudrig/services/firestore"
 	"github.com/monirz/cloudrig/services/pubsub"
+	"github.com/monirz/cloudrig/services/secretmanager"
 	"github.com/monirz/cloudrig/services/storage"
 	"github.com/monirz/cloudrig/store"
 	"github.com/monirz/cloudrig/store/blob"
@@ -140,8 +142,9 @@ func Start(ctx context.Context, o Options) (*Emulator, error) {
 
 	psvc := pubsub.New(stack.kvStore, clk, bus)
 	fsvc := firestore.New(stack.kvStore, clk)
+	smsvc := secretmanager.New(stack.kvStore, clk)
 	runReg := cloudrun.NewRegistry()
-	handler, closeAPIs := newHandler(clk, o, reg, runReg, stack.svc, psvc, newGRPC(psvc, fsvc), flt)
+	handler, closeAPIs := newHandler(clk, o, reg, runReg, stack.svc, psvc, newGRPC(psvc, fsvc, smsvc), flt)
 	srv := &http.Server{
 		Handler:   handler,
 		Protocols: transport.Protocols(), // HTTP/1.1 and h2c on one port
@@ -276,9 +279,10 @@ func serveForTest(t testing.TB, o Options, stack storageStack) *Emulator {
 
 	psvc := pubsub.New(stack.kvStore, o.Clock, bus)
 	fsvc := firestore.New(stack.kvStore, o.Clock)
+	smsvc := secretmanager.New(stack.kvStore, o.Clock)
 	runReg := cloudrun.NewRegistry()
 	t.Cleanup(runReg.StopAll)
-	handler, closeAPIs := newHandler(o.Clock, o, reg, runReg, stack.svc, psvc, newGRPC(psvc, fsvc), flt)
+	handler, closeAPIs := newHandler(o.Clock, o, reg, runReg, stack.svc, psvc, newGRPC(psvc, fsvc, smsvc), flt)
 	t.Cleanup(closeAPIs)
 
 	srv := httptest.NewUnstartedServer(handler)
@@ -341,11 +345,12 @@ func (e *Emulator) Fork(t testing.TB) *Emulator {
 //
 // Requests reach it through the transport's h2c dispatch, so gRPC and REST
 // share the one port.
-func newGRPC(ps *pubsub.Service, fs *firestore.Service) *grpc.Server {
+func newGRPC(ps *pubsub.Service, fs *firestore.Service, sm *secretmanager.Service) *grpc.Server {
 	srv := grpc.NewServer()
 	pubsubpb.RegisterPublisherServer(srv, pubsub.NewPublisher(ps))
 	pubsubpb.RegisterSubscriberServer(srv, pubsub.NewSubscriber(ps))
 	firestorepb.RegisterFirestoreServer(srv, fs)
+	secretmanagerpb.RegisterSecretManagerServiceServer(srv, sm)
 	return srv
 }
 

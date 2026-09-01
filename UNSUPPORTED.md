@@ -79,6 +79,13 @@ Firestore:
   invalidated; that abort never happens here, so a test written to observe
   contention will pass here and fail in production.
 
+Secret Manager:
+
+- IAM policies on secrets, user-managed replication, CMEK, rotation schedules,
+  expiry, and version aliases other than `latest`.
+- `UpdateSecret` and the REST surface gcloud uses: the Go client speaks gRPC,
+  which is what is served. `gcloud secrets` is not supported yet.
+
 Cloud Run:
 
 - Building an image from source (`gcloud run deploy --source`). An image runs
