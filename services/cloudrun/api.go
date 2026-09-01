@@ -83,7 +83,11 @@ func (a *API) createKnative(w http.ResponseWriter, r *http.Request, p transport.
 			WithHTTPStatus(http.StatusBadRequest)
 	}
 
-	svc := fromKnative(body, p["namespace"], regionOf(r))
+	svc, err := fromKnative(body, p["namespace"], regionOf(r))
+	if err != nil {
+		return gerr.New(gerr.InvalidArgument, err.Error()).
+			WithHTTPStatus(http.StatusBadRequest)
+	}
 	if svc.Name == "" {
 		return gerr.New(gerr.InvalidArgument, "metadata.name is required").
 			WithHTTPStatus(http.StatusBadRequest)
@@ -102,7 +106,11 @@ func (a *API) replaceKnative(w http.ResponseWriter, r *http.Request, p transport
 			WithHTTPStatus(http.StatusBadRequest)
 	}
 
-	svc := fromKnative(body, p["namespace"], regionOf(r))
+	svc, err := fromKnative(body, p["namespace"], regionOf(r))
+	if err != nil {
+		return gerr.New(gerr.InvalidArgument, err.Error()).
+			WithHTTPStatus(http.StatusBadRequest)
+	}
 	if svc.Name == "" {
 		svc.Name = p["name"]
 	}

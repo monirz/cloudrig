@@ -713,19 +713,18 @@ emu.CloudRun().Deploy(ctx, cloudrun.Service{
 }, cloudrun.Options{})
 ```
 
-Over HTTP, `source:` in the image field means the same thing:
-
 ```sh
-curl -X POST localhost:4599/apis/serving.knative.dev/v1/namespaces/cloudrig-local/services \
-  -H 'Content-Type: application/json' \
-  -d "{\"metadata\":{\"name\":\"fast\"},\"spec\":{\"template\":{\"spec\":{\"containers\":
-      [{\"image\":\"source:$PWD/examples/cloudrun\"}]}}}}"
-
 curl localhost:4599/us-central1-cloudrig-local/fast/
 # hello from fast (fast-00001-cri)
 ```
 
-Same answer, no container used. It honours the contract your code sees, but
+Same answer, no container used.
+
+**Only from Go, never over the API.** A source directory names a path on the
+machine running the emulator, and the deploy runs a program from it. Accepting
+that from an HTTP request would let anything that can reach the port execute
+code as whoever started the emulator — the daemon binds every interface and
+enforces no IAM. A request carrying `source:` is refused. It honours the contract your code sees, but
 nothing about your image is exercised — use it while iterating on code, and an
 image when the container is what you are testing.
 

@@ -1,6 +1,9 @@
 package cloudrun
 
-import "strings"
+import (
+	"errors"
+	"strings"
+)
 
 // The Knative shapes gcloud sends and reads. Cloud Run's regional API is
 // Knative's serving API, so a deploy arrives as a Service object with the
@@ -165,8 +168,32 @@ func toKnative(svc Service, url string) knativeService {
 	}
 }
 
-// fromKnative reads a deploy request.
-func fromKnative(k knativeService, project, location string) Service {
+// fromKnative reads a deploy request that arrived over the network.
+//
+// A source directory is deliberately not readable here. The image field is
+// request-controlled, and turning it into a host path means any client that
+// can reach the port can run a program on this machine as whoever started the
+// emulator — the daemon binds every interface and enforces no IAM. Source
+// deploys go through the Go API, where the caller already has the process.
+func fromKnative(k knativeService, project, location string) (Service, error) {
+	svc, err := readKnative(k, project, location)
+	if err != nil {
+		return svc, err
+	}
+	if svc.Source != "" {
+		return Service{}, ErrSourceOverNetwork
+	}
+	return svc, nil
+}
+
+// ErrSourceOverNetwork is returned when a request asks the emulator to run a
+// directory from this machine.
+var ErrSourceOverNetwork = errors.New(
+	"a source directory cannot be deployed over the API, because it runs a program on the " +
+		"emulator's machine: deploy an image, or use cloudrun.Registry.Deploy from your own code")
+
+// readKnative decodes a Service without the network check, for the library.
+func readKnative(k knativeService, project, location string) (Service, error) {
 	svc := Service{
 		Project:  project,
 		Location: location,
@@ -188,7 +215,7 @@ func fromKnative(k knativeService, project, location string) Service {
 			svc.Memory, svc.CPU = limits["memory"], limits["cpu"]
 		}
 	}
-	return svc
+	return svc, nil
 }
 
 func splitEnv(kv string) (name, value string, ok bool) {

@@ -426,6 +426,10 @@ func newHandler(clk clock.Clock, o Options, reg *functions.Registry, runReg *clo
 		GRPC:      grpcSrv,
 		Faults:    flt,
 		Reset: func(ctx context.Context, project string) error {
+			// Services are processes and containers, so a reset that left
+			// them running would leave the emulator serving state it claims
+			// to have cleared.
+			runReg.StopAll()
 			if gcs == nil {
 				return nil
 			}

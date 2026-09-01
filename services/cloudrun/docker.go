@@ -100,9 +100,11 @@ func startContainer(ctx context.Context, svc Service, o Options) (*Instance, err
 		&container.HostConfig{
 			// Published to a port the host picks, so parallel tests and
 			// several services never collide.
-			PortBindings: nat.PortMap{port: []nat.PortBinding{{HostIP: "127.0.0.1", HostPort: "0"}}},
-			AutoRemove:   false,
-			Resources:    container.Resources{Memory: memory, NanoCPUs: cpus},
+			PortBindings: nat.PortMap{port: []nat.PortBinding{
+				{HostIP: bindIP(cli.DaemonHost()), HostPort: "0"},
+			}},
+			AutoRemove: false,
+			Resources:  container.Resources{Memory: memory, NanoCPUs: cpus},
 		},
 		nil, nil, "")
 	if err != nil {
@@ -195,11 +197,9 @@ func publishedAddr(ctx context.Context, cli *client.Client, id string, port nat.
 	if len(bindings) == 0 {
 		return "", fmt.Errorf("the container published no host port for %s", port)
 	}
-	host := bindings[0].HostIP
-	if host == "" || host == "0.0.0.0" || host == "::" {
-		host = "127.0.0.1"
-	}
-	return host + ":" + bindings[0].HostPort, nil
+	// Reached at the daemon's host, which is this machine only when the
+	// daemon is.
+	return hostPort(dialHost(cli.DaemonHost(), bindings[0].HostIP), bindings[0].HostPort), nil
 }
 
 // containerExit closes the returned channel when the container stops, so the

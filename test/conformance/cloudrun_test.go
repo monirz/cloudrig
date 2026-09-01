@@ -269,3 +269,68 @@ func TestCloudRunRevisionsList(t *testing.T) {
 		t.Errorf("service label = %q", got)
 	}
 }
+
+// TestCloudRunRefusesSourceOverTheAPI is a security boundary, not a
+// preference. The image field is request-controlled, and reading a source
+// directory out of it let any client that could reach the port run a program
+// on the emulator's machine — verified by an unauthenticated POST executing
+// arbitrary code as the user who started it.
+func TestCloudRunRefusesSourceOverTheAPI(t *testing.T) {
+	t.Parallel()
+
+	emu := cloudrig.MustStart(t)
+	body := `{"metadata":{"name":"sneaky"},"spec":{"template":{"spec":{"containers":
+	          [{"image":"source:/tmp"}]}}}}`
+
+	resp, err := http.Post(
+		emu.BaseURL()+"/apis/serving.knative.dev/v1/namespaces/cloudrig-local/services",
+		"application/json", bytes.NewBufferString(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	payload, _ := io.ReadAll(resp.Body)
+
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body = %s", resp.StatusCode, payload)
+	}
+	if !strings.Contains(string(payload), "emulator's machine") {
+		t.Errorf("the refusal does not say why: %s", payload)
+	}
+	if _, running := emu.CloudRun().Describe("cloudrig-local", "us-central1", "sneaky"); running {
+		t.Error("the service was deployed anyway")
+	}
+}
+
+// TestCloudRunResetStopsServices holds that a reset clears what it claims to.
+func TestCloudRunResetStopsServices(t *testing.T) {
+	if testing.Short() {
+		t.Skip("compiles a service")
+	}
+	t.Parallel()
+
+	emu := deployed(t, "cleared")
+	if resp, err := http.Get(emu.BaseURL() + "/us-central1-cloudrig-local/cleared/"); err != nil {
+		t.Fatal(err)
+	} else {
+		resp.Body.Close()
+	}
+
+	resp, err := http.Post(emu.BaseURL()+"/_emu/reset", "application/json", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+
+	if _, still := emu.CloudRun().Describe("cloudrig-local", "us-central1", "cleared"); still {
+		t.Error("the service survived a reset")
+	}
+	after, err := http.Get(emu.BaseURL() + "/us-central1-cloudrig-local/cleared/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer after.Body.Close()
+	if after.StatusCode == http.StatusOK {
+		t.Error("a service that was reset is still answering requests")
+	}
+}

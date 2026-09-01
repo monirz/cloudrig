@@ -17,6 +17,12 @@ type Registry struct {
 	services   map[string]*Instance
 	deployed   map[string]Service
 	generation map[string]int
+
+	// deploying serialises deploys of one service. A build takes seconds and
+	// must not hold the registry lock, but two deploys of the same service
+	// racing would claim one revision number and each stop the other's
+	// container.
+	deploying sync.Map
 }
 
 // NewRegistry returns an empty registry.
@@ -37,6 +43,12 @@ func (r *Registry) Deploy(ctx context.Context, svc Service, o Options) (Service,
 	o.Env = append(append([]string{}, svc.Env...), o.Env...)
 
 	k := key(svc.Project, svc.Location, svc.Name)
+
+	// One deploy of a service at a time, from here to the commit below.
+	gate, _ := r.deploying.LoadOrStore(k, &sync.Mutex{})
+	lock := gate.(*sync.Mutex)
+	lock.Lock()
+	defer lock.Unlock()
 
 	r.mu.Lock()
 	svc.Generation = r.generation[k] + 1

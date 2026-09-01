@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -218,4 +219,57 @@ func waitFor(t *testing.T, inst *cloudrun.Instance, want string) string {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
+}
+
+// TestConcurrentDeploysDoNotShareARevision is the race a per-service lock
+// exists for: two deploys reading the same generation would name one revision
+// twice, and each would stop the other's instance.
+func TestConcurrentDeploysDoNotShareARevision(t *testing.T) {
+	if testing.Short() {
+		t.Skip("compiles a service")
+	}
+	t.Parallel()
+
+	r := registry(t)
+	svc := cloudrun.Service{Name: "raced", Source: "../../testdata/run-hello"}
+
+	const deploys = 4
+	revisions := make(chan string, deploys)
+	var wg sync.WaitGroup
+	for i := 0; i < deploys; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			deployed, err := r.Deploy(context.Background(), svc, cloudrun.Options{})
+			if err != nil {
+				t.Errorf("Deploy: %v", err)
+				return
+			}
+			revisions <- deployed.Revision()
+		}()
+	}
+	wg.Wait()
+	close(revisions)
+
+	seen := map[string]bool{}
+	for revision := range revisions {
+		if seen[revision] {
+			t.Errorf("two deploys claimed revision %s", revision)
+		}
+		seen[revision] = true
+	}
+	if len(seen) != deploys {
+		t.Errorf("%d distinct revisions from %d deploys", len(seen), deploys)
+	}
+
+	// The survivor answers: no deploy stopped the instance another committed.
+	inst, ok := r.Instance("", "", "raced")
+	if !ok {
+		t.Fatal("no instance survived")
+	}
+	resp, err := http.Get(inst.URL() + "/")
+	if err != nil {
+		t.Fatalf("the surviving service does not answer: %v", err)
+	}
+	resp.Body.Close()
 }
