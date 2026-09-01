@@ -45,6 +45,16 @@ type Config struct {
 
 	// Faults fails requests on purpose. Nil fails nothing.
 	Faults *faults.Set
+
+	// Services hosts deployed Cloud Run services. Nil means none are served.
+	Services ServiceHost
+}
+
+// ServiceHost resolves a request to a running Cloud Run service. It is the
+// same shape as FunctionHost's Route: the front door knows only that
+// something claimed the request.
+type ServiceHost interface {
+	Route(escapedPath string) (h http.Handler, rest string, ok bool)
 }
 
 // FunctionHost serves deployed functions and their admin API.
@@ -80,6 +90,7 @@ type Handler struct {
 	reset    func(context.Context, string) error
 	grpc     http.Handler
 	faults   *faults.Set
+	services ServiceHost
 }
 
 // New builds the front door. Routes register here so the endpoint set is
@@ -107,6 +118,7 @@ func New(cfg Config) *Handler {
 		fallback: cfg.Fallback,
 		grpc:     cfg.GRPC,
 		faults:   cfg.Faults,
+		services: cfg.Services,
 	}
 	h.rest.Handle(http.MethodGet, "/_emu/health", h.health)
 	if cfg.Reset != nil {
@@ -157,6 +169,15 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if h.fns != nil {
 		if fn, rest, ok := h.fns.Route(path); ok {
 			serveFunction(fn, rest, w, r)
+			return
+		}
+	}
+	// Cloud Run services are addressed the same way, and tried after
+	// functions: a name deployed as both is a function first, which is the
+	// older behaviour.
+	if h.services != nil {
+		if svc, rest, ok := h.services.Route(path); ok {
+			serveFunction(svc, rest, w, r)
 			return
 		}
 	}

@@ -42,6 +42,7 @@ Each one is a sequence you can paste, in order, against a running emulator.
 | [Inject failures](#inject-failures) | Make a request fail, to test your error handling |
 | [Fork state](#fork-state) | Branch an emulator, cheaply, mid-test |
 | [Firestore](#firestore) | Documents and queries, over gRPC |
+| [Cloud Run](#cloud-run) | Deploy a container, and call it |
 
 ## Reference
 
@@ -628,6 +629,55 @@ collection-group queries, and aggregations.
 
 ---
 
+## Cloud Run
+
+**1. Point gcloud at the emulator.** Cloud Run is regional, and gcloud builds
+its endpoint by prefixing the region onto the hostname — an override of
+`localhost` becomes `us-central1-localhost`, which does not resolve.
+`cloudrig-env.sh` handles it:
+
+```sh
+export CLOUDSDK_CORE_PROJECT=cloudrig-local
+. ./cloudrig-env.sh          # sets run -> http://127.0.0.1.nip.io:4599/
+```
+
+**2. Deploy an image and call it:**
+
+```sh
+gcloud run deploy hello --image=my-image:latest --region=us-central1 --quiet
+
+# Service [hello] revision [hello-00001-cri] has been deployed
+# Service URL: http://us-central1-127.0.0.1.nip.io:4599/us-central1-cloudrig-local/hello
+
+curl "$(gcloud run services describe hello --region=us-central1 --format='value(status.url)')"
+
+gcloud run services list
+gcloud run services delete hello --region=us-central1 --quiet
+```
+
+That runs a real container through Docker, with `PORT`, `K_SERVICE` and
+`K_REVISION` set as Cloud Run sets them.
+
+**A source directory instead of an image** runs as a process — no Docker, no
+build, much faster:
+
+```go
+emu.CloudRun().Deploy(ctx, cloudrun.Service{
+    Name:   "hello",
+    Source: "./my-service",   // an HTTP server listening on $PORT
+}, cloudrun.Options{})
+```
+
+That is a convenience, not an emulation of Cloud Run: it honours the contract
+your code sees, but nothing about the container is exercised. Use an image when
+the container is what you are testing.
+
+Not supported: building an image from source (`gcloud run deploy --source`),
+traffic splitting between revisions, concurrency and CPU limits, jobs, and
+authenticated invocation.
+
+---
+
 ## Commands
 
 ```
@@ -686,6 +736,9 @@ versioning, signed URLs, persistence. Verified against the real Go client and
 **Pub/Sub** — topics, subscriptions, publish, streaming pull, ack and nack,
 deadline expiry, and `--trigger-topic` to run a function on a message. gRPC for
 the client libraries, REST for Terraform, one service behind both.
+
+**Cloud Run** — deploy an image and it runs as a container through Docker,
+driven by real `gcloud run`. A source directory runs as a process instead.
 
 **Firestore** — documents, subcollections and queries over gRPC, found through
 `FIRESTORE_EMULATOR_HOST`.
