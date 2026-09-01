@@ -652,6 +652,8 @@ gcloud run deploy hello --image=my-image:latest --region=us-central1 --quiet
 curl "$(gcloud run services describe hello --region=us-central1 --format='value(status.url)')"
 
 gcloud run services list
+gcloud run services update hello --region=us-central1 --update-env-vars=A=1
+gcloud run revisions list --region=us-central1
 gcloud run services delete hello --region=us-central1 --quiet
 ```
 
@@ -672,9 +674,14 @@ That is a convenience, not an emulation of Cloud Run: it honours the contract
 your code sees, but nothing about the container is exercised. Use an image when
 the container is what you are testing.
 
+Only one revision exists at a time: a deploy replaces what was running rather
+than keeping the old container alive, so `revisions list` shows the current one
+and there is no history to roll back to.
+
 Not supported: building an image from source (`gcloud run deploy --source`),
 traffic splitting between revisions, concurrency and CPU limits, jobs, and
-authenticated invocation.
+authenticated invocation — every IAM permission asked for is granted, because
+there is no authentication here to enforce.
 
 ---
 

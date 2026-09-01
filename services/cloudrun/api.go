@@ -36,10 +36,19 @@ func NewAPI(reg *Registry) *API {
 	a.router.Handle(http.MethodPut, knative+"/{name}", a.replaceKnative)
 	a.router.Handle(http.MethodDelete, knative+"/{name}", a.deleteKnative)
 
+	const revisions = "/apis/serving.knative.dev/v1/namespaces/{namespace}/revisions"
+	a.router.Handle(http.MethodGet, revisions, a.listRevisions)
+	a.router.Handle(http.MethodGet, revisions+"/{name}", a.getRevision)
+
 	const global = "/v1/projects/{project}/locations/{location}/services"
 	a.router.Handle(http.MethodGet, global, a.listGlobal)
 	a.router.Handle(http.MethodGet, global+"/{name}", a.getGlobal)
+	a.router.Handle(http.MethodGet, global+"/{name}:getIamPolicy", a.getIamPolicy)
 	a.router.Handle(http.MethodDelete, global+"/{name}", a.deleteGlobal)
+
+	// The IAM verbs gcloud calls on the way to a deploy. The name segment
+	// carries them as {name}:verb, which the router captures whole.
+	a.router.Handle(http.MethodPost, global+"/{name}", a.serviceVerb)
 	return a
 }
 
@@ -145,6 +154,35 @@ func (a *API) deleteKnative(w http.ResponseWriter, r *http.Request, p transport.
 	})
 }
 
+// listRevisions answers `gcloud run revisions list`.
+//
+// One revision per service: a deploy replaces what was running rather than
+// keeping the old container alive, so there is no history to report. Real
+// Cloud Run keeps every revision and can split traffic between them.
+func (a *API) listRevisions(w http.ResponseWriter, r *http.Request, p transport.Params) error {
+	services := a.reg.List(p["namespace"], "")
+
+	items := make([]knativeRevision, 0, len(services))
+	for _, svc := range services {
+		items = append(items, toRevision(svc))
+	}
+	return writeJSON(w, http.StatusOK, map[string]any{
+		"apiVersion": "serving.knative.dev/v1",
+		"kind":       "RevisionList",
+		"metadata":   listMeta{},
+		"items":      items,
+	})
+}
+
+func (a *API) getRevision(w http.ResponseWriter, r *http.Request, p transport.Params) error {
+	for _, svc := range a.reg.List(p["namespace"], "") {
+		if svc.Revision() == p["name"] {
+			return writeJSON(w, http.StatusOK, toRevision(svc))
+		}
+	}
+	return notFound(p["name"])
+}
+
 // The global surface reports the same services with the v2-style resource
 // name, which is what `gcloud run services list` renders.
 func (a *API) listGlobal(w http.ResponseWriter, r *http.Request, p transport.Params) error {
@@ -174,6 +212,42 @@ func (a *API) getGlobal(w http.ResponseWriter, r *http.Request, p transport.Para
 		return notFound(p["name"])
 	}
 	return writeJSON(w, http.StatusOK, globalService(svc, serviceURL(r, svc)))
+}
+
+// serviceVerb answers the :verb forms on a service resource.
+//
+// gcloud asks whether it may allow unauthenticated invocations before every
+// deploy, and refuses to continue if the question 404s. There is no IAM here
+// to consult, so every permission asked for is granted — the emulator has no
+// authentication to enforce, which UNSUPPORTED.md says plainly.
+func (a *API) serviceVerb(w http.ResponseWriter, r *http.Request, p transport.Params) error {
+	name, verb, ok := strings.Cut(p["name"], ":")
+	if !ok {
+		return gerr.New(gerr.InvalidArgument, "POST on a service needs a verb").
+			WithHTTPStatus(http.StatusBadRequest)
+	}
+
+	switch verb {
+	case "testIamPermissions":
+		var body struct {
+			Permissions []string `json:"permissions"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		return writeJSON(w, http.StatusOK, map[string]any{"permissions": body.Permissions})
+
+	case "setIamPolicy":
+		var body struct {
+			Policy map[string]any `json:"policy"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		if body.Policy == nil {
+			body.Policy = map[string]any{}
+		}
+		body.Policy["etag"] = "cloudrig"
+		return writeJSON(w, http.StatusOK, body.Policy)
+	}
+	return gerr.New(gerr.Unimplemented, "unsupported verb "+verb+" on service "+name).
+		WithHTTPStatus(http.StatusNotImplemented)
 }
 
 func (a *API) deleteGlobal(w http.ResponseWriter, r *http.Request, p transport.Params) error {
@@ -209,6 +283,12 @@ func serviceURL(r *http.Request, svc Service) string {
 		host = "localhost"
 	}
 	return "http://" + host + "/" + svc.Location + "-" + svc.Project + "/" + svc.Name
+}
+
+// getIamPolicy answers with an empty policy: there is nothing to grant, and a
+// missing policy stops a deploy that only wanted to read one.
+func (a *API) getIamPolicy(w http.ResponseWriter, r *http.Request, p transport.Params) error {
+	return writeJSON(w, http.StatusOK, map[string]any{"version": 1, "etag": "cloudrig"})
 }
 
 func notFound(name string) error {

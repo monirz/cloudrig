@@ -75,7 +75,16 @@ type knativeTraffic struct {
 type knativeList struct {
 	APIVersion string           `json:"apiVersion"`
 	Kind       string           `json:"kind"`
+	Metadata   listMeta         `json:"metadata"`
 	Items      []knativeService `json:"items"`
+}
+
+// listMeta is Kubernetes' ListMeta. gcloud reads continue off it without
+// checking for nil, so a list without one crashes the client rather than
+// returning an error.
+type listMeta struct {
+	Continue        string `json:"continue"`
+	ResourceVersion string `json:"resourceVersion"`
 }
 
 // SourcePrefix marks an image field that names a source directory rather than
@@ -169,4 +178,37 @@ func splitEnv(kv string) (name, value string, ok bool) {
 		}
 	}
 	return "", "", false
+}
+
+// knativeRevision is what `gcloud run revisions list` renders.
+type knativeRevision struct {
+	APIVersion string              `json:"apiVersion"`
+	Kind       string              `json:"kind"`
+	Metadata   knativeMeta         `json:"metadata"`
+	Spec       knativeTemplateSpec `json:"spec"`
+	Status     *knativeStatus      `json:"status,omitempty"`
+}
+
+// toRevision renders the one revision a service has here.
+func toRevision(svc Service) knativeRevision {
+	image := svc.Image
+	if image == "" {
+		image = SourcePrefix + svc.Source
+	}
+
+	return knativeRevision{
+		APIVersion: "serving.knative.dev/v1",
+		Kind:       "Revision",
+		Metadata: knativeMeta{
+			Name:      svc.Revision(),
+			Namespace: svc.Project,
+			Labels: map[string]string{
+				"cloud.googleapis.com/location":     svc.Location,
+				"serving.knative.dev/service":       svc.Name,
+				"serving.knative.dev/configuration": svc.Name,
+			},
+		},
+		Spec:   knativeTemplateSpec{Containers: []knativeContainer{{Image: image}}},
+		Status: &knativeStatus{Conditions: []knativeCondition{{Type: "Ready", Status: "True"}}},
+	}
 }

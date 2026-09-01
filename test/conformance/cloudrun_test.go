@@ -190,3 +190,82 @@ func TestCloudRunDeployThroughTheAPI(t *testing.T) {
 		t.Errorf("status = %d, body = %s", resp.StatusCode, payload)
 	}
 }
+
+// TestCloudRunIamVerbs covers what gcloud calls on the way to a deploy. It
+// asks whether it may allow unauthenticated invocations, and a 404 there stops
+// the deploy before it starts.
+func TestCloudRunIamVerbs(t *testing.T) {
+	t.Parallel()
+
+	emu := cloudrig.MustStart(t)
+	base := emu.BaseURL() + "/v1/projects/cloudrig-local/locations/us-central1/services/any"
+
+	resp, err := http.Post(base+":testIamPermissions", "application/json",
+		bytes.NewBufferString(`{"permissions":["run.services.setIamPolicy"]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("testIamPermissions = %d", resp.StatusCode)
+	}
+
+	var out struct {
+		Permissions []string `json:"permissions"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		t.Fatal(err)
+	}
+	if len(out.Permissions) != 1 || out.Permissions[0] != "run.services.setIamPolicy" {
+		t.Errorf("permissions = %v, want what was asked for", out.Permissions)
+	}
+}
+
+// TestCloudRunRevisionsList holds the shape gcloud needs. A list without a
+// metadata block crashes the client rather than erroring: it reads continue
+// off it without checking for nil.
+func TestCloudRunRevisionsList(t *testing.T) {
+	if testing.Short() {
+		t.Skip("compiles a service")
+	}
+	t.Parallel()
+
+	emu := deployed(t, "revised")
+
+	resp, err := http.Get(emu.BaseURL() +
+		"/apis/serving.knative.dev/v1/namespaces/cloudrig-local/revisions")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	var out struct {
+		Kind     string          `json:"kind"`
+		Metadata *map[string]any `json:"metadata"`
+		Items    []struct {
+			Metadata struct {
+				Name   string            `json:"name"`
+				Labels map[string]string `json:"labels"`
+			} `json:"metadata"`
+		} `json:"items"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		t.Fatal(err)
+	}
+
+	if out.Metadata == nil {
+		t.Error("no metadata block; gcloud reads continue off it and crashes without one")
+	}
+	if out.Kind != "RevisionList" {
+		t.Errorf("kind = %q", out.Kind)
+	}
+	if len(out.Items) != 1 {
+		t.Fatalf("items = %+v", out.Items)
+	}
+	if got := out.Items[0].Metadata.Name; got != "revised-00001-cri" {
+		t.Errorf("revision = %q", got)
+	}
+	if got := out.Items[0].Metadata.Labels["serving.knative.dev/service"]; got != "revised" {
+		t.Errorf("service label = %q", got)
+	}
+}
