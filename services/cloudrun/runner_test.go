@@ -8,6 +8,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/monirz/cloudrig/services/cloudrun"
 )
@@ -196,5 +197,25 @@ func write(t *testing.T, path, content string) {
 
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// waitFor returns a service's log once it contains want. A container's output
+// arrives over a stream from the daemon, so it lands after the request that
+// caused it.
+func waitFor(t *testing.T, inst *cloudrun.Instance, want string) string {
+	t.Helper()
+
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		logged := strings.Join(inst.LogSnapshot(), "\n")
+		if strings.Contains(logged, want) {
+			return logged
+		}
+		if time.Now().After(deadline) {
+			t.Errorf("the log never contained %q; it holds:\n%s", want, logged)
+			return logged
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }

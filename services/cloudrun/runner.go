@@ -1,12 +1,15 @@
 // Package cloudrun runs Cloud Run services locally.
 //
-// Cloud Run's contract with your code is small: an HTTP server listening on
-// $PORT. That contract is what this honours, so a service deployed from source
-// runs here as a process, with no Docker and no container build — the same
-// property the rest of cloudrig has.
+// An image runs as a container, through Docker, because that is what Cloud Run
+// deploys. This is the path to use when the container is the thing being
+// tested: its base image, its entrypoint, what it bundles.
 //
-// A prebuilt --image is the case that genuinely needs a container runtime, and
-// is not supported. See UNSUPPORTED.md.
+// A source directory instead runs as a process. Cloud Run's contract with your
+// code is small — an HTTP server on $PORT — and a process honours it without a
+// container build, which is faster and needs no daemon. It is a convenience,
+// not an emulation of Cloud Run: nothing about the container is exercised.
+//
+// The rest of cloudrig needs no Docker. This service does, for images.
 package cloudrun
 
 import (
@@ -41,8 +44,11 @@ type Instance struct {
 	env      []string
 
 	proxy *httputil.ReverseProxy
-	cmd   *exec.Cmd
 	logs  *logring.Ring
+
+	// Exactly one of these is set: a service is a container or a process.
+	cmd         *exec.Cmd
+	containerID string
 
 	stopOnce sync.Once
 	cleanup  func()

@@ -44,7 +44,15 @@ func (r *Registry) Deploy(ctx context.Context, svc Service, o Options) (Service,
 
 	// Started before the old one is retired: a deploy that fails to build
 	// leaves the previous revision serving, as a real one does.
-	inst, err := start(ctx, svc, svc.Source, o)
+	//
+	// An image is a container, which is what Cloud Run runs. A source
+	// directory is a process, which is faster and needs no daemon.
+	var inst *Instance
+	if svc.Image != "" {
+		inst, err = startContainer(ctx, svc, o)
+	} else {
+		inst, err = start(ctx, svc, svc.Source, o)
+	}
 	if err != nil {
 		return Service{}, err
 	}

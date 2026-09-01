@@ -11,8 +11,13 @@ type Service struct {
 	Location string
 	Name     string
 
-	// Source is the directory to build and run. A prebuilt image is the case
-	// that needs a container runtime, and is not supported.
+	// Image is a container image to run, which is what Cloud Run deploys. It
+	// needs a container runtime.
+	Image string
+
+	// Source is a directory to build and run as a process instead. It is the
+	// faster path and needs no Docker, but it is not what Cloud Run does: it
+	// honours the contract — an HTTP server on $PORT — without the container.
 	Source string
 
 	// Env is what the service sees, as KEY=VALUE.
@@ -34,8 +39,11 @@ func (s Service) resolve() (Service, error) {
 	if s.Name == "" {
 		return s, fmt.Errorf("a service needs a name")
 	}
-	if s.Source == "" {
-		return s, fmt.Errorf("service %s: a source directory is required", s.Name)
+	switch {
+	case s.Image == "" && s.Source == "":
+		return s, fmt.Errorf("service %s: an image or a source directory is required", s.Name)
+	case s.Image != "" && s.Source != "":
+		return s, fmt.Errorf("service %s: give an image or a source directory, not both", s.Name)
 	}
 	if s.Project == "" {
 		s.Project = DefaultProject
