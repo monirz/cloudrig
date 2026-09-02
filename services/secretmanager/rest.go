@@ -221,13 +221,25 @@ func unsupportedVerb(name, verb string) error {
 		WithHTTPStatus(http.StatusNotImplemented)
 }
 
+// MaxBodyBytes caps a JSON request body.
+//
+// These are metadata APIs: the largest thing they legitimately carry is a
+// secret payload or a message, both far below this. Without a cap, one
+// unauthenticated request with an endless body allocates until the emulator
+// dies, which is a cheap way to take down everything else sharing the port.
+const MaxBodyBytes = 4 << 20
+
 // decode reads a JSON body into a proto. An empty body is not an error: a
 // create carries what it needs in the path and the query.
 func decode(r *http.Request, into proto.Message) error {
-	body, err := io.ReadAll(r.Body)
+	body, err := io.ReadAll(io.LimitReader(r.Body, MaxBodyBytes+1))
 	if err != nil {
 		return gerr.New(gerr.InvalidArgument, "reading the request body: "+err.Error()).
 			WithHTTPStatus(http.StatusBadRequest)
+	}
+	if len(body) > MaxBodyBytes {
+		return gerr.New(gerr.InvalidArgument, "the request body is too large").
+			WithHTTPStatus(http.StatusRequestEntityTooLarge)
 	}
 	if len(strings.TrimSpace(string(body))) == 0 {
 		return nil

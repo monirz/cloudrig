@@ -86,12 +86,19 @@ func (s *Service) DeleteSecret(ctx context.Context, req *secretmanagerpb.DeleteS
 	if _, _, err := parseSecret(req.GetName()); err != nil {
 		return nil, err
 	}
+
+	// Held across both deletions, and taken by AddSecretVersion before it
+	// checks the secret exists. Without that, an add can pass its check
+	// before the delete and write after the version cleanup: the orphan
+	// survives, and becomes readable the moment the name is recreated.
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	if err := s.kv.Delete(ctx, secretKey(req.GetName()), 0); err != nil {
 		return nil, status.Errorf(codes.NotFound, "Secret [%s] not found", req.GetName())
 	}
 
-	// The versions go with it: a secret's value has nowhere else to live, and
-	// leaving them would resurrect the old value under a recreated name.
+	// The versions go with it: a secret's value has nowhere else to live.
 	entries, _, err := s.kv.List(ctx, versionPrefix(req.GetName()), 0, "")
 	if err == nil {
 		for _, kv := range entries {
@@ -105,9 +112,6 @@ func (s *Service) DeleteSecret(ctx context.Context, req *secretmanagerpb.DeleteS
 // never reused, so a reference to a version always means the same bytes.
 func (s *Service) AddSecretVersion(ctx context.Context, req *secretmanagerpb.AddSecretVersionRequest) (*secretmanagerpb.SecretVersion, error) {
 	if _, _, err := parseSecret(req.GetParent()); err != nil {
-		return nil, err
-	}
-	if _, err := s.getSecret(ctx, req.GetParent()); err != nil {
 		return nil, err
 	}
 
@@ -127,6 +131,12 @@ func (s *Service) AddSecretVersion(ctx context.Context, req *secretmanagerpb.Add
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	// Checked under the lock, not before it: a secret deleted between the
+	// check and the write would leave this version orphaned.
+	if _, err := s.getSecret(ctx, req.GetParent()); err != nil {
+		return nil, err
+	}
 
 	next, err := s.nextVersion(ctx, req.GetParent())
 	if err != nil {

@@ -1,6 +1,8 @@
 package secretmanager
 
 import (
+	"context"
+	"sync"
 	"testing"
 
 	"cloud.google.com/go/secretmanager/apiv1/secretmanagerpb"
@@ -8,7 +10,12 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	"time"
+
+	"github.com/monirz/cloudrig/core/clock"
+	"github.com/monirz/cloudrig/store"
 )
+
+var epoch = time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 
 func TestParseNames(t *testing.T) {
 	t.Parallel()
@@ -89,5 +96,63 @@ func TestStoredVersionRoundTrips(t *testing.T) {
 	}
 	if back.Version.GetReplicationStatus().GetAutomatic() == nil {
 		t.Error("the replication oneof did not survive the round trip")
+	}
+}
+
+// TestDeleteDoesNotLeaveAnOrphanVersion is a secret leak, not a tidiness
+// problem: a version written while its secret was being deleted survived, and
+// became readable the moment the name was recreated.
+func TestDeleteDoesNotLeaveAnOrphanVersion(t *testing.T) {
+	t.Parallel()
+
+	automatic := &secretmanagerpb.Replication{
+		Replication: &secretmanagerpb.Replication_Automatic_{
+			Automatic: &secretmanagerpb.Replication_Automatic{},
+		},
+	}
+	const name = "projects/p/secrets/racy"
+	create := &secretmanagerpb.CreateSecretRequest{
+		Parent: "projects/p", SecretId: "racy",
+		Secret: &secretmanagerpb.Secret{Replication: automatic},
+	}
+
+	for attempt := 0; attempt < 100; attempt++ {
+		s := New(store.NewMemory(), clock.NewFake(epoch))
+		ctx := context.Background()
+
+		if _, err := s.CreateSecret(ctx, create); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.AddSecretVersion(ctx, &secretmanagerpb.AddSecretVersionRequest{
+			Parent: name, Payload: &secretmanagerpb.SecretPayload{Data: []byte("old")},
+		}); err != nil {
+			t.Fatal(err)
+		}
+
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			_, _ = s.DeleteSecret(ctx, &secretmanagerpb.DeleteSecretRequest{Name: name})
+		}()
+		go func() {
+			defer wg.Done()
+			_, _ = s.AddSecretVersion(ctx, &secretmanagerpb.AddSecretVersionRequest{
+				Parent: name, Payload: &secretmanagerpb.SecretPayload{Data: []byte("survivor")},
+			})
+		}()
+		wg.Wait()
+
+		// Recreating the name must not bring anything back with it.
+		if _, err := s.CreateSecret(ctx, create); err != nil {
+			t.Fatalf("attempt %d: recreating: %v", attempt, err)
+		}
+		got, err := s.AccessSecretVersion(ctx, &secretmanagerpb.AccessSecretVersionRequest{
+			Name: name + "/versions/latest",
+		})
+		if err == nil {
+			t.Fatalf("attempt %d: a recreated secret returned %q from before the delete",
+				attempt, got.GetPayload().GetData())
+		}
 	}
 }

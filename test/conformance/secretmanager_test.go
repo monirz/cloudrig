@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"strings"
 	"testing"
 
 	secretmanager "cloud.google.com/go/secretmanager/apiv1"
@@ -483,5 +484,28 @@ func TestSecretIamVerbs(t *testing.T) {
 	granted, _ := tested["permissions"].([]any)
 	if len(granted) != 1 {
 		t.Errorf("permissions = %v, want what was asked for", tested)
+	}
+}
+
+// TestSecretRejectsAnOversizedBody keeps one unauthenticated request from
+// allocating until the emulator dies. The port is shared, so that would take
+// every other service down with it.
+func TestSecretRejectsAnOversizedBody(t *testing.T) {
+	t.Parallel()
+
+	emu := cloudrig.MustStart(t)
+	base := emu.BaseURL() + "/v1/projects/p/secrets"
+
+	// Comfortably past the cap, and still small enough to send quickly.
+	huge := `{"labels":{"x":"` + strings.Repeat("A", 5<<20) + `"}}`
+	code, _ := post(t, http.MethodPost, base+"?secretId=big", huge)
+	if code != http.StatusRequestEntityTooLarge {
+		t.Errorf("status = %d, want 413", code)
+	}
+
+	// An ordinary body still works.
+	if code, _ := post(t, http.MethodPost, base+"?secretId=small",
+		`{"replication":{"automatic":{}}}`); code != http.StatusOK {
+		t.Errorf("a normal create = %d", code)
 	}
 }
