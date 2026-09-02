@@ -417,3 +417,71 @@ func TestSecretRESTAndGRPCShareState(t *testing.T) {
 		t.Errorf("value = %q", got.GetPayload().GetData())
 	}
 }
+
+// TestSecretUpdateTouchesNamedFields is what `gcloud secrets update` needs. A
+// masked update must leave alone what it did not mention.
+func TestSecretUpdateTouchesNamedFields(t *testing.T) {
+	t.Parallel()
+
+	emu := cloudrig.MustStart(t)
+	base := emu.BaseURL() + "/v1/projects/p/secrets"
+	post(t, http.MethodPost, base+"?secretId=labelled",
+		`{"replication":{"automatic":{}},"labels":{"env":"local","team":"core"}}`)
+
+	code, updated := post(t, http.MethodPatch, base+"/labelled?updateMask=labels",
+		`{"labels":{"env":"staging","team":"core"}}`)
+	if code != http.StatusOK {
+		t.Fatalf("update = %d %v", code, updated)
+	}
+
+	labels, _ := updated["labels"].(map[string]any)
+	if labels["env"] != "staging" {
+		t.Errorf("labels = %v", labels)
+	}
+	// The replication was never mentioned, so it survives.
+	if updated["replication"] == nil {
+		t.Errorf("a field the mask did not name was cleared: %v", updated)
+	}
+
+	// A mask naming a field that does not exist is a client error, and the
+	// name cannot be changed at all.
+	if code, _ := post(t, http.MethodPatch, base+"/labelled?updateMask=nonsense", `{}`); code != http.StatusBadRequest {
+		t.Errorf("an unknown mask field = %d, want 400", code)
+	}
+	if code, _ := post(t, http.MethodPatch, base+"/labelled?updateMask=name", `{}`); code != http.StatusBadRequest {
+		t.Errorf("renaming = %d, want 400", code)
+	}
+}
+
+// TestSecretIamVerbs holds that the IAM forms answer rather than reporting the
+// secret missing. They arrive glued to the name segment, and reading them as
+// part of the name made a live secret look absent.
+func TestSecretIamVerbs(t *testing.T) {
+	t.Parallel()
+
+	emu := cloudrig.MustStart(t)
+	base := emu.BaseURL() + "/v1/projects/p/secrets"
+	post(t, http.MethodPost, base+"?secretId=guarded", `{"replication":{"automatic":{}}}`)
+
+	code, policy := post(t, http.MethodGet, base+"/guarded:getIamPolicy", "")
+	if code != http.StatusOK {
+		t.Fatalf("getIamPolicy = %d %v", code, policy)
+	}
+	if policy["etag"] == nil {
+		t.Errorf("no policy returned: %v", policy)
+	}
+
+	if code, _ := post(t, http.MethodPost, base+"/guarded:setIamPolicy", `{"policy":{}}`); code != http.StatusOK {
+		t.Errorf("setIamPolicy = %d", code)
+	}
+
+	code, tested := post(t, http.MethodPost, base+"/guarded:testIamPermissions",
+		`{"permissions":["secretmanager.versions.access"]}`)
+	if code != http.StatusOK {
+		t.Fatalf("testIamPermissions = %d", code)
+	}
+	granted, _ := tested["permissions"].([]any)
+	if len(granted) != 1 {
+		t.Errorf("permissions = %v, want what was asked for", tested)
+	}
+}

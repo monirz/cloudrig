@@ -81,10 +81,11 @@ Firestore:
 
 Secret Manager:
 
-- IAM policies on secrets, user-managed replication, CMEK, rotation schedules,
-  expiry, and version aliases other than `latest`.
-- `UpdateSecret`, so `gcloud secrets update` fails. Everything else `gcloud
-  secrets` does is served.
+- User-managed replication, CMEK, rotation schedules, expiry, and version
+  aliases other than `latest`.
+- IAM policies are stored nowhere and enforced nowhere: getIamPolicy returns an
+  empty policy and testIamPermissions grants whatever is asked for, so a
+  command that only wanted to read a policy is not blocked.
 
 Cloud Run:
 

@@ -1,6 +1,7 @@
 package secretmanager
 
 import (
+	"encoding/json"
 	"io"
 	"net/http"
 	"strings"
@@ -11,6 +12,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/fieldmaskpb"
 )
 
 // REST serves the Secret Manager JSON API over the same service the gRPC half
@@ -32,6 +34,7 @@ func NewREST(s *Service) *REST {
 	// router captures whole and the handler splits.
 	a.router.Handle(http.MethodGet, secrets+"/{secret}", a.getSecret)
 	a.router.Handle(http.MethodPost, secrets+"/{secret}", a.secretVerb)
+	a.router.Handle(http.MethodPatch, secrets+"/{secret}", a.updateSecret)
 	a.router.Handle(http.MethodDelete, secrets+"/{secret}", a.deleteSecret)
 
 	const versions = secrets + "/{secret}/versions"
@@ -61,9 +64,40 @@ func (a *REST) createSecret(w http.ResponseWriter, r *http.Request, p transport.
 	return respond(w, out, err)
 }
 
+// getSecret answers the plain read and the :getIamPolicy form, which arrives
+// glued to the name segment the way every other verb does.
 func (a *REST) getSecret(w http.ResponseWriter, r *http.Request, p transport.Params) error {
+	name, verb, _ := strings.Cut(p["secret"], ":")
+
+	if verb == "getIamPolicy" {
+		return writeIamPolicy(w)
+	}
+	if verb != "" {
+		return unsupportedVerb(name, verb)
+	}
+
 	out, err := a.svc.GetSecret(r.Context(), &secretmanagerpb.GetSecretRequest{
 		Name: secretName(p),
+	})
+	return respond(w, out, err)
+}
+
+// updateSecret applies the fields named by the update mask, which is how
+// gcloud changes a secret's labels.
+func (a *REST) updateSecret(w http.ResponseWriter, r *http.Request, p transport.Params) error {
+	var secret secretmanagerpb.Secret
+	if err := decode(r, &secret); err != nil {
+		return err
+	}
+	secret.Name = secretName(p)
+
+	mask := &fieldmaskpb.FieldMask{}
+	if raw := r.URL.Query().Get("updateMask"); raw != "" {
+		mask.Paths = strings.Split(raw, ",")
+	}
+
+	out, err := a.svc.UpdateSecret(r.Context(), &secretmanagerpb.UpdateSecretRequest{
+		Secret: &secret, UpdateMask: mask,
 	})
 	return respond(w, out, err)
 }
@@ -82,11 +116,25 @@ func (a *REST) deleteSecret(w http.ResponseWriter, r *http.Request, p transport.
 	return respond(w, out, err)
 }
 
-// secretVerb answers the :verb forms on a secret. Only addVersion exists.
+// secretVerb answers the :verb forms posted to a secret.
 func (a *REST) secretVerb(w http.ResponseWriter, r *http.Request, p transport.Params) error {
 	name, verb, ok := strings.Cut(p["secret"], ":")
 	if !ok {
 		return unsupportedVerb(p["secret"], "")
+	}
+
+	// The IAM verbs answer permissively: there is no identity here to check,
+	// which UNSUPPORTED.md says plainly. Refusing them instead would stop
+	// commands that only wanted to read a policy.
+	switch verb {
+	case "setIamPolicy":
+		return writeIamPolicy(w)
+	case "testIamPermissions":
+		var body struct {
+			Permissions []string `json:"permissions"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		return writeJSON(w, map[string]any{"permissions": body.Permissions})
 	}
 	if verb != "addVersion" {
 		return unsupportedVerb(name, verb)
@@ -150,6 +198,18 @@ func (a *REST) versionVerb(w http.ResponseWriter, r *http.Request, p transport.P
 		return respond(w, out, err)
 	}
 	return unsupportedVerb(name, verb)
+}
+
+// writeIamPolicy answers with an empty policy. Nothing is enforced, so there
+// is nothing to report, and a missing policy stops a command that only wanted
+// to read one.
+func writeIamPolicy(w http.ResponseWriter) error {
+	return writeJSON(w, map[string]any{"version": 1, "etag": "cloudrig"})
+}
+
+func writeJSON(w http.ResponseWriter, body any) error {
+	w.Header().Set("Content-Type", "application/json; charset=UTF-8")
+	return json.NewEncoder(w).Encode(body)
 }
 
 func secretName(p transport.Params) string {

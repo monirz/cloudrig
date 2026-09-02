@@ -667,6 +667,7 @@ gcloud secrets versions access latest --secret=api-key
 
 gcloud secrets versions disable 1 --secret=api-key
 gcloud secrets versions list api-key
+gcloud secrets update api-key --update-labels=env=local
 gcloud secrets delete api-key
 ```
 
@@ -679,9 +680,11 @@ rotation that went wrong stops serving the bad value. A disabled version still
 exists and refuses to be read; a destroyed one also loses its bytes, keeps its
 number, and cannot be brought back.
 
-Not supported: IAM policies on secrets, `gcloud secrets update`, user-managed
-replication, CMEK, rotation schedules, expiry, and version aliases other than
-`latest`.
+IAM policies are answered permissively — every permission asked for is
+granted, because there is no identity here to check.
+
+Not supported: user-managed replication, CMEK, rotation schedules, expiry, and
+version aliases other than `latest`.
 
 ---
 
