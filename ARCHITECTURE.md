@@ -57,6 +57,7 @@ process the same way they would reach Google.
 | `services/storage` | Cloud Storage semantics: buckets, objects, generations |
 | `services/pubsub` | Pub/Sub over gRPC, plus the JSON API Terraform drives |
 | `services/firestore` | Firestore documents and queries, over gRPC |
+| `services/secretmanager` | Secrets and versions, over gRPC |
 | `lint` | Build-time invariants enforced as tests |
 
 ---
@@ -80,6 +81,13 @@ that is the only thing that crosses a service boundary.
 **Errors carry their own HTTP status.** Every construction site states it,
 rather than inheriting a default that is right for most cases and wrong for the
 one that matters.
+
+**A test asserts on what it controls.** Three failures in one milestone came
+from the same mistake: reading a function's log the moment delivery finished,
+when a child process's output arrives on another goroutine; and measuring
+process-wide allocation from a parallel test, where every other test's
+allocations land in the same counter. If something else can move the thing
+being asserted on, wait for it or take the process to yourself.
 
 **Compare-and-swap, never read-then-write.** The store has no unconditional
 `Put`: a write states the version it expects. Concurrent writers cannot claim

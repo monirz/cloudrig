@@ -5,6 +5,7 @@ go 1.25.0
 require (
 	cloud.google.com/go/firestore v1.25.0
 	cloud.google.com/go/pubsub/v2 v2.7.0
+	cloud.google.com/go/secretmanager v1.21.0
 	cloud.google.com/go/storage v1.66.0
 	github.com/docker/docker v28.5.2+incompatible
 	github.com/docker/go-connections v0.8.1

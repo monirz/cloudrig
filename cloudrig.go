@@ -24,6 +24,7 @@ import (
 
 	"cloud.google.com/go/firestore/apiv1/firestorepb"
 	"cloud.google.com/go/pubsub/v2/apiv1/pubsubpb"
+	"cloud.google.com/go/secretmanager/apiv1/secretmanagerpb"
 	"github.com/monirz/cloudrig/core/clock"
 	"github.com/monirz/cloudrig/core/events"
 	"github.com/monirz/cloudrig/core/faults"
@@ -35,6 +36,7 @@ import (
 	"github.com/monirz/cloudrig/services/cloudrun"
 	"github.com/monirz/cloudrig/services/firestore"
 	"github.com/monirz/cloudrig/services/pubsub"
+	"github.com/monirz/cloudrig/services/secretmanager"
 	"github.com/monirz/cloudrig/services/storage"
 	"github.com/monirz/cloudrig/store"
 	"github.com/monirz/cloudrig/store/blob"
@@ -140,8 +142,9 @@ func Start(ctx context.Context, o Options) (*Emulator, error) {
 
 	psvc := pubsub.New(stack.kvStore, clk, bus)
 	fsvc := firestore.New(stack.kvStore, clk)
+	smsvc := secretmanager.New(stack.kvStore, clk)
 	runReg := cloudrun.NewRegistry()
-	handler, closeAPIs := newHandler(clk, o, reg, runReg, stack.svc, psvc, newGRPC(psvc, fsvc), flt)
+	handler, closeAPIs := newHandler(clk, o, reg, runReg, stack.svc, psvc, smsvc, newGRPC(psvc, fsvc, smsvc), flt)
 	srv := &http.Server{
 		Handler:   handler,
 		Protocols: transport.Protocols(), // HTTP/1.1 and h2c on one port
@@ -276,9 +279,10 @@ func serveForTest(t testing.TB, o Options, stack storageStack) *Emulator {
 
 	psvc := pubsub.New(stack.kvStore, o.Clock, bus)
 	fsvc := firestore.New(stack.kvStore, o.Clock)
+	smsvc := secretmanager.New(stack.kvStore, o.Clock)
 	runReg := cloudrun.NewRegistry()
 	t.Cleanup(runReg.StopAll)
-	handler, closeAPIs := newHandler(o.Clock, o, reg, runReg, stack.svc, psvc, newGRPC(psvc, fsvc), flt)
+	handler, closeAPIs := newHandler(o.Clock, o, reg, runReg, stack.svc, psvc, smsvc, newGRPC(psvc, fsvc, smsvc), flt)
 	t.Cleanup(closeAPIs)
 
 	srv := httptest.NewUnstartedServer(handler)
@@ -341,11 +345,12 @@ func (e *Emulator) Fork(t testing.TB) *Emulator {
 //
 // Requests reach it through the transport's h2c dispatch, so gRPC and REST
 // share the one port.
-func newGRPC(ps *pubsub.Service, fs *firestore.Service) *grpc.Server {
+func newGRPC(ps *pubsub.Service, fs *firestore.Service, sm *secretmanager.Service) *grpc.Server {
 	srv := grpc.NewServer()
 	pubsubpb.RegisterPublisherServer(srv, pubsub.NewPublisher(ps))
 	pubsubpb.RegisterSubscriberServer(srv, pubsub.NewSubscriber(ps))
 	firestorepb.RegisterFirestoreServer(srv, fs)
+	secretmanagerpb.RegisterSecretManagerServiceServer(srv, sm)
 	return srv
 }
 
@@ -356,12 +361,12 @@ type matcher interface {
 }
 
 // routeV1 gives a request to the first service with a route for it, and to
-// Cloud Functions otherwise. Pub/Sub, Cloud Run and Cloud Functions all serve
-// /v1/projects/{project}/..., so the prefix cannot separate them.
-func routeV1(first, second matcher, fallback http.Handler) http.Handler {
+// fallback otherwise. Four services now serve /v1/projects/{project}/..., so
+// the mount prefix cannot separate them: each is asked in turn.
+func routeV1(fallback http.Handler, services ...matcher) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		path := r.URL.EscapedPath()
-		for _, m := range []matcher{first, second} {
+		for _, m := range services {
 			if m.Matches(r.Method, path) {
 				m.ServeHTTP(w, r)
 				return
@@ -373,7 +378,7 @@ func routeV1(first, second matcher, fallback http.Handler) http.Handler {
 
 // newHandler builds the request surface and returns what it must tear down:
 // the API objects own temporary directories, and nothing else can reach them.
-func newHandler(clk clock.Clock, o Options, reg *functions.Registry, runReg *cloudrun.Registry, gcs *storage.Service, psvc *pubsub.Service, grpcSrv http.Handler, flt *faults.Set) (http.Handler, func()) {
+func newHandler(clk clock.Clock, o Options, reg *functions.Registry, runReg *cloudrun.Registry, gcs *storage.Service, psvc *pubsub.Service, smsvc *secretmanager.Service, grpcSrv http.Handler, flt *faults.Set) (http.Handler, func()) {
 	configured := o.Runner
 	if configured == "" {
 		configured = "auto"
@@ -402,7 +407,8 @@ func newHandler(clk clock.Clock, o Options, reg *functions.Registry, runReg *clo
 	for _, prefix := range cloudrun.Prefixes {
 		mounts[prefix] = runAPI
 	}
-	mounts["/v1/"] = routeV1(pubsub.NewREST(psvc), runAPI, api)
+	mounts["/v1/"] = routeV1(api,
+		pubsub.NewREST(psvc), runAPI, secretmanager.NewREST(smsvc))
 
 	var gcsAPI http.Handler
 	if gcs != nil {

@@ -42,6 +42,7 @@ Each one is a sequence you can paste, in order, against a running emulator.
 | [Inject failures](#inject-failures) | Make a request fail, to test your error handling |
 | [Fork state](#fork-state) | Branch an emulator, cheaply, mid-test |
 | [Firestore](#firestore) | Documents and queries, over gRPC |
+| [Secret Manager](#secret-manager) | Secrets, versions, and the latest alias |
 | [Cloud Run](#cloud-run) | Deploy a container, and call it |
 | [Run a service without Docker](#run-a-service-without-docker) | The same service as a process |
 
@@ -50,6 +51,7 @@ Each one is a sequence you can paste, in order, against a running emulator.
 | | |
 |---|---|
 | [Architecture](ARCHITECTURE.md) | How cloudrig is put together |
+| [Unsupported](UNSUPPORTED.md) | Every gap, in one place |
 | [Commands](#commands) | Every subcommand and flag |
 | [Test](#test) | Running cloudrig's own suite |
 | [What works](#what-works) | Supported surface, and what is missing |
@@ -630,6 +632,62 @@ collection-group queries, and aggregations.
 
 ---
 
+## Secret Manager
+
+gRPC, on the same port:
+
+```go
+c, _ := secretmanager.NewClient(ctx, /* endpoint options */)
+
+c.CreateSecret(ctx, &secretmanagerpb.CreateSecretRequest{
+    Parent: "projects/cloudrig-local", SecretId: "api-key",
+    Secret: &secretmanagerpb.Secret{Replication: automatic},
+})
+c.AddSecretVersion(ctx, &secretmanagerpb.AddSecretVersionRequest{
+    Parent:  "projects/cloudrig-local/secrets/api-key",
+    Payload: &secretmanagerpb.SecretPayload{Data: []byte("s3cr3t")},
+})
+
+got, _ := c.AccessSecretVersion(ctx, &secretmanagerpb.AccessSecretVersionRequest{
+    Name: "projects/cloudrig-local/secrets/api-key/versions/latest",
+})
+```
+
+`gcloud secrets` works against it too — the Go client speaks gRPC, gcloud
+speaks REST, and both reach the same service:
+
+```sh
+export CLOUDSDK_CORE_PROJECT=cloudrig-local
+. ./cloudrig-env.sh
+
+gcloud secrets create api-key --replication-policy=automatic
+printf 's3cr3t' | gcloud secrets versions add api-key --data-file=-
+gcloud secrets versions access latest --secret=api-key
+# s3cr3t
+
+gcloud secrets versions disable 1 --secret=api-key
+gcloud secrets versions list api-key
+gcloud secrets update api-key --update-labels=env=local
+gcloud secrets delete api-key
+```
+
+A secret is a container; the value lives in numbered versions beneath it, and
+`latest` is an alias for the newest one still enabled. Rotating a secret adds a
+version, and code reading `latest` picks it up without changing.
+
+Disabling the newest version moves `latest` back to the one before — so a
+rotation that went wrong stops serving the bad value. A disabled version still
+exists and refuses to be read; a destroyed one also loses its bytes, keeps its
+number, and cannot be brought back.
+
+IAM policies are answered permissively — every permission asked for is
+granted, because there is no identity here to check.
+
+Not supported: user-managed replication, CMEK, rotation schedules, expiry, and
+version aliases other than `latest`.
+
+---
+
 ## Cloud Run
 
 `examples/cloudrun` is a runnable service — an HTTP server on `$PORT`, which is
@@ -798,6 +856,10 @@ versioning, signed URLs, persistence. Verified against the real Go client and
 deadline expiry, and `--trigger-topic` to run a function on a message. gRPC for
 the client libraries, REST for Terraform, one service behind both.
 
+**Secret Manager** — secrets, versions, the `latest` alias, and disable,
+enable and destroy. gRPC for the client libraries, REST for `gcloud secrets`,
+one service behind both.
+
 **Cloud Run** — deploy an image and it runs as a container through Docker,
 driven by real `gcloud run`. A source directory runs as a process instead.
 
@@ -813,7 +875,8 @@ hardlinking payloads.
 **Not yet** — the XML API, `gsutil`, ACLs, batch, Pub/Sub push subscriptions,
 gen2 functions, and every other GCP service. IAM policies are stored but never
 enforced. Cloud Run and anything else container-backed would need a container
-runtime and is not emulated. See [ARCHITECTURE.md](ARCHITECTURE.md).
+runtime and is not emulated. [UNSUPPORTED.md](UNSUPPORTED.md) is the full list,
+including what is accepted and ignored.
 
 ---
 

@@ -8,11 +8,11 @@ go.work.sum
 /pubsub
 examples/cloudrun/server
 
-# Working notes and briefs, not part of the published module.
+# Working notes and briefs, not part of the published module. UNSUPPORTED.md is
+# published on purpose: a gap list nobody can read is not a gap list.
 .claude/
 PLAN.md
 spec.md
-UNSUPPORTED.md
 docs/
 
 # Node fixtures install their own dependencies.
