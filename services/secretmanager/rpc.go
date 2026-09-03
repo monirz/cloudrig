@@ -47,6 +47,13 @@ func (s *Service) CreateSecret(ctx context.Context, req *secretmanagerpb.CreateS
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "encoding secret: %v", err)
 	}
+
+	// The same lock the delete holds. Without it a create can land in the
+	// window where a name has been removed but its versions have not, and the
+	// replacement secret adopts the old secret's values.
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	// ifVersion 0 makes the duplicate check and the write one step.
 	if _, err := s.kv.Put(ctx, secretKey(secret.Name), encoded, 0); err != nil {
 		if errors.Is(err, store.ErrVersionMismatch) {
@@ -94,16 +101,30 @@ func (s *Service) DeleteSecret(ctx context.Context, req *secretmanagerpb.DeleteS
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if err := s.kv.Delete(ctx, secretKey(req.GetName()), 0); err != nil {
-		return nil, status.Errorf(codes.NotFound, "Secret [%s] not found", req.GetName())
+	if _, err := s.getSecret(ctx, req.GetName()); err != nil {
+		return nil, err
 	}
 
-	// The versions go with it: a secret's value has nowhere else to live.
+	// Versions first, parent second. The other order leaves a window where
+	// the name is free while its values remain: a secret recreated in that
+	// window adopts them.
+	//
+	// A cleanup that fails is reported, not swallowed. Returning success with
+	// payloads still on disk is how a deleted credential comes back.
 	entries, _, err := s.kv.List(ctx, versionPrefix(req.GetName()), 0, "")
-	if err == nil {
-		for _, kv := range entries {
-			_ = s.kv.Delete(ctx, kv.Key, 0)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal,
+			"listing the versions of %s: %v", req.GetName(), err)
+	}
+	for _, kv := range entries {
+		if err := s.kv.Delete(ctx, kv.Key, 0); err != nil {
+			return nil, status.Errorf(codes.Internal,
+				"deleting a version of %s: %v; the secret was left in place", req.GetName(), err)
 		}
+	}
+
+	if err := s.kv.Delete(ctx, secretKey(req.GetName()), 0); err != nil {
+		return nil, status.Errorf(codes.NotFound, "Secret [%s] not found", req.GetName())
 	}
 	return &emptypb.Empty{}, nil
 }

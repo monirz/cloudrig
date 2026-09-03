@@ -130,11 +130,18 @@ func (a *REST) secretVerb(w http.ResponseWriter, r *http.Request, p transport.Pa
 	case "setIamPolicy":
 		return writeIamPolicy(w)
 	case "testIamPermissions":
-		var body struct {
+		// Through the bounded reader, like every other body here: decoding
+		// straight from r.Body would let this one route allocate without end
+		// while the rest are capped.
+		body, err := readBody(r)
+		if err != nil {
+			return err
+		}
+		var asked struct {
 			Permissions []string `json:"permissions"`
 		}
-		_ = json.NewDecoder(r.Body).Decode(&body)
-		return writeJSON(w, map[string]any{"permissions": body.Permissions})
+		_ = json.Unmarshal(body, &asked)
+		return writeJSON(w, map[string]any{"permissions": asked.Permissions})
 	}
 	if verb != "addVersion" {
 		return unsupportedVerb(name, verb)
@@ -229,17 +236,27 @@ func unsupportedVerb(name, verb string) error {
 // dies, which is a cheap way to take down everything else sharing the port.
 const MaxBodyBytes = 4 << 20
 
-// decode reads a JSON body into a proto. An empty body is not an error: a
-// create carries what it needs in the path and the query.
-func decode(r *http.Request, into proto.Message) error {
+// readBody reads a request body, refusing one past the cap. Every route that
+// reads a body goes through here.
+func readBody(r *http.Request) ([]byte, error) {
 	body, err := io.ReadAll(io.LimitReader(r.Body, MaxBodyBytes+1))
 	if err != nil {
-		return gerr.New(gerr.InvalidArgument, "reading the request body: "+err.Error()).
+		return nil, gerr.New(gerr.InvalidArgument, "reading the request body: "+err.Error()).
 			WithHTTPStatus(http.StatusBadRequest)
 	}
 	if len(body) > MaxBodyBytes {
-		return gerr.New(gerr.InvalidArgument, "the request body is too large").
+		return nil, gerr.New(gerr.InvalidArgument, "the request body is too large").
 			WithHTTPStatus(http.StatusRequestEntityTooLarge)
+	}
+	return body, nil
+}
+
+// decode reads a JSON body into a proto. An empty body is not an error: a
+// create carries what it needs in the path and the query.
+func decode(r *http.Request, into proto.Message) error {
+	body, err := readBody(r)
+	if err != nil {
+		return err
 	}
 	if len(strings.TrimSpace(string(body))) == 0 {
 		return nil

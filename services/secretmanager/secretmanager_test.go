@@ -2,6 +2,8 @@ package secretmanager
 
 import (
 	"context"
+	"errors"
+	"strings"
 	"sync"
 	"testing"
 
@@ -155,4 +157,118 @@ func TestDeleteDoesNotLeaveAnOrphanVersion(t *testing.T) {
 				attempt, got.GetPayload().GetData())
 		}
 	}
+}
+
+// TestCreateDuringDeleteAdoptsNothing covers the other side of the lifecycle
+// race: a secret recreated while an older one is being deleted must not
+// inherit its values. Versions are removed before the name is freed, so there
+// is no window in which the name exists beside them.
+func TestCreateDuringDeleteAdoptsNothing(t *testing.T) {
+	t.Parallel()
+
+	automatic := &secretmanagerpb.Replication{
+		Replication: &secretmanagerpb.Replication_Automatic_{
+			Automatic: &secretmanagerpb.Replication_Automatic{},
+		},
+	}
+	const name = "projects/p/secrets/reused"
+	create := &secretmanagerpb.CreateSecretRequest{
+		Parent: "projects/p", SecretId: "reused",
+		Secret: &secretmanagerpb.Secret{Replication: automatic},
+	}
+
+	for attempt := 0; attempt < 100; attempt++ {
+		s := New(store.NewMemory(), clock.NewFake(epoch))
+		ctx := context.Background()
+
+		if _, err := s.CreateSecret(ctx, create); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.AddSecretVersion(ctx, &secretmanagerpb.AddSecretVersionRequest{
+			Parent: name, Payload: &secretmanagerpb.SecretPayload{Data: []byte("old-secret")},
+		}); err != nil {
+			t.Fatal(err)
+		}
+
+		var wg sync.WaitGroup
+		var readErr error
+		var read []byte
+		wg.Add(3)
+		go func() {
+			defer wg.Done()
+			_, _ = s.DeleteSecret(ctx, &secretmanagerpb.DeleteSecretRequest{Name: name})
+		}()
+		go func() { defer wg.Done(); _, _ = s.CreateSecret(ctx, create) }()
+		go func() {
+			// Reading throughout, which is where the window would show.
+			defer wg.Done()
+			got, err := s.AccessSecretVersion(ctx, &secretmanagerpb.AccessSecretVersionRequest{
+				Name: name + "/versions/latest",
+			})
+			readErr = err
+			if err == nil {
+				read = got.GetPayload().GetData()
+			}
+		}()
+		wg.Wait()
+
+		// Reading before the delete lands is fine; reading the old value
+		// through a secret that was recreated is not.
+		if readErr == nil && string(read) != "old-secret" {
+			t.Fatalf("attempt %d: read %q", attempt, read)
+		}
+		if _, err := s.AccessSecretVersion(ctx, &secretmanagerpb.AccessSecretVersionRequest{
+			Name: name + "/versions/latest",
+		}); err == nil {
+			t.Fatalf("attempt %d: values outlived the delete", attempt)
+		}
+	}
+}
+
+// TestDeleteReportsCleanupFailure holds that a delete which could not remove
+// the values says so. Reporting success with payloads still stored is how a
+// deleted credential comes back.
+func TestDeleteReportsCleanupFailure(t *testing.T) {
+	t.Parallel()
+
+	s := New(failingDeletes{Store: store.NewMemory()}, clock.NewFake(epoch))
+	ctx := context.Background()
+
+	if _, err := s.CreateSecret(ctx, &secretmanagerpb.CreateSecretRequest{
+		Parent: "projects/p", SecretId: "stuck",
+		Secret: &secretmanagerpb.Secret{},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.AddSecretVersion(ctx, &secretmanagerpb.AddSecretVersionRequest{
+		Parent:  "projects/p/secrets/stuck",
+		Payload: &secretmanagerpb.SecretPayload{Data: []byte("v")},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := s.DeleteSecret(ctx, &secretmanagerpb.DeleteSecretRequest{
+		Name: "projects/p/secrets/stuck",
+	})
+	if status.Code(err) != codes.Internal {
+		t.Fatalf("err = %v, want the failure reported", err)
+	}
+	// And the secret is still there, so the caller can retry rather than
+	// being left with a name that is gone and values that are not.
+	if _, err := s.GetSecret(ctx, &secretmanagerpb.GetSecretRequest{
+		Name: "projects/p/secrets/stuck",
+	}); err != nil {
+		t.Errorf("the secret was removed despite the failure: %v", err)
+	}
+}
+
+// failingDeletes refuses to delete a version, standing in for a store that
+// fails partway.
+type failingDeletes struct{ store.Store }
+
+func (f failingDeletes) Delete(ctx context.Context, key string, ifVersion uint64) error {
+	if strings.HasPrefix(key, "sm/v/") {
+		return errors.New("the store refused")
+	}
+	return f.Store.Delete(ctx, key, ifVersion)
 }

@@ -503,6 +503,13 @@ func TestSecretRejectsAnOversizedBody(t *testing.T) {
 		t.Errorf("status = %d, want 413", code)
 	}
 
+	// Every route that reads a body is capped, not only the ones decoding a
+	// proto: the IAM verbs took their own path and slipped the limit.
+	if code, _ := post(t, http.MethodPost, base+"/small:testIamPermissions",
+		`{"permissions":["`+strings.Repeat("B", 5<<20)+`"]}`); code != http.StatusRequestEntityTooLarge {
+		t.Errorf("testIamPermissions with an oversized body = %d, want 413", code)
+	}
+
 	// An ordinary body still works.
 	if code, _ := post(t, http.MethodPost, base+"?secretId=small",
 		`{"replication":{"automatic":{}}}`); code != http.StatusOK {
