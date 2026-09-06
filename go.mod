@@ -6,10 +6,12 @@ require (
 	cloud.google.com/go/cloudtasks v1.19.0
 	cloud.google.com/go/firestore v1.25.0
 	cloud.google.com/go/pubsub/v2 v2.7.0
+	cloud.google.com/go/scheduler v1.16.0
 	cloud.google.com/go/secretmanager v1.21.0
 	cloud.google.com/go/storage v1.66.0
 	github.com/docker/docker v28.5.2+incompatible
 	github.com/docker/go-connections v0.8.1
+	github.com/robfig/cron/v3 v3.0.1
 	google.golang.org/api v0.295.0
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260819154853-08b0e4226688
 	google.golang.org/grpc v1.83.2
