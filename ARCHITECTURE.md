@@ -60,6 +60,7 @@ process the same way they would reach Google.
 | `services/secretmanager` | Secrets and versions, over gRPC |
 | `services/cloudtasks` | Deferred HTTP tasks, dispatched on the injected clock |
 | `services/cloudscheduler` | Cron jobs, fired on the injected clock |
+| `services/gke` | The cluster admin API over a real local Kubernetes |
 | `services/serviceusage` | Which APIs a project has enabled |
 | `lint` | Build-time invariants enforced as tests |
 

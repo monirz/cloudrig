@@ -23,6 +23,7 @@ import (
 	"testing"
 
 	"cloud.google.com/go/cloudtasks/apiv2/cloudtaskspb"
+	"cloud.google.com/go/container/apiv1/containerpb"
 	"cloud.google.com/go/firestore/apiv1/firestorepb"
 	"cloud.google.com/go/pubsub/v2/apiv1/pubsubpb"
 	"cloud.google.com/go/scheduler/apiv1/schedulerpb"
@@ -39,6 +40,7 @@ import (
 	"github.com/monirz/cloudrig/services/cloudscheduler"
 	"github.com/monirz/cloudrig/services/cloudtasks"
 	"github.com/monirz/cloudrig/services/firestore"
+	"github.com/monirz/cloudrig/services/gke"
 	"github.com/monirz/cloudrig/services/pubsub"
 	"github.com/monirz/cloudrig/services/secretmanager"
 	"github.com/monirz/cloudrig/services/serviceusage"
@@ -154,8 +156,9 @@ func Start(ctx context.Context, o Options) (*Emulator, error) {
 	ctsvc := cloudtasks.New(stack.kvStore, clk)
 	cssvc := cloudscheduler.New(stack.kvStore, clk, publishTo(psvc))
 	susvc := serviceusage.New(stack.kvStore)
+	gksvc := gke.New(stack.kvStore, clk)
 	runReg := cloudrun.NewRegistry()
-	handler, closeAPIs := newHandler(clk, o, reg, runReg, stack.svc, psvc, smsvc, ctsvc, cssvc, susvc, newGRPC(psvc, fsvc, smsvc, ctsvc, cssvc), flt)
+	handler, closeAPIs := newHandler(clk, o, reg, runReg, stack.svc, psvc, smsvc, ctsvc, cssvc, susvc, newGRPC(psvc, fsvc, smsvc, ctsvc, cssvc, gksvc), flt)
 	srv := &http.Server{
 		Handler:   handler,
 		Protocols: transport.Protocols(), // HTTP/1.1 and h2c on one port
@@ -297,9 +300,10 @@ func serveForTest(t testing.TB, o Options, stack storageStack) *Emulator {
 	ctsvc := cloudtasks.New(stack.kvStore, o.Clock)
 	cssvc := cloudscheduler.New(stack.kvStore, o.Clock, publishTo(psvc))
 	susvc := serviceusage.New(stack.kvStore)
+	gksvc := gke.New(stack.kvStore, o.Clock)
 	runReg := cloudrun.NewRegistry()
 	t.Cleanup(runReg.StopAll)
-	handler, closeAPIs := newHandler(o.Clock, o, reg, runReg, stack.svc, psvc, smsvc, ctsvc, cssvc, susvc, newGRPC(psvc, fsvc, smsvc, ctsvc, cssvc), flt)
+	handler, closeAPIs := newHandler(o.Clock, o, reg, runReg, stack.svc, psvc, smsvc, ctsvc, cssvc, susvc, newGRPC(psvc, fsvc, smsvc, ctsvc, cssvc, gksvc), flt)
 	t.Cleanup(closeAPIs)
 
 	srv := httptest.NewUnstartedServer(handler)
@@ -378,7 +382,7 @@ func publishTo(ps *pubsub.Service) cloudscheduler.PublishFunc {
 //
 // Requests reach it through the transport's h2c dispatch, so gRPC and REST
 // share the one port.
-func newGRPC(ps *pubsub.Service, fs *firestore.Service, sm *secretmanager.Service, ct *cloudtasks.Service, cs *cloudscheduler.Service) *grpc.Server {
+func newGRPC(ps *pubsub.Service, fs *firestore.Service, sm *secretmanager.Service, ct *cloudtasks.Service, cs *cloudscheduler.Service, gk *gke.Service) *grpc.Server {
 	srv := grpc.NewServer()
 	pubsubpb.RegisterPublisherServer(srv, pubsub.NewPublisher(ps))
 	pubsubpb.RegisterSubscriberServer(srv, pubsub.NewSubscriber(ps))
@@ -386,6 +390,7 @@ func newGRPC(ps *pubsub.Service, fs *firestore.Service, sm *secretmanager.Servic
 	secretmanagerpb.RegisterSecretManagerServiceServer(srv, sm)
 	cloudtaskspb.RegisterCloudTasksServer(srv, ct)
 	schedulerpb.RegisterCloudSchedulerServer(srv, cs)
+	containerpb.RegisterClusterManagerServer(srv, gk)
 	return srv
 }
 

@@ -72,6 +72,17 @@ Service Usage: state is tracked, but no dependency graph — enabling a service
 does not auto-enable the services it depends on, and quota/billing gating does
 not exist (an untouched service reads as enabled).
 
+GKE:
+
+- A cluster is a real local Kubernetes (kind); without kind and a container
+  runtime, CreateCluster fails at the honest boundary rather than returning a
+  cluster that cannot run a pod. k3s/k3d can replace kind at the same seam.
+- Node pools, autoscaling, upgrades, IP rotation and the other cluster-mutation
+  RPCs are not modelled; a cluster comes up with kind's defaults.
+- gRPC only so far. `gcloud container clusters` speaks REST, and get-credentials
+  (a kubeconfig for the cluster) is the next step — the runner already produces
+  the kubeconfig, it is not yet exposed over the API.
+
 gRPC: everything except Pub/Sub.
 
 Firestore:

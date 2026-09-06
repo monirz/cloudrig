@@ -1012,6 +1012,9 @@ the injected clock so a test drives it with `Advance`.
 **Cloud Scheduler** — cron jobs firing HTTP or Pub/Sub targets, recurring on the
 injected clock.
 
+**GKE** — `CreateCluster` starts a *real* local Kubernetes (kind), not a stub:
+`kubectl` against it schedules real pods. Needs kind and a container runtime.
+
 **Service Usage** — `gcloud services enable/disable/list`, tracking real per-
 project state so a Terraform config that toggles an API round-trips.
 
