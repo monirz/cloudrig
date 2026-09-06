@@ -82,3 +82,50 @@ func TestEntriesAreBounded(t *testing.T) {
 		t.Errorf("kept %d entries, want the cap of 5", n)
 	}
 }
+
+// TestQuotedValueWithSpace holds the split bug: a quoted value containing a
+// space must stay one term, not fragment into an error.
+func TestQuotedValueWithSpace(t *testing.T) {
+	t.Parallel()
+
+	pred, err := parseFilter(`labels.message="payment failed"`)
+	if err != nil {
+		t.Fatalf("parseFilter: %v", err)
+	}
+	if !pred(entry(ltype.LogSeverity_ERROR, map[string]string{"message": "payment failed"})) {
+		t.Error("a quoted value with a space did not match")
+	}
+	if pred(entry(ltype.LogSeverity_ERROR, map[string]string{"message": "payment"})) {
+		t.Error("matched a different value")
+	}
+}
+
+// TestProjectScope is the shared-emulator case: a query for one project must
+// not return another project's entries.
+func TestProjectScope(t *testing.T) {
+	t.Parallel()
+
+	s := New(clock.NewFake(epoch))
+	ctx := context.Background()
+	for _, ln := range []string{"projects/a/logs/x", "projects/b/logs/x"} {
+		s.WriteLogEntries(ctx, &loggingpb.WriteLogEntriesRequest{
+			LogName: ln,
+			Entries: []*loggingpb.LogEntry{{Payload: &loggingpb.LogEntry_TextPayload{TextPayload: ln}}},
+		})
+	}
+
+	got, err := s.ListLogEntries(ctx, &loggingpb.ListLogEntriesRequest{
+		ResourceNames: []string{"projects/a"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.GetEntries()) != 1 || got.GetEntries()[0].GetLogName() != "projects/a/logs/x" {
+		t.Errorf("ListLogEntries for project a returned %d entries: %+v", len(got.GetEntries()), got.GetEntries())
+	}
+
+	logs, _ := s.ListLogs(ctx, &loggingpb.ListLogsRequest{Parent: "projects/b"})
+	if len(logs.GetLogNames()) != 1 || logs.GetLogNames()[0] != "projects/b/logs/x" {
+		t.Errorf("ListLogs for project b returned %v", logs.GetLogNames())
+	}
+}

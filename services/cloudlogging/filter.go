@@ -46,20 +46,40 @@ func parseFilter(filter string) (predicate, error) {
 	}, nil
 }
 
-// splitTerms breaks a filter on AND / whitespace, keeping quoted values whole.
+// splitTerms breaks a filter into terms on whitespace and AND, but never
+// inside a double-quoted value — so labels.message="payment failed" stays one
+// term rather than splitting on the space in the value.
 func splitTerms(filter string) []string {
-	// The filters this serves are simple: terms separated by AND or spaces,
-	// values optionally quoted. A full boolean grammar is more than a local
-	// emulator needs.
-	fields := strings.Fields(strings.ReplaceAll(filter, " AND ", " "))
 	var terms []string
-	for _, f := range fields {
-		if f == "AND" {
-			continue
+	var cur strings.Builder
+	inQuote := false
+
+	flush := func() {
+		if cur.Len() > 0 {
+			terms = append(terms, cur.String())
+			cur.Reset()
 		}
-		terms = append(terms, f)
 	}
-	return terms
+	for _, r := range filter {
+		switch {
+		case r == '"':
+			inQuote = !inQuote
+			cur.WriteRune(r)
+		case (r == ' ' || r == '	') && !inQuote:
+			flush()
+		default:
+			cur.WriteRune(r)
+		}
+	}
+	flush()
+
+	out := terms[:0]
+	for _, t := range terms {
+		if t != "AND" {
+			out = append(out, t)
+		}
+	}
+	return out
 }
 
 func parseTerm(term string) (predicate, error) {

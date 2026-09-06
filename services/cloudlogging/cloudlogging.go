@@ -91,10 +91,12 @@ func (s *Service) ListLogEntries(ctx context.Context, req *loggingpb.ListLogEntr
 		return nil, err
 	}
 
+	scope := projectScope(req.GetResourceNames())
+
 	s.mu.Lock()
 	matched := make([]*loggingpb.LogEntry, 0, len(s.entries))
 	for _, e := range s.entries {
-		if pred(e) {
+		if scope(e.GetLogName()) && pred(e) {
 			matched = append(matched, e)
 		}
 	}
@@ -110,10 +112,14 @@ func (s *Service) ListLogEntries(ctx context.Context, req *loggingpb.ListLogEntr
 
 // ListLogs returns the distinct log names that have entries.
 func (s *Service) ListLogs(ctx context.Context, req *loggingpb.ListLogsRequest) (*loggingpb.ListLogsResponse, error) {
+	scope := projectScope([]string{req.GetParent()})
+
 	s.mu.Lock()
 	seen := map[string]bool{}
 	for _, e := range s.entries {
-		seen[e.GetLogName()] = true
+		if scope(e.GetLogName()) {
+			seen[e.GetLogName()] = true
+		}
 	}
 	s.mu.Unlock()
 
@@ -157,6 +163,31 @@ func (s *Service) Reset(ctx context.Context, project string) error {
 	}
 	s.entries = kept
 	return nil
+}
+
+// projectScope reports whether a log name falls under any of the requested
+// resource names. In a shared emulator several projects' logs sit in one slice,
+// so a query for one project must not see another's. An empty request matches
+// everything, which is only reachable in tests that omit the scope.
+func projectScope(resourceNames []string) func(logName string) bool {
+	var prefixes []string
+	for _, rn := range resourceNames {
+		if rn == "" {
+			continue
+		}
+		prefixes = append(prefixes, rn+"/") // "projects/p" -> "projects/p/"
+	}
+	if len(prefixes) == 0 {
+		return func(string) bool { return true }
+	}
+	return func(logName string) bool {
+		for _, pre := range prefixes {
+			if hasPrefix(logName, pre) {
+				return true
+			}
+		}
+		return false
+	}
 }
 
 func mergeLabels(base, over map[string]string) map[string]string {
