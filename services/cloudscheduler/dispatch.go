@@ -121,7 +121,18 @@ func (realDoer) do(job *schedulerpb.Job) (int, error) {
 	if method == "HTTP_METHOD_UNSPECIFIED" || method == "" {
 		method = http.MethodPost
 	}
-	req, err := http.NewRequest(method, t.GetUri(), bytes.NewReader(t.GetBody()))
+
+	// Bounded, so a target that accepts a connection and never answers cannot
+	// pile up one stuck goroutine per recurrence and hang SyncScheduler. The
+	// job's attempt deadline caps it, defaulting to Cloud Scheduler's 180s.
+	deadline := job.GetAttemptDeadline().AsDuration()
+	if deadline <= 0 {
+		deadline = defaultAttemptDeadline
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), deadline)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, method, t.GetUri(), bytes.NewReader(t.GetBody()))
 	if err != nil {
 		return 0, err
 	}
@@ -136,3 +147,6 @@ func (realDoer) do(job *schedulerpb.Job) (int, error) {
 	_, _ = io.Copy(io.Discard, resp.Body)
 	return resp.StatusCode, nil
 }
+
+// defaultAttemptDeadline is Cloud Scheduler's default when a job sets none.
+const defaultAttemptDeadline = 180 * time.Second

@@ -3,6 +3,7 @@ package cloudscheduler
 import (
 	"context"
 	"sort"
+	"strings"
 
 	"cloud.google.com/go/scheduler/apiv1/schedulerpb"
 	"google.golang.org/grpc/codes"
@@ -18,6 +19,13 @@ func (s *Service) CreateJob(ctx context.Context, req *schedulerpb.CreateJobReque
 	}
 	if err := validJobName(job.GetName()); err != nil {
 		return nil, err
+	}
+	// The name must live under the requested parent. Otherwise the job would
+	// be stored and scheduled under a project/location the caller did not name
+	// — absent from that parent's ListJobs and running in the wrong scope.
+	if got := jobCollection(job.GetName()); got != req.GetParent() {
+		return nil, status.Errorf(codes.InvalidArgument,
+			"job name %q is not under the parent %q", job.GetName(), req.GetParent())
 	}
 	if _, err := cronParser.Parse(job.GetSchedule()); err != nil {
 		return nil, status.Errorf(codes.InvalidArgument,
@@ -41,6 +49,16 @@ func (s *Service) CreateJob(ctx context.Context, req *schedulerpb.CreateJobReque
 	}
 	s.arm(job, s.clk.Now())
 	return job, nil
+}
+
+// jobCollection returns the parent a job name belongs to: the name without its
+// /jobs/{id} tail.
+func jobCollection(name string) string {
+	const marker = "/jobs/"
+	if i := strings.Index(name, marker); i >= 0 {
+		return name[:i]
+	}
+	return name
 }
 
 func (s *Service) GetJob(ctx context.Context, req *schedulerpb.GetJobRequest) (*schedulerpb.Job, error) {
