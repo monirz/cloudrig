@@ -87,6 +87,14 @@ Secret Manager:
   empty policy and testIamPermissions grants whatever is asked for, so a
   command that only wanted to read a policy is not blocked.
 
+Cloud Tasks:
+
+- App Engine task targets; only http_request is dispatched.
+- OIDC/OAuth token minting on a task's request.
+- Rate limiting: a queue's max_dispatches_per_second and
+  max_concurrent_dispatches are stored but not enforced; retry_config is.
+
+
 Cloud Run:
 
 - Building an image from source (`gcloud run deploy --source`). An image runs

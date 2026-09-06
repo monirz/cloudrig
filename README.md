@@ -43,6 +43,7 @@ Each one is a sequence you can paste, in order, against a running emulator.
 | [Fork state](#fork-state) | Branch an emulator, cheaply, mid-test |
 | [Firestore](#firestore) | Documents and queries, over gRPC |
 | [Secret Manager](#secret-manager) | Secrets, versions, and the latest alias |
+| [Cloud Tasks](#cloud-tasks) | Deferred HTTP work, fired on the clock |
 | [Cloud Run](#cloud-run) | Deploy a container, and call it |
 | [Run a service without Docker](#run-a-service-without-docker) | The same service as a process |
 
@@ -505,6 +506,11 @@ emu.Functions().Deploy(ctx, functions.Function{...})
 emu.SyncEvents()
 ```
 
+`SyncTasks` is the Cloud Tasks equivalent: a task due now dispatches on its own
+goroutine, so `SyncTasks` waits for that before you advance the clock for a
+scheduled retry. (Scheduled tasks need no Sync — a timer fires synchronously
+inside `Advance`.)
+
 `SyncEvents` waits for delivery — the handler has run and answered. It does
 **not** wait for the handler's output: a function is a child process whose
 stdout is drained by another goroutine, so a log line can arrive shortly
@@ -688,6 +694,96 @@ version aliases other than `latest`.
 
 ---
 
+## Cloud Tasks
+
+gRPC, on the same port. A task is deferred HTTP work: it names a URL, a body and
+a schedule time, and the queue dispatches it when that time arrives, retrying on
+failure.
+
+```go
+c, _ := cloudtasks.NewClient(ctx, /* endpoint options */)
+
+c.CreateQueue(ctx, &cloudtaskspb.CreateQueueRequest{
+    Parent: "projects/p/locations/us-central1",
+    Queue:  &cloudtaskspb.Queue{Name: ".../queues/work"},
+})
+c.CreateTask(ctx, &cloudtaskspb.CreateTaskRequest{
+    Parent: ".../queues/work",
+    Task: &cloudtaskspb.Task{
+        ScheduleTime: timestamppb.New(time.Now().Add(time.Hour)),
+        MessageType: &cloudtaskspb.Task_HttpRequest{HttpRequest: &cloudtaskspb.HttpRequest{
+            Url: "https://worker.example/handle", HttpMethod: cloudtaskspb.HttpMethod_POST,
+        }},
+    },
+})
+```
+
+The dispatch runs on the injected clock, which is the thing you cannot do
+against real Cloud Tasks — a task due in an hour fires when a test advances the
+clock an hour, not after a real hour:
+
+```go
+emu.FakeClock(t).Advance(time.Hour)   // the task fires now
+```
+
+`gcloud tasks` works against it too — the Go client speaks gRPC, gcloud speaks
+REST, both over the same service. To watch a task actually fire, give it a
+target to hit.
+
+**1. Start something for the task to call.** This prints whatever it receives:
+
+```sh
+python3 -c '
+import http.server
+class H(http.server.BaseHTTPRequestHandler):
+    def do_POST(self):
+        n=int(self.headers.get("Content-Length",0))
+        print("SINK received:", self.rfile.read(n).decode() if n else "", flush=True)
+        self.send_response(200); self.end_headers()
+    def log_message(self,*a): pass
+http.server.HTTPServer(("127.0.0.1",8899),H).serve_forever()'
+```
+
+**2. Point gcloud at the emulator, create a queue, enqueue a task:**
+
+```sh
+export CLOUDSDK_CORE_PROJECT=cloudrig-local
+. ./cloudrig-env.sh          # source it, do not pipe it
+
+gcloud tasks queues create work --location=us-central1
+gcloud tasks create-http-task --queue=work --location=us-central1 \
+  --url=http://127.0.0.1:8899/ --body-content='hello-task'
+```
+
+The sink prints `SINK received: hello-task` — the task was dispatched to a real
+HTTP endpoint, not recorded. The rest of the surface:
+
+```sh
+gcloud tasks queues list     --location=us-central1
+gcloud tasks queues describe work --location=us-central1
+gcloud tasks queues pause    work --location=us-central1
+gcloud tasks queues resume   work --location=us-central1
+gcloud tasks queues delete   work --location=us-central1
+```
+
+Queue CRUD, pause and resume, purge, task create/get/list/delete, `RunTask` to
+force a task ahead of its schedule, and retries with exponential backoff bounded
+by the queue's `RetryConfig`.
+
+The clock behaviour above — a task due in an hour firing on `Advance(time.Hour)`
+— is a library feature, not a CLI one: `cloudrig start` runs on the real clock.
+See it in a test:
+
+```sh
+go test -run TestTaskFiresAtItsScheduledTime -v ./test/conformance/
+```
+
+Not supported: App Engine task targets (use an HTTP target), OIDC/OAuth token
+minting on the request, and rate limiting (`maxDispatchesPerSecond` is stored
+but not enforced).
+
+---
+
 ## Cloud Run
 
 `examples/cloudrun` is a runnable service — an HTTP server on `$PORT`, which is
@@ -855,6 +951,9 @@ versioning, signed URLs, persistence. Verified against the real Go client and
 **Pub/Sub** — topics, subscriptions, publish, streaming pull, ack and nack,
 deadline expiry, and `--trigger-topic` to run a function on a message. gRPC for
 the client libraries, REST for Terraform, one service behind both.
+
+**Cloud Tasks** — deferred HTTP work with scheduling and retries, dispatched on
+the injected clock so a test drives it with `Advance`.
 
 **Secret Manager** — secrets, versions, the `latest` alias, and disable,
 enable and destroy. gRPC for the client libraries, REST for `gcloud secrets`,

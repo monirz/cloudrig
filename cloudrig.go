@@ -22,6 +22,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"cloud.google.com/go/cloudtasks/apiv2/cloudtaskspb"
 	"cloud.google.com/go/firestore/apiv1/firestorepb"
 	"cloud.google.com/go/pubsub/v2/apiv1/pubsubpb"
 	"cloud.google.com/go/secretmanager/apiv1/secretmanagerpb"
@@ -34,6 +35,7 @@ import (
 
 	"github.com/monirz/cloudrig/services/cloudfunctions"
 	"github.com/monirz/cloudrig/services/cloudrun"
+	"github.com/monirz/cloudrig/services/cloudtasks"
 	"github.com/monirz/cloudrig/services/firestore"
 	"github.com/monirz/cloudrig/services/pubsub"
 	"github.com/monirz/cloudrig/services/secretmanager"
@@ -97,6 +99,7 @@ type Emulator struct {
 	blobs *blob.Store
 	opts  Options
 	run   *cloudrun.Registry
+	tasks *cloudtasks.Service
 }
 
 // Start runs the emulator on a real listener; the caller owns shutdown. ctx
@@ -143,8 +146,9 @@ func Start(ctx context.Context, o Options) (*Emulator, error) {
 	psvc := pubsub.New(stack.kvStore, clk, bus)
 	fsvc := firestore.New(stack.kvStore, clk)
 	smsvc := secretmanager.New(stack.kvStore, clk)
+	ctsvc := cloudtasks.New(stack.kvStore, clk)
 	runReg := cloudrun.NewRegistry()
-	handler, closeAPIs := newHandler(clk, o, reg, runReg, stack.svc, psvc, smsvc, newGRPC(psvc, fsvc, smsvc), flt)
+	handler, closeAPIs := newHandler(clk, o, reg, runReg, stack.svc, psvc, smsvc, ctsvc, newGRPC(psvc, fsvc, smsvc, ctsvc), flt)
 	srv := &http.Server{
 		Handler:   handler,
 		Protocols: transport.Protocols(), // HTTP/1.1 and h2c on one port
@@ -157,6 +161,7 @@ func Start(ctx context.Context, o Options) (*Emulator, error) {
 		clk:     clk,
 		faults:  flt,
 		run:     runReg,
+		tasks:   ctsvc,
 		addr:    dialable(ln.Addr().String()),
 		fns:     reg,
 		storage: stack.svc,
@@ -280,9 +285,10 @@ func serveForTest(t testing.TB, o Options, stack storageStack) *Emulator {
 	psvc := pubsub.New(stack.kvStore, o.Clock, bus)
 	fsvc := firestore.New(stack.kvStore, o.Clock)
 	smsvc := secretmanager.New(stack.kvStore, o.Clock)
+	ctsvc := cloudtasks.New(stack.kvStore, o.Clock)
 	runReg := cloudrun.NewRegistry()
 	t.Cleanup(runReg.StopAll)
-	handler, closeAPIs := newHandler(o.Clock, o, reg, runReg, stack.svc, psvc, smsvc, newGRPC(psvc, fsvc, smsvc), flt)
+	handler, closeAPIs := newHandler(o.Clock, o, reg, runReg, stack.svc, psvc, smsvc, ctsvc, newGRPC(psvc, fsvc, smsvc, ctsvc), flt)
 	t.Cleanup(closeAPIs)
 
 	srv := httptest.NewUnstartedServer(handler)
@@ -294,6 +300,7 @@ func serveForTest(t testing.TB, o Options, stack storageStack) *Emulator {
 		clk:     o.Clock,
 		faults:  flt,
 		run:     runReg,
+		tasks:   ctsvc,
 		addr:    srv.Listener.Addr().String(),
 		fns:     reg,
 		storage: stack.svc,
@@ -345,12 +352,13 @@ func (e *Emulator) Fork(t testing.TB) *Emulator {
 //
 // Requests reach it through the transport's h2c dispatch, so gRPC and REST
 // share the one port.
-func newGRPC(ps *pubsub.Service, fs *firestore.Service, sm *secretmanager.Service) *grpc.Server {
+func newGRPC(ps *pubsub.Service, fs *firestore.Service, sm *secretmanager.Service, ct *cloudtasks.Service) *grpc.Server {
 	srv := grpc.NewServer()
 	pubsubpb.RegisterPublisherServer(srv, pubsub.NewPublisher(ps))
 	pubsubpb.RegisterSubscriberServer(srv, pubsub.NewSubscriber(ps))
 	firestorepb.RegisterFirestoreServer(srv, fs)
 	secretmanagerpb.RegisterSecretManagerServiceServer(srv, sm)
+	cloudtaskspb.RegisterCloudTasksServer(srv, ct)
 	return srv
 }
 
@@ -378,7 +386,7 @@ func routeV1(fallback http.Handler, services ...matcher) http.Handler {
 
 // newHandler builds the request surface and returns what it must tear down:
 // the API objects own temporary directories, and nothing else can reach them.
-func newHandler(clk clock.Clock, o Options, reg *functions.Registry, runReg *cloudrun.Registry, gcs *storage.Service, psvc *pubsub.Service, smsvc *secretmanager.Service, grpcSrv http.Handler, flt *faults.Set) (http.Handler, func()) {
+func newHandler(clk clock.Clock, o Options, reg *functions.Registry, runReg *cloudrun.Registry, gcs *storage.Service, psvc *pubsub.Service, smsvc *secretmanager.Service, ctsvc *cloudtasks.Service, grpcSrv http.Handler, flt *faults.Set) (http.Handler, func()) {
 	configured := o.Runner
 	if configured == "" {
 		configured = "auto"
@@ -399,6 +407,9 @@ func newHandler(clk clock.Clock, o Options, reg *functions.Registry, runReg *clo
 	for _, prefix := range cloudfunctions.Prefixes {
 		mounts[prefix] = api
 	}
+	// Cloud Tasks serves /v2/projects/{p}/locations/{l}/queues, the same
+	// prefix Cloud Functions v2 uses, so the two are told apart by route.
+	mounts["/v2/"] = routeV1(api, cloudtasks.NewREST(ctsvc))
 	closers := []io.Closer{api}
 
 	// Three services live under /v1/projects/{project}/, so a mount prefix
@@ -475,6 +486,15 @@ func (e *Emulator) Functions() *functions.Registry { return e.fns }
 
 // CloudRun is the registry of deployed Cloud Run services.
 func (e *Emulator) CloudRun() *cloudrun.Registry { return e.run }
+
+// SyncTasks waits for every immediately-dispatched Cloud Tasks task to finish,
+// including arming any retry. A test advances the clock for scheduled tasks;
+// this covers the due-now ones that run off a goroutine.
+func (e *Emulator) SyncTasks() {
+	if e.tasks != nil {
+		e.tasks.Sync()
+	}
+}
 
 // Faults is the live fault-injection rule set.
 //
