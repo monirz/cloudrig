@@ -2,8 +2,11 @@ package conformance
 
 import (
 	"context"
+	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -241,4 +244,80 @@ func pubsubClientAt(t *testing.T, emu *cloudrig.Emulator) *pubsub.Client {
 	}
 	t.Cleanup(func() { _ = c.Close() })
 	return c
+}
+
+// csREST sends a JSON request to the scheduler REST API — the surface gcloud
+// uses; the Go client never touches it.
+func csREST(t *testing.T, method, url, body string) (int, map[string]any) {
+	t.Helper()
+	var rdr io.Reader
+	if body != "" {
+		rdr = strings.NewReader(body)
+	}
+	req, err := http.NewRequest(method, url, rdr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(resp.Body)
+	out := map[string]any{}
+	if len(strings.TrimSpace(string(raw))) > 0 {
+		if err := json.Unmarshal(raw, &out); err != nil {
+			t.Fatalf("%s %s: body %q: %v", method, url, raw, err)
+		}
+	}
+	return resp.StatusCode, out
+}
+
+// TestSchedulerRESTLifecycle walks what gcloud does: create, list, the :verb
+// forms, and delete.
+func TestSchedulerRESTLifecycle(t *testing.T) {
+	t.Parallel()
+
+	emu := cloudrig.MustStart(t)
+	base := emu.BaseURL() + "/v1/projects/p/locations/us-central1/jobs"
+
+	code, job := csREST(t, http.MethodPost, base,
+		`{"name":"projects/p/locations/us-central1/jobs/nightly","schedule":"0 9 * * *","httpTarget":{"uri":"http://127.0.0.1:9/","httpMethod":"POST"}}`)
+	if code != http.StatusOK || job["name"] != "projects/p/locations/us-central1/jobs/nightly" {
+		t.Fatalf("create = %d %v", code, job)
+	}
+
+	if code, _ := csREST(t, http.MethodGet, base+"/nightly", ""); code != http.StatusOK {
+		t.Errorf("get = %d", code)
+	}
+	if code, _ := csREST(t, http.MethodPost, base+"/nightly:pause", ""); code != http.StatusOK {
+		t.Errorf("pause = %d", code)
+	}
+	if code, _ := csREST(t, http.MethodPost, base+"/nightly:resume", ""); code != http.StatusOK {
+		t.Errorf("resume = %d", code)
+	}
+	if code, _ := csREST(t, http.MethodPost, base+"/nightly:run", ""); code != http.StatusOK {
+		t.Errorf("run = %d", code)
+	}
+	if code, _ := csREST(t, http.MethodDelete, base+"/nightly", ""); code != http.StatusOK {
+		t.Errorf("delete = %d", code)
+	}
+	if code, _ := csREST(t, http.MethodGet, base+"/nightly", ""); code != http.StatusNotFound {
+		t.Errorf("get after delete = %d, want 404", code)
+	}
+}
+
+// TestSchedulerRESTAndGRPCShareState holds one service behind two APIs.
+func TestSchedulerRESTAndGRPCShareState(t *testing.T) {
+	c, emu, ctx := csClient(t)
+
+	base := emu.BaseURL() + "/v1/projects/test-project/locations/us-central1/jobs"
+	if code, _ := csREST(t, http.MethodPost, base,
+		`{"name":"`+csParent+`/jobs/shared","schedule":"0 * * * *","pubsubTarget":{"topicName":"projects/test-project/topics/t"}}`); code != http.StatusOK {
+		t.Fatalf("REST create = %d", code)
+	}
+	if _, err := c.GetJob(ctx, &schedulerpb.GetJobRequest{Name: csParent + "/jobs/shared"}); err != nil {
+		t.Fatalf("a job made over REST is invisible to gRPC: %v", err)
+	}
 }

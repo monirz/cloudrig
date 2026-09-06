@@ -814,11 +814,26 @@ for i := 0; i < 7; i++ { emu.FakeClock(t).Advance(24 * time.Hour) }
 ```
 
 A Pub/Sub-target job publishes a real message a subscriber receives, so a cron
-→ Pub/Sub → function chain works end to end locally. Job CRUD, pause and resume,
-`RunJob` to fire ahead of schedule, and `UpdateJob`.
+→ Pub/Sub → function chain works end to end locally.
 
-Not supported: App Engine targets, OIDC/OAuth token minting, time zones (cron is
-evaluated in UTC), and the REST surface `gcloud scheduler` uses.
+`gcloud scheduler` works against it too — the Go client speaks gRPC, gcloud
+speaks REST, both over the same service:
+
+```sh
+export CLOUDSDK_CORE_PROJECT=cloudrig-local
+. ./cloudrig-env.sh
+
+gcloud scheduler jobs create http nightly --location=us-central1 \
+  --schedule="0 9 * * *" --uri=https://worker.example/run
+gcloud scheduler jobs run nightly --location=us-central1   # fire it now
+gcloud scheduler jobs list --location=us-central1
+```
+
+Job CRUD, pause and resume, `RunJob`/`jobs run` to fire ahead of schedule, and
+`UpdateJob`.
+
+Not supported: App Engine targets, OIDC/OAuth token minting, and time zones
+(cron is evaluated in UTC).
 
 ---
 
