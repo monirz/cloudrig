@@ -1,0 +1,184 @@
+package cloudtasks
+
+import (
+	"context"
+	"net/http"
+	"sync"
+	"testing"
+	"time"
+
+	"cloud.google.com/go/cloudtasks/apiv2/cloudtaskspb"
+	"github.com/monirz/cloudrig/core/clock"
+	"github.com/monirz/cloudrig/store"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/durationpb"
+)
+
+var epoch = time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+
+func TestValidQueueName(t *testing.T) {
+	t.Parallel()
+
+	if err := validQueueName("projects/p/locations/l/queues/q"); err != nil {
+		t.Errorf("a valid name was rejected: %v", err)
+	}
+	for _, bad := range []string{
+		"", "projects/p/locations/l/queues", "projects/p/queues/q",
+		"projects//locations/l/queues/q", "projects/p/locations/l/queues/",
+	} {
+		if err := validQueueName(bad); status.Code(err) != codes.InvalidArgument {
+			t.Errorf("validQueueName(%q) = %v, want InvalidArgument", bad, err)
+		}
+	}
+}
+
+// TestQueueOf pins the split every dispatch relies on: a task name's queue is
+// the part before /tasks/.
+func TestQueueOf(t *testing.T) {
+	t.Parallel()
+
+	const task = "projects/p/locations/l/queues/q/tasks/42"
+	if got := queueOf(task); got != "projects/p/locations/l/queues/q" {
+		t.Errorf("queueOf = %q", got)
+	}
+	// A name without the marker is its own queue.
+	if got := queueOf("projects/p/locations/l/queues/q"); got != "projects/p/locations/l/queues/q" {
+		t.Errorf("queueOf(bare) = %q", got)
+	}
+}
+
+// recorder is a test httpDoer: it counts dispatches and returns a fixed status.
+type recorder struct {
+	mu    sync.Mutex
+	calls int
+	code  int
+	err   error
+}
+
+func (r *recorder) do(ctx context.Context, t *cloudtaskspb.Task) (int, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.calls++
+	code := r.code
+	if code == 0 {
+		code = http.StatusOK
+	}
+	return code, r.err
+}
+
+func (r *recorder) count() int { r.mu.Lock(); defer r.mu.Unlock(); return r.calls }
+
+// TestBackoffDoublesAndCaps drives the retry policy directly, without a server,
+// so the timing is exact: attempts happen only as the clock advances.
+func TestBackoffDoublesAndCaps(t *testing.T) {
+	t.Parallel()
+
+	clk := clock.NewFake(epoch)
+	s := New(store.NewMemory(), clk)
+	rec := &recorder{code: http.StatusInternalServerError}
+	s.http = rec
+
+	const queue = "projects/p/locations/l/queues/q"
+	ctx := context.Background()
+	if _, err := s.CreateQueue(ctx, &cloudtaskspb.CreateQueueRequest{
+		Parent: "projects/p/locations/l",
+		Queue: &cloudtaskspb.Queue{
+			Name: queue,
+			RetryConfig: &cloudtaskspb.RetryConfig{
+				MaxAttempts: 3,
+				MinBackoff:  durationProto(time.Second),
+				MaxBackoff:  durationProto(time.Minute),
+			},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := s.CreateTask(ctx, &cloudtaskspb.CreateTaskRequest{
+		Parent: queue,
+		Task: &cloudtaskspb.Task{
+			MessageType: &cloudtaskspb.Task_HttpRequest{HttpRequest: &cloudtaskspb.HttpRequest{
+				Url: "http://sink", HttpMethod: cloudtaskspb.HttpMethod_POST,
+			}},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// First attempt is immediate (due-now dispatch runs on a goroutine).
+	waitCalls(t, rec, 1)
+	// Backoff 1s → second attempt.
+	clk.Advance(time.Second)
+	waitCalls(t, rec, 2)
+	// Backoff doubles to 2s → third attempt.
+	clk.Advance(2 * time.Second)
+	waitCalls(t, rec, 3)
+	// The cap holds: no fourth, ever.
+	clk.Advance(time.Hour)
+	time.Sleep(20 * time.Millisecond)
+	if got := rec.count(); got != 3 {
+		t.Errorf("attempts = %d, want 3", got)
+	}
+
+	// The task is gone once it exhausts its attempts.
+	if _, err := s.GetTask(ctx, &cloudtaskspb.GetTaskRequest{
+		Name: queue + "/tasks/1",
+	}); status.Code(err) != codes.NotFound {
+		t.Errorf("an exhausted task is still stored: %v", err)
+	}
+}
+
+// TestSuccessDeletesTheTask holds that a 2xx dispatch retires the task.
+func TestSuccessDeletesTheTask(t *testing.T) {
+	t.Parallel()
+
+	clk := clock.NewFake(epoch)
+	s := New(store.NewMemory(), clk)
+	rec := &recorder{code: http.StatusOK}
+	s.http = rec
+
+	const queue = "projects/p/locations/l/queues/q"
+	ctx := context.Background()
+	s.CreateQueue(ctx, &cloudtaskspb.CreateQueueRequest{
+		Parent: "projects/p/locations/l",
+		Queue:  &cloudtaskspb.Queue{Name: queue},
+	})
+	task, err := s.CreateTask(ctx, &cloudtaskspb.CreateTaskRequest{
+		Parent: queue,
+		Task: &cloudtaskspb.Task{
+			MessageType: &cloudtaskspb.Task_HttpRequest{HttpRequest: &cloudtaskspb.HttpRequest{
+				Url: "http://sink", HttpMethod: cloudtaskspb.HttpMethod_POST,
+			}},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	waitCalls(t, rec, 1)
+	deadline := time.Now().Add(time.Second)
+	for {
+		_, err := s.GetTask(ctx, &cloudtaskspb.GetTaskRequest{Name: task.GetName()})
+		if status.Code(err) == codes.NotFound {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("a succeeded task was not deleted")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+func durationProto(d time.Duration) *durationpb.Duration { return durationpb.New(d) }
+
+func waitCalls(t *testing.T, r *recorder, n int) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for r.count() < n {
+		if time.Now().After(deadline) {
+			t.Fatalf("only %d of %d dispatches", r.count(), n)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}

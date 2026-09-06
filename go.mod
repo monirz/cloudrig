@@ -3,6 +3,7 @@ module github.com/monirz/cloudrig
 go 1.25.0
 
 require (
+	cloud.google.com/go/cloudtasks v1.19.0
 	cloud.google.com/go/firestore v1.25.0
 	cloud.google.com/go/pubsub/v2 v2.7.0
 	cloud.google.com/go/secretmanager v1.21.0

@@ -58,6 +58,7 @@ process the same way they would reach Google.
 | `services/pubsub` | Pub/Sub over gRPC, plus the JSON API Terraform drives |
 | `services/firestore` | Firestore documents and queries, over gRPC |
 | `services/secretmanager` | Secrets and versions, over gRPC |
+| `services/cloudtasks` | Deferred HTTP tasks, dispatched on the injected clock |
 | `lint` | Build-time invariants enforced as tests |
 
 ---

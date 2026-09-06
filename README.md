@@ -43,6 +43,7 @@ Each one is a sequence you can paste, in order, against a running emulator.
 | [Fork state](#fork-state) | Branch an emulator, cheaply, mid-test |
 | [Firestore](#firestore) | Documents and queries, over gRPC |
 | [Secret Manager](#secret-manager) | Secrets, versions, and the latest alias |
+| [Cloud Tasks](#cloud-tasks) | Deferred HTTP work, fired on the clock |
 | [Cloud Run](#cloud-run) | Deploy a container, and call it |
 | [Run a service without Docker](#run-a-service-without-docker) | The same service as a process |
 
@@ -688,6 +689,48 @@ version aliases other than `latest`.
 
 ---
 
+## Cloud Tasks
+
+gRPC, on the same port. A task is deferred HTTP work: it names a URL, a body and
+a schedule time, and the queue dispatches it when that time arrives, retrying on
+failure.
+
+```go
+c, _ := cloudtasks.NewClient(ctx, /* endpoint options */)
+
+c.CreateQueue(ctx, &cloudtaskspb.CreateQueueRequest{
+    Parent: "projects/p/locations/us-central1",
+    Queue:  &cloudtaskspb.Queue{Name: ".../queues/work"},
+})
+c.CreateTask(ctx, &cloudtaskspb.CreateTaskRequest{
+    Parent: ".../queues/work",
+    Task: &cloudtaskspb.Task{
+        ScheduleTime: timestamppb.New(time.Now().Add(time.Hour)),
+        MessageType: &cloudtaskspb.Task_HttpRequest{HttpRequest: &cloudtaskspb.HttpRequest{
+            Url: "https://worker.example/handle", HttpMethod: cloudtaskspb.HttpMethod_POST,
+        }},
+    },
+})
+```
+
+The dispatch runs on the injected clock, which is the thing you cannot do
+against real Cloud Tasks — a task due in an hour fires when a test advances the
+clock an hour, not after a real hour:
+
+```go
+emu.FakeClock(t).Advance(time.Hour)   // the task fires now
+```
+
+Queue CRUD, pause and resume, purge, task create/get/list/delete, `RunTask` to
+force a task ahead of its schedule, and retries with exponential backoff bounded
+by the queue's `RetryConfig`.
+
+Not supported: App Engine task targets (use an HTTP target), OIDC/OAuth token
+minting on the request, rate limiting (`maxDispatchesPerSecond` is stored but
+not enforced), and the REST surface `gcloud tasks` uses.
+
+---
+
 ## Cloud Run
 
 `examples/cloudrun` is a runnable service — an HTTP server on `$PORT`, which is
@@ -855,6 +898,9 @@ versioning, signed URLs, persistence. Verified against the real Go client and
 **Pub/Sub** — topics, subscriptions, publish, streaming pull, ack and nack,
 deadline expiry, and `--trigger-topic` to run a function on a message. gRPC for
 the client libraries, REST for Terraform, one service behind both.
+
+**Cloud Tasks** — deferred HTTP work with scheduling and retries, dispatched on
+the injected clock so a test drives it with `Advance`.
 
 **Secret Manager** — secrets, versions, the `latest` alias, and disable,
 enable and destroy. gRPC for the client libraries, REST for `gcloud secrets`,
