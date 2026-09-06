@@ -38,6 +38,13 @@ func (s *Service) CreateTask(ctx context.Context, req *cloudtaskspb.CreateTaskRe
 	now := s.clk.Now()
 	if task.GetName() == "" {
 		task.Name = queueName + "/tasks/" + s.nextTaskID()
+	} else if queueOf(task.GetName()) != queueName {
+		// An explicit task name must live under the parent queue. Otherwise it
+		// would be stored and dispatched under a queue the caller did not name
+		// — invisible in the parent's listing and following the wrong queue's
+		// pause and retry state.
+		return nil, status.Errorf(codes.InvalidArgument,
+			"task name %q is not under the parent queue %q", task.GetName(), queueName)
 	}
 	task.CreateTime = timestamppb.New(now)
 	if task.GetScheduleTime() == nil {

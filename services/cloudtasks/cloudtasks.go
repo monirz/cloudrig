@@ -51,12 +51,16 @@ type httpDoer interface {
 
 // New wires a service. A nil doer uses the real HTTP client.
 func New(kv store.Store, clk clock.Clock) *Service {
-	return &Service{
+	s := &Service{
 		kv:     kv,
 		clk:    clk,
 		http:   realDoer{},
 		queues: map[string]*queue{},
 	}
+	// A store may already hold queues and tasks — a restart, or a fork. Re-arm
+	// them so they still dispatch rather than sitting inert.
+	s.recover()
+	return s
 }
 
 // errNoHTTPTarget is returned for a task with no HTTP request; App Engine

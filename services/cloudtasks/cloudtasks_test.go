@@ -13,6 +13,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/durationpb"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 var epoch = time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
@@ -181,4 +182,86 @@ func waitCalls(t *testing.T, r *recorder, n int) {
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
+}
+
+// TestRestartReArmsStoredTasks is the fork/restart case: a service built over a
+// store that already holds a queue and a task must still dispatch it, rather
+// than starting with an empty runtime map and leaving the task inert.
+func TestRestartReArmsStoredTasks(t *testing.T) {
+	t.Parallel()
+
+	kv := store.NewMemory()
+	clk := clock.NewFake(epoch)
+	ctx := context.Background()
+	const queue = "projects/p/locations/l/queues/q"
+
+	first := New(kv, clk)
+	if _, err := first.CreateQueue(ctx, &cloudtaskspb.CreateQueueRequest{
+		Parent: "projects/p/locations/l", Queue: &cloudtaskspb.Queue{Name: queue},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := first.CreateTask(ctx, &cloudtaskspb.CreateTaskRequest{
+		Parent: queue,
+		Task: &cloudtaskspb.Task{
+			ScheduleTime: durationFromNow(clk, time.Hour),
+			MessageType: &cloudtaskspb.Task_HttpRequest{HttpRequest: &cloudtaskspb.HttpRequest{
+				Url: "http://sink", HttpMethod: cloudtaskspb.HttpMethod_POST,
+			}},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// A fresh service over the same store — a restart or a fork.
+	second := New(kv, clk)
+	rec := &recorder{code: http.StatusOK}
+	second.http = rec
+
+	clk.Advance(2 * time.Hour) // the task was due at +1h
+	second.Sync()
+	waitCalls(t, rec, 1)
+}
+
+// TestCreateTaskRejectsForeignName holds that an explicit task name must live
+// under the parent queue, or it would dispatch under a queue nobody named.
+func TestCreateTaskRejectsForeignName(t *testing.T) {
+	t.Parallel()
+
+	s := New(store.NewMemory(), clock.NewFake(epoch))
+	ctx := context.Background()
+	s.CreateQueue(ctx, &cloudtaskspb.CreateQueueRequest{
+		Parent: "projects/p/locations/l",
+		Queue:  &cloudtaskspb.Queue{Name: "projects/p/locations/l/queues/A"},
+	})
+
+	_, err := s.CreateTask(ctx, &cloudtaskspb.CreateTaskRequest{
+		Parent: "projects/p/locations/l/queues/A",
+		Task: &cloudtaskspb.Task{
+			Name: "projects/p/locations/l/queues/B/tasks/x",
+			MessageType: &cloudtaskspb.Task_HttpRequest{HttpRequest: &cloudtaskspb.HttpRequest{
+				Url: "http://sink", HttpMethod: cloudtaskspb.HttpMethod_POST,
+			}},
+		},
+	})
+	if status.Code(err) != codes.InvalidArgument {
+		t.Errorf("err = %v, want InvalidArgument for a name under a different queue", err)
+	}
+
+	// The matching name is accepted.
+	if _, err := s.CreateTask(ctx, &cloudtaskspb.CreateTaskRequest{
+		Parent: "projects/p/locations/l/queues/A",
+		Task: &cloudtaskspb.Task{
+			Name: "projects/p/locations/l/queues/A/tasks/ok",
+			MessageType: &cloudtaskspb.Task_HttpRequest{HttpRequest: &cloudtaskspb.HttpRequest{
+				Url: "http://sink", HttpMethod: cloudtaskspb.HttpMethod_POST,
+			}},
+		},
+	}); err != nil {
+		t.Errorf("a name under the parent queue was rejected: %v", err)
+	}
+}
+
+func durationFromNow(clk clock.Clock, d time.Duration) *timestamppb.Timestamp {
+	return timestamppb.New(clk.Now().Add(d))
 }

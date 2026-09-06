@@ -37,9 +37,48 @@ type queue struct {
 
 func newQueue() *queue { return &queue{timers: map[string]clock.Timer{}} }
 
+// liveQueue returns the in-memory queue for a name, creating it from the stored
+// record if it exists but has no live entry yet. This is what lets a queue that
+// came from the store — a restart, or a fork — dispatch at all, rather than
+// staying inert because New started with an empty runtime map. The caller holds
+// s.mu.
+func (s *Service) liveQueue(name string) *queue {
+	if q := s.queues[name]; q != nil {
+		return q
+	}
+	rec, err := s.getQueueRecord(context.Background(), name)
+	if err != nil {
+		return nil // no such queue
+	}
+	q := newQueue()
+	q.paused = rec.GetState() == cloudtaskspb.Queue_PAUSED
+	s.queues[name] = q
+	return q
+}
+
+// recover re-arms every task the store already holds, so an emulator built over
+// an existing store — a restart, or a fork — keeps dispatching. The caller must
+// not hold s.mu.
+func (s *Service) recover() {
+	ctx := context.Background()
+	entries, _, err := s.kv.List(ctx, "ct/t/", 0, "")
+	if err != nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, kv := range entries {
+		var t cloudtaskspb.Task
+		if err := unmarshal.Unmarshal(kv.Val, &t); err != nil {
+			continue
+		}
+		s.schedule(t.GetName(), t.GetScheduleTime().AsTime())
+	}
+}
+
 // schedule arms a task to dispatch at its schedule time. The caller holds s.mu.
 func (s *Service) schedule(name string, when time.Time) {
-	q := s.queues[queueOf(name)]
+	q := s.liveQueue(queueOf(name))
 	if q == nil || q.paused {
 		return
 	}
