@@ -108,7 +108,6 @@ func TestTaskFiresAtItsScheduledTime(t *testing.T) {
 
 	// Nothing fires before its time.
 	emu.FakeClock(t).Advance(59 * time.Minute)
-	emu.SyncEvents()
 	if got := target.count(); got != 0 {
 		t.Errorf("the task fired early: %d dispatches", got)
 	}
@@ -156,9 +155,13 @@ func TestTaskRetriesOnFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// First attempt is immediate.
+	// First attempt is immediate; SyncTasks waits for it to finish arming the
+	// retry before the clock advances, or the advance would race it.
+	emu.SyncTasks()
 	waitForCount(t, target, 1)
-	// Backoff doubles: 1s, then 2s. Advancing past both drives the retries.
+
+	// Backoff doubles: 1s, then 2s. A timer-driven dispatch runs synchronously
+	// inside Advance, so the count is settled when Advance returns.
 	emu.FakeClock(t).Advance(time.Second)
 	waitForCount(t, target, 2)
 	emu.FakeClock(t).Advance(2 * time.Second)
@@ -166,7 +169,6 @@ func TestTaskRetriesOnFailure(t *testing.T) {
 
 	// Three attempts is the cap; no fourth however far time advances.
 	emu.FakeClock(t).Advance(time.Hour)
-	emu.SyncEvents()
 	if got := target.count(); got != 3 {
 		t.Errorf("attempts = %d, want 3 (the cap)", got)
 	}
@@ -226,7 +228,6 @@ func TestPausedQueueHoldsTasks(t *testing.T) {
 	}
 
 	emu.FakeClock(t).Advance(time.Hour)
-	emu.SyncEvents()
 	if got := target.count(); got != 0 {
 		t.Errorf("a paused queue fired %d tasks", got)
 	}

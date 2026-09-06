@@ -31,7 +31,17 @@ type Service struct {
 	mu     sync.Mutex
 	queues map[string]*queue // keyed by queue resource name
 	seq    uint64            // task-id source for auto-named tasks
+
+	// inFlight tracks due-now dispatches, which run on their own goroutine.
+	// Sync waits for them, so a test can advance the clock knowing a previous
+	// attempt has finished scheduling its retry.
+	inFlight sync.WaitGroup
 }
+
+// Sync waits for every due-now dispatch to finish, including arming any retry
+// it scheduled. Timer-driven dispatches run synchronously inside the clock's
+// Advance and need no waiting; only the immediate goroutine path does.
+func (s *Service) Sync() { s.inFlight.Wait() }
 
 // httpDoer sends a task's request. It is an interface so a test can observe
 // dispatches without a real server.

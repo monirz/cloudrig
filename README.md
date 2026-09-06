@@ -506,6 +506,11 @@ emu.Functions().Deploy(ctx, functions.Function{...})
 emu.SyncEvents()
 ```
 
+`SyncTasks` is the Cloud Tasks equivalent: a task due now dispatches on its own
+goroutine, so `SyncTasks` waits for that before you advance the clock for a
+scheduled retry. (Scheduled tasks need no Sync — a timer fires synchronously
+inside `Advance`.)
+
 `SyncEvents` waits for delivery — the handler has run and answered. It does
 **not** wait for the handler's output: a function is a child process whose
 stdout is drained by another goroutine, so a log line can arrive shortly

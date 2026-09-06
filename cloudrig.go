@@ -99,6 +99,7 @@ type Emulator struct {
 	blobs *blob.Store
 	opts  Options
 	run   *cloudrun.Registry
+	tasks *cloudtasks.Service
 }
 
 // Start runs the emulator on a real listener; the caller owns shutdown. ctx
@@ -160,6 +161,7 @@ func Start(ctx context.Context, o Options) (*Emulator, error) {
 		clk:     clk,
 		faults:  flt,
 		run:     runReg,
+		tasks:   ctsvc,
 		addr:    dialable(ln.Addr().String()),
 		fns:     reg,
 		storage: stack.svc,
@@ -298,6 +300,7 @@ func serveForTest(t testing.TB, o Options, stack storageStack) *Emulator {
 		clk:     o.Clock,
 		faults:  flt,
 		run:     runReg,
+		tasks:   ctsvc,
 		addr:    srv.Listener.Addr().String(),
 		fns:     reg,
 		storage: stack.svc,
@@ -483,6 +486,15 @@ func (e *Emulator) Functions() *functions.Registry { return e.fns }
 
 // CloudRun is the registry of deployed Cloud Run services.
 func (e *Emulator) CloudRun() *cloudrun.Registry { return e.run }
+
+// SyncTasks waits for every immediately-dispatched Cloud Tasks task to finish,
+// including arming any retry. A test advances the clock for scheduled tasks;
+// this covers the due-now ones that run off a goroutine.
+func (e *Emulator) SyncTasks() {
+	if e.tasks != nil {
+		e.tasks.Sync()
+	}
+}
 
 // Faults is the live fault-injection rule set.
 //

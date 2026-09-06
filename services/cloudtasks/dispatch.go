@@ -48,8 +48,12 @@ func (s *Service) schedule(name string, when time.Time) {
 		// Already due. A zero-delay timer on a FakeClock would not fire until
 		// the next Advance, but a due task should dispatch now — so it runs on
 		// its own goroutine, which blocks on the lock until the caller (this
-		// method's caller, holding s.mu) releases it.
-		go s.dispatch(name)
+		// method's caller, holding s.mu) releases it. Sync waits on it.
+		s.inFlight.Add(1)
+		go func() {
+			defer s.inFlight.Done()
+			s.dispatch(name)
+		}()
 		return
 	}
 	// Still in the future: on the injected clock, so a test advances time to
