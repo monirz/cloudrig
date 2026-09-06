@@ -214,14 +214,6 @@ func TestNeighbouringServiceStubs(t *testing.T) {
 		}
 	})
 
-	t.Run("serviceusage services.get reports enabled", func(t *testing.T) {
-		var body map[string]any
-		code := getJSON(t, srv.URL+"/v1/projects/p/services/cloudbuild.googleapis.com", &body)
-		if code != http.StatusOK || body["state"] != "ENABLED" {
-			t.Errorf("status = %d, service = %+v", code, body)
-		}
-	})
-
 	t.Run("cloudbuild defaultServiceAccount", func(t *testing.T) {
 		var body map[string]any
 		code := getJSON(t, srv.URL+"/v1/projects/p/locations/us-central1/defaultServiceAccount", &body)

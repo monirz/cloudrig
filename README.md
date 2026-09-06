@@ -1012,6 +1012,9 @@ the injected clock so a test drives it with `Advance`.
 **Cloud Scheduler** — cron jobs firing HTTP or Pub/Sub targets, recurring on the
 injected clock.
 
+**Service Usage** — `gcloud services enable/disable/list`, tracking real per-
+project state so a Terraform config that toggles an API round-trips.
+
 **Secret Manager** — secrets, versions, the `latest` alias, and disable,
 enable and destroy. gRPC for the client libraries, REST for `gcloud secrets`,
 one service behind both.

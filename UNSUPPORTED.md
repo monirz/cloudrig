@@ -68,6 +68,10 @@ Pub/Sub REST: only what Terraform drives — create, get, list, patch and delete
 for topics and subscriptions. No publish, pull or acknowledge over JSON; use
 gRPC for those.
 
+Service Usage: state is tracked, but no dependency graph — enabling a service
+does not auto-enable the services it depends on, and quota/billing gating does
+not exist (an untouched service reads as enabled).
+
 gRPC: everything except Pub/Sub.
 
 Firestore:
