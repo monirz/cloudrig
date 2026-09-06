@@ -1,7 +1,7 @@
 GO ?= go
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 
-.PHONY: all build test vet lint fmt check clean
+.PHONY: all build test vet lint fmt vuln check clean
 
 all: check
 
@@ -24,6 +24,15 @@ lint:
 
 fmt:
 	$(GO) run mvdan.cc/gofumpt@latest -l -w . 2>/dev/null || gofmt -l -w .
+
+# Reports only vulnerabilities something here actually reaches, so a finding is
+# a call path rather than a version number in the dependency graph.
+#
+# GOWORK=off because a local go.work shadows the module's toolchain line, and
+# the toolchain decides which standard library is scanned: inside a workspace
+# this reports vulnerabilities the released module does not have.
+vuln:
+	@GO=$(GO) sh scripts/vuln.sh
 
 # check is what CI runs. gofmt is enforced rather than applied, so a formatting
 # fix is a commit the author made, not a diff CI leaves behind.

@@ -23,3 +23,17 @@ jobs:
       # build + vet + the timer lint + gofmt + go test -race.
       - name: check
         run: make check
+
+  vuln:
+    # Its own job: a vulnerability database changes without this repo changing,
+    # so a red scan should not read as a broken build. One runner is enough —
+    # the report is about the module and its dependencies, not the platform.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+          check-latest: true
+      - name: govulncheck
+        run: make vuln
