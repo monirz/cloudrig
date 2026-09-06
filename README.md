@@ -44,6 +44,7 @@ Each one is a sequence you can paste, in order, against a running emulator.
 | [Firestore](#firestore) | Documents and queries, over gRPC |
 | [Secret Manager](#secret-manager) | Secrets, versions, and the latest alias |
 | [Cloud Tasks](#cloud-tasks) | Deferred HTTP work, fired on the clock |
+| [Cloud Scheduler](#cloud-scheduler) | Cron jobs, fired on the clock |
 | [Cloud Run](#cloud-run) | Deploy a container, and call it |
 | [Run a service without Docker](#run-a-service-without-docker) | The same service as a process |
 
@@ -784,6 +785,43 @@ but not enforced).
 
 ---
 
+## Cloud Scheduler
+
+gRPC, on the same port. A job is a cron expression and a target — an HTTP URL or
+a Pub/Sub topic — that fires on schedule, recurring after each run.
+
+```go
+c, _ := scheduler.NewCloudSchedulerClient(ctx, /* endpoint options */)
+
+c.CreateJob(ctx, &schedulerpb.CreateJobRequest{
+    Parent: "projects/p/locations/us-central1",
+    Job: &schedulerpb.Job{
+        Name:     ".../jobs/nightly",
+        Schedule: "0 9 * * *",   // 9am daily, standard five-field cron
+        Target: &schedulerpb.Job_HttpTarget{HttpTarget: &schedulerpb.HttpTarget{
+            Uri: "https://worker.example/run", HttpMethod: schedulerpb.HttpMethod_POST,
+        }},
+    },
+})
+```
+
+It recurs on the injected clock, which is the thing you cannot do against real
+Cloud Scheduler — a daily job fires once per advanced day, instantly:
+
+```go
+for i := 0; i < 7; i++ { emu.FakeClock(t).Advance(24 * time.Hour) }
+// the job has fired seven times
+```
+
+A Pub/Sub-target job publishes a real message a subscriber receives, so a cron
+→ Pub/Sub → function chain works end to end locally. Job CRUD, pause and resume,
+`RunJob` to fire ahead of schedule, and `UpdateJob`.
+
+Not supported: App Engine targets, OIDC/OAuth token minting, time zones (cron is
+evaluated in UTC), and the REST surface `gcloud scheduler` uses.
+
+---
+
 ## Cloud Run
 
 `examples/cloudrun` is a runnable service — an HTTP server on `$PORT`, which is
@@ -954,6 +992,9 @@ the client libraries, REST for Terraform, one service behind both.
 
 **Cloud Tasks** — deferred HTTP work with scheduling and retries, dispatched on
 the injected clock so a test drives it with `Advance`.
+
+**Cloud Scheduler** — cron jobs firing HTTP or Pub/Sub targets, recurring on the
+injected clock.
 
 **Secret Manager** — secrets, versions, the `latest` alias, and disable,
 enable and destroy. gRPC for the client libraries, REST for `gcloud secrets`,

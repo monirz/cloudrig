@@ -25,6 +25,7 @@ import (
 	"cloud.google.com/go/cloudtasks/apiv2/cloudtaskspb"
 	"cloud.google.com/go/firestore/apiv1/firestorepb"
 	"cloud.google.com/go/pubsub/v2/apiv1/pubsubpb"
+	"cloud.google.com/go/scheduler/apiv1/schedulerpb"
 	"cloud.google.com/go/secretmanager/apiv1/secretmanagerpb"
 	"github.com/monirz/cloudrig/core/clock"
 	"github.com/monirz/cloudrig/core/events"
@@ -35,6 +36,7 @@ import (
 
 	"github.com/monirz/cloudrig/services/cloudfunctions"
 	"github.com/monirz/cloudrig/services/cloudrun"
+	"github.com/monirz/cloudrig/services/cloudscheduler"
 	"github.com/monirz/cloudrig/services/cloudtasks"
 	"github.com/monirz/cloudrig/services/firestore"
 	"github.com/monirz/cloudrig/services/pubsub"
@@ -100,6 +102,7 @@ type Emulator struct {
 	opts  Options
 	run   *cloudrun.Registry
 	tasks *cloudtasks.Service
+	sched *cloudscheduler.Service
 }
 
 // Start runs the emulator on a real listener; the caller owns shutdown. ctx
@@ -147,8 +150,9 @@ func Start(ctx context.Context, o Options) (*Emulator, error) {
 	fsvc := firestore.New(stack.kvStore, clk)
 	smsvc := secretmanager.New(stack.kvStore, clk)
 	ctsvc := cloudtasks.New(stack.kvStore, clk)
+	cssvc := cloudscheduler.New(stack.kvStore, clk, publishTo(psvc))
 	runReg := cloudrun.NewRegistry()
-	handler, closeAPIs := newHandler(clk, o, reg, runReg, stack.svc, psvc, smsvc, ctsvc, newGRPC(psvc, fsvc, smsvc, ctsvc), flt)
+	handler, closeAPIs := newHandler(clk, o, reg, runReg, stack.svc, psvc, smsvc, ctsvc, newGRPC(psvc, fsvc, smsvc, ctsvc, cssvc), flt)
 	srv := &http.Server{
 		Handler:   handler,
 		Protocols: transport.Protocols(), // HTTP/1.1 and h2c on one port
@@ -162,6 +166,7 @@ func Start(ctx context.Context, o Options) (*Emulator, error) {
 		faults:  flt,
 		run:     runReg,
 		tasks:   ctsvc,
+		sched:   cssvc,
 		addr:    dialable(ln.Addr().String()),
 		fns:     reg,
 		storage: stack.svc,
@@ -286,9 +291,10 @@ func serveForTest(t testing.TB, o Options, stack storageStack) *Emulator {
 	fsvc := firestore.New(stack.kvStore, o.Clock)
 	smsvc := secretmanager.New(stack.kvStore, o.Clock)
 	ctsvc := cloudtasks.New(stack.kvStore, o.Clock)
+	cssvc := cloudscheduler.New(stack.kvStore, o.Clock, publishTo(psvc))
 	runReg := cloudrun.NewRegistry()
 	t.Cleanup(runReg.StopAll)
-	handler, closeAPIs := newHandler(o.Clock, o, reg, runReg, stack.svc, psvc, smsvc, ctsvc, newGRPC(psvc, fsvc, smsvc, ctsvc), flt)
+	handler, closeAPIs := newHandler(o.Clock, o, reg, runReg, stack.svc, psvc, smsvc, ctsvc, newGRPC(psvc, fsvc, smsvc, ctsvc, cssvc), flt)
 	t.Cleanup(closeAPIs)
 
 	srv := httptest.NewUnstartedServer(handler)
@@ -301,6 +307,7 @@ func serveForTest(t testing.TB, o Options, stack storageStack) *Emulator {
 		faults:  flt,
 		run:     runReg,
 		tasks:   ctsvc,
+		sched:   cssvc,
 		addr:    srv.Listener.Addr().String(),
 		fns:     reg,
 		storage: stack.svc,
@@ -348,17 +355,31 @@ func (e *Emulator) Fork(t testing.TB) *Emulator {
 	return serveForTest(t, e.opts, storageStack{kvStore: copied, blobs: blobs})
 }
 
+// publishTo adapts the Pub/Sub publisher for Cloud Scheduler's Pub/Sub-target
+// jobs, so a scheduled publish is a real message a subscriber receives.
+func publishTo(ps *pubsub.Service) cloudscheduler.PublishFunc {
+	pub := pubsub.NewPublisher(ps)
+	return func(ctx context.Context, topic string, data []byte, attrs map[string]string) error {
+		_, err := pub.Publish(ctx, &pubsubpb.PublishRequest{
+			Topic:    topic,
+			Messages: []*pubsubpb.PubsubMessage{{Data: data, Attributes: attrs}},
+		})
+		return err
+	}
+}
+
 // newGRPC registers every gRPC service on a server.
 //
 // Requests reach it through the transport's h2c dispatch, so gRPC and REST
 // share the one port.
-func newGRPC(ps *pubsub.Service, fs *firestore.Service, sm *secretmanager.Service, ct *cloudtasks.Service) *grpc.Server {
+func newGRPC(ps *pubsub.Service, fs *firestore.Service, sm *secretmanager.Service, ct *cloudtasks.Service, cs *cloudscheduler.Service) *grpc.Server {
 	srv := grpc.NewServer()
 	pubsubpb.RegisterPublisherServer(srv, pubsub.NewPublisher(ps))
 	pubsubpb.RegisterSubscriberServer(srv, pubsub.NewSubscriber(ps))
 	firestorepb.RegisterFirestoreServer(srv, fs)
 	secretmanagerpb.RegisterSecretManagerServiceServer(srv, sm)
 	cloudtaskspb.RegisterCloudTasksServer(srv, ct)
+	schedulerpb.RegisterCloudSchedulerServer(srv, cs)
 	return srv
 }
 
@@ -493,6 +514,14 @@ func (e *Emulator) CloudRun() *cloudrun.Registry { return e.run }
 func (e *Emulator) SyncTasks() {
 	if e.tasks != nil {
 		e.tasks.Sync()
+	}
+}
+
+// SyncScheduler waits for every fired Cloud Scheduler HTTP job to finish, the
+// same way SyncTasks does for tasks.
+func (e *Emulator) SyncScheduler() {
+	if e.sched != nil {
+		e.sched.Sync()
 	}
 }
 

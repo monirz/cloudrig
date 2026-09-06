@@ -95,6 +95,14 @@ Cloud Tasks:
   max_concurrent_dispatches are stored but not enforced; retry_config is.
 
 
+Cloud Scheduler:
+
+- App Engine targets; only http_target and pubsub_target fire.
+- OIDC/OAuth token minting on an HTTP target's request.
+- Time zones: a job's schedule is evaluated in UTC regardless of time_zone.
+- The REST surface, so `gcloud scheduler` is not served yet; the Go client uses
+  gRPC, which is.
+
 Cloud Run:
 
 - Building an image from source (`gcloud run deploy --source`). An image runs
