@@ -722,21 +722,56 @@ emu.FakeClock(t).Advance(time.Hour)   // the task fires now
 ```
 
 `gcloud tasks` works against it too — the Go client speaks gRPC, gcloud speaks
-REST, both over the same service:
+REST, both over the same service. To watch a task actually fire, give it a
+target to hit.
+
+**1. Start something for the task to call.** This prints whatever it receives:
+
+```sh
+python3 -c '
+import http.server
+class H(http.server.BaseHTTPRequestHandler):
+    def do_POST(self):
+        n=int(self.headers.get("Content-Length",0))
+        print("SINK received:", self.rfile.read(n).decode() if n else "", flush=True)
+        self.send_response(200); self.end_headers()
+    def log_message(self,*a): pass
+http.server.HTTPServer(("127.0.0.1",8899),H).serve_forever()'
+```
+
+**2. Point gcloud at the emulator, create a queue, enqueue a task:**
 
 ```sh
 export CLOUDSDK_CORE_PROJECT=cloudrig-local
-. ./cloudrig-env.sh
+. ./cloudrig-env.sh          # source it, do not pipe it
 
 gcloud tasks queues create work --location=us-central1
 gcloud tasks create-http-task --queue=work --location=us-central1 \
-  --url=https://worker.example/handle
-gcloud tasks list --queue=work --location=us-central1
+  --url=http://127.0.0.1:8899/ --body-content='hello-task'
+```
+
+The sink prints `SINK received: hello-task` — the task was dispatched to a real
+HTTP endpoint, not recorded. The rest of the surface:
+
+```sh
+gcloud tasks queues list     --location=us-central1
+gcloud tasks queues describe work --location=us-central1
+gcloud tasks queues pause    work --location=us-central1
+gcloud tasks queues resume   work --location=us-central1
+gcloud tasks queues delete   work --location=us-central1
 ```
 
 Queue CRUD, pause and resume, purge, task create/get/list/delete, `RunTask` to
 force a task ahead of its schedule, and retries with exponential backoff bounded
 by the queue's `RetryConfig`.
+
+The clock behaviour above — a task due in an hour firing on `Advance(time.Hour)`
+— is a library feature, not a CLI one: `cloudrig start` runs on the real clock.
+See it in a test:
+
+```sh
+go test -run TestTaskFiresAtItsScheduledTime -v ./test/conformance/
+```
 
 Not supported: App Engine task targets (use an HTTP target), OIDC/OAuth token
 minting on the request, and rate limiting (`maxDispatchesPerSecond` is stored
