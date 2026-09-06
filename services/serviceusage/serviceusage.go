@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"sort"
 	"strings"
+	"sync"
 
 	"github.com/monirz/cloudrig/core/gerr"
 	"github.com/monirz/cloudrig/store"
@@ -27,6 +28,11 @@ const MaxBodyBytes = 4 << 20
 type Service struct {
 	router *transport.Router
 	kv     store.Store
+
+	// mu serialises a state change: the store has no unconditional Put, so a
+	// write is read-version-then-put, and two overlapping enable/disable calls
+	// would otherwise interleave and lose one.
+	mu sync.Mutex
 }
 
 // New wires the routes gcloud and Terraform drive.
@@ -39,6 +45,19 @@ func New(kv store.Store) *Service {
 	a.router.Handle(http.MethodPost, services+"/{service}", a.serviceVerb) // :enable / :disable
 	a.router.Handle(http.MethodPost, services+":batchEnable", a.batchEnable)
 	return a
+}
+
+// Reset clears the enablement state for a project, or all of it when project
+// is empty. The emulator's Reset calls this, since this state lives under its
+// own key prefix rather than the storage tree a project reset otherwise clears.
+func (a *Service) Reset(ctx context.Context, project string) error {
+	prefix := "su/"
+	if project != "" {
+		prefix += project + "/"
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.kv.Reset(ctx, prefix)
 }
 
 // Matches reports whether a route here claims the request; /v1/ is shared.
@@ -69,11 +88,21 @@ func (a *Service) setState(ctx context.Context, project, service string, on bool
 	if !on {
 		val = []byte("DISABLED")
 	}
-	// Unconditional overwrite: last write wins, which is what enable/disable
-	// mean. The store has no unconditional Put, so delete-then-add at v0.
-	_ = a.kv.Delete(ctx, stateKey(project, service), 0)
-	_, err := a.kv.Put(ctx, stateKey(project, service), val, 0)
-	return err
+	key := stateKey(project, service)
+
+	// Under the lock, write at the version we just read: last write wins, but
+	// no two calls interleave, and a failed write is reported rather than
+	// answered with a false success.
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	_, version, err := a.kv.Get(ctx, key)
+	if err != nil {
+		version = 0 // absent
+	}
+	if _, err := a.kv.Put(ctx, key, val, version); err != nil {
+		return err
+	}
+	return nil
 }
 
 func (a *Service) serviceState(project, service string, ctx context.Context) map[string]any {
@@ -99,13 +128,20 @@ func (a *Service) list(w http.ResponseWriter, r *http.Request, p transport.Param
 		return gerr.New(gerr.Internal, "listing services: "+err.Error())
 	}
 
-	wantEnabled := r.URL.Query().Get("filter") == "state:ENABLED"
+	filter := r.URL.Query().Get("filter")
 	out := make([]map[string]any, 0, len(entries))
 	for _, kv := range entries {
 		service := kv.Key[strings.LastIndex(kv.Key, "/")+1:]
 		on := string(kv.Val) != "DISABLED"
-		if wantEnabled && !on {
-			continue
+		switch filter {
+		case "state:ENABLED":
+			if !on {
+				continue
+			}
+		case "state:DISABLED":
+			if on {
+				continue
+			}
 		}
 		out = append(out, a.serviceState(p["project"], service, r.Context()))
 	}

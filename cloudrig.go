@@ -98,12 +98,13 @@ type Emulator struct {
 
 	// Kept for Fork: the state to copy, the blobs to share, and the options
 	// the copy should be raised with.
-	kv    store.Store
-	blobs *blob.Store
-	opts  Options
-	run   *cloudrun.Registry
-	tasks *cloudtasks.Service
-	sched *cloudscheduler.Service
+	kv       store.Store
+	blobs    *blob.Store
+	opts     Options
+	run      *cloudrun.Registry
+	tasks    *cloudtasks.Service
+	sched    *cloudscheduler.Service
+	svcusage *serviceusage.Service
 }
 
 // Start runs the emulator on a real listener; the caller owns shutdown. ctx
@@ -164,15 +165,16 @@ func Start(ctx context.Context, o Options) (*Emulator, error) {
 	}()
 
 	return &Emulator{
-		clk:     clk,
-		faults:  flt,
-		run:     runReg,
-		tasks:   ctsvc,
-		sched:   cssvc,
-		addr:    dialable(ln.Addr().String()),
-		fns:     reg,
-		storage: stack.svc,
-		bus:     bus,
+		clk:      clk,
+		faults:   flt,
+		run:      runReg,
+		tasks:    ctsvc,
+		sched:    cssvc,
+		svcusage: susvc,
+		addr:     dialable(ln.Addr().String()),
+		fns:      reg,
+		storage:  stack.svc,
+		bus:      bus,
 		shutdown: func(ctx context.Context) error {
 			err := srv.Shutdown(ctx)
 			reg.StopAll()
@@ -306,18 +308,19 @@ func serveForTest(t testing.TB, o Options, stack storageStack) *Emulator {
 	t.Cleanup(srv.Close)
 
 	return &Emulator{
-		clk:     o.Clock,
-		faults:  flt,
-		run:     runReg,
-		tasks:   ctsvc,
-		sched:   cssvc,
-		addr:    srv.Listener.Addr().String(),
-		fns:     reg,
-		storage: stack.svc,
-		bus:     bus,
-		kv:      stack.kvStore,
-		blobs:   stack.blobs,
-		opts:    o,
+		clk:      o.Clock,
+		faults:   flt,
+		run:      runReg,
+		tasks:    ctsvc,
+		sched:    cssvc,
+		svcusage: susvc,
+		addr:     srv.Listener.Addr().String(),
+		fns:      reg,
+		storage:  stack.svc,
+		bus:      bus,
+		kv:       stack.kvStore,
+		blobs:    stack.blobs,
+		opts:     o,
 		shutdown: func(context.Context) error {
 			srv.Close()
 			reg.StopAll()
@@ -469,14 +472,7 @@ func newHandler(clk clock.Clock, o Options, reg *functions.Registry, runReg *clo
 		GRPC:      grpcSrv,
 		Faults:    flt,
 		Reset: func(ctx context.Context, project string) error {
-			// Services are processes and containers, so a reset that left
-			// them running would leave the emulator serving state it claims
-			// to have cleared.
-			runReg.StopAll()
-			if gcs == nil {
-				return nil
-			}
-			return gcs.Reset(ctx, project)
+			return resetAll(ctx, project, runReg, susvc, gcs)
 		},
 	})
 
@@ -489,10 +485,26 @@ func newHandler(clk clock.Clock, o Options, reg *functions.Registry, runReg *clo
 
 // Reset clears emulator state. An empty project clears everything.
 func (e *Emulator) Reset(ctx context.Context, project string) error {
-	if e.storage == nil {
-		return nil
+	return resetAll(ctx, project, e.run, e.svcusage, e.storage)
+}
+
+// resetAll is the one reset path: the /_emu/reset endpoint and Emulator.Reset
+// both call it, so they cannot drift. Cloud Run services are stopped, Service
+// Usage state is cleared from its own key prefix, and the storage tree is
+// reset last.
+func resetAll(ctx context.Context, project string, run *cloudrun.Registry, su *serviceusage.Service, gcs *storage.Service) error {
+	if run != nil {
+		run.StopAll()
 	}
-	return e.storage.Reset(ctx, project)
+	if su != nil {
+		if err := su.Reset(ctx, project); err != nil {
+			return err
+		}
+	}
+	if gcs != nil {
+		return gcs.Reset(ctx, project)
+	}
+	return nil
 }
 
 // SyncEvents waits for every event published so far to reach its subscribers.
