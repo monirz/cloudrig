@@ -147,7 +147,7 @@ func Start(ctx context.Context, o Options) (*Emulator, error) {
 	smsvc := secretmanager.New(stack.kvStore, clk)
 	ctsvc := cloudtasks.New(stack.kvStore, clk)
 	runReg := cloudrun.NewRegistry()
-	handler, closeAPIs := newHandler(clk, o, reg, runReg, stack.svc, psvc, smsvc, newGRPC(psvc, fsvc, smsvc, ctsvc), flt)
+	handler, closeAPIs := newHandler(clk, o, reg, runReg, stack.svc, psvc, smsvc, ctsvc, newGRPC(psvc, fsvc, smsvc, ctsvc), flt)
 	srv := &http.Server{
 		Handler:   handler,
 		Protocols: transport.Protocols(), // HTTP/1.1 and h2c on one port
@@ -286,7 +286,7 @@ func serveForTest(t testing.TB, o Options, stack storageStack) *Emulator {
 	ctsvc := cloudtasks.New(stack.kvStore, o.Clock)
 	runReg := cloudrun.NewRegistry()
 	t.Cleanup(runReg.StopAll)
-	handler, closeAPIs := newHandler(o.Clock, o, reg, runReg, stack.svc, psvc, smsvc, newGRPC(psvc, fsvc, smsvc, ctsvc), flt)
+	handler, closeAPIs := newHandler(o.Clock, o, reg, runReg, stack.svc, psvc, smsvc, ctsvc, newGRPC(psvc, fsvc, smsvc, ctsvc), flt)
 	t.Cleanup(closeAPIs)
 
 	srv := httptest.NewUnstartedServer(handler)
@@ -383,7 +383,7 @@ func routeV1(fallback http.Handler, services ...matcher) http.Handler {
 
 // newHandler builds the request surface and returns what it must tear down:
 // the API objects own temporary directories, and nothing else can reach them.
-func newHandler(clk clock.Clock, o Options, reg *functions.Registry, runReg *cloudrun.Registry, gcs *storage.Service, psvc *pubsub.Service, smsvc *secretmanager.Service, grpcSrv http.Handler, flt *faults.Set) (http.Handler, func()) {
+func newHandler(clk clock.Clock, o Options, reg *functions.Registry, runReg *cloudrun.Registry, gcs *storage.Service, psvc *pubsub.Service, smsvc *secretmanager.Service, ctsvc *cloudtasks.Service, grpcSrv http.Handler, flt *faults.Set) (http.Handler, func()) {
 	configured := o.Runner
 	if configured == "" {
 		configured = "auto"
@@ -404,6 +404,9 @@ func newHandler(clk clock.Clock, o Options, reg *functions.Registry, runReg *clo
 	for _, prefix := range cloudfunctions.Prefixes {
 		mounts[prefix] = api
 	}
+	// Cloud Tasks serves /v2/projects/{p}/locations/{l}/queues, the same
+	// prefix Cloud Functions v2 uses, so the two are told apart by route.
+	mounts["/v2/"] = routeV1(api, cloudtasks.NewREST(ctsvc))
 	closers := []io.Closer{api}
 
 	// Three services live under /v1/projects/{project}/, so a mount prefix

@@ -93,8 +93,7 @@ Cloud Tasks:
 - OIDC/OAuth token minting on a task's request.
 - Rate limiting: a queue's max_dispatches_per_second and
   max_concurrent_dispatches are stored but not enforced; retry_config is.
-- The REST surface, so `gcloud tasks` is not supported yet. The Go client uses
-  gRPC, which is served.
+
 
 Cloud Run:
 

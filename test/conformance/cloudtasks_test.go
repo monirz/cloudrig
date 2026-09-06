@@ -2,8 +2,11 @@ package conformance
 
 import (
 	"context"
+	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -271,5 +274,100 @@ func waitForCount(t *testing.T, s *sink, n int) {
 			t.Fatalf("only %d of %d dispatches arrived", s.count(), n)
 		}
 		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// ctPost sends a JSON request to the Cloud Tasks REST API and decodes the
+// reply. This is the surface gcloud uses; the Go client never touches it.
+func ctPost(t *testing.T, method, url, body string) (int, map[string]any) {
+	t.Helper()
+	var rdr io.Reader
+	if body != "" {
+		rdr = strings.NewReader(body)
+	}
+	req, err := http.NewRequest(method, url, rdr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(resp.Body)
+	out := map[string]any{}
+	if len(strings.TrimSpace(string(raw))) > 0 {
+		if err := json.Unmarshal(raw, &out); err != nil {
+			t.Fatalf("%s %s: body %q: %v", method, url, raw, err)
+		}
+	}
+	return resp.StatusCode, out
+}
+
+// TestCloudTasksRESTLifecycle walks what gcloud does: create a queue, its
+// verbs, a task, and delete. The verbs ride on the name segment.
+func TestCloudTasksRESTLifecycle(t *testing.T) {
+	t.Parallel()
+
+	emu := cloudrig.MustStart(t)
+	base := emu.BaseURL() + "/v2/projects/p/locations/us-central1/queues"
+
+	if code, _ := ctPost(t, http.MethodPost, base+"?queueId=work", `{}`); code != http.StatusOK {
+		t.Fatalf("create queue = %d", code)
+	}
+
+	code, got := ctPost(t, http.MethodGet, base+"/work", "")
+	if code != http.StatusOK || got["name"] != "projects/p/locations/us-central1/queues/work" {
+		t.Fatalf("get queue = %d %v", code, got)
+	}
+
+	// Pause and resume, the :verb forms.
+	if code, _ := ctPost(t, http.MethodPost, base+"/work:pause", ""); code != http.StatusOK {
+		t.Errorf("pause = %d", code)
+	}
+	if code, _ := ctPost(t, http.MethodPost, base+"/work:resume", ""); code != http.StatusOK {
+		t.Errorf("resume = %d", code)
+	}
+
+	// A task with a schedule far out, then :run it.
+	code, task := ctPost(t, http.MethodPost, base+"/work/tasks",
+		`{"task":{"httpRequest":{"url":"http://127.0.0.1:9/x","httpMethod":"POST"},"scheduleTime":"2099-01-01T00:00:00Z"}}`)
+	if code != http.StatusOK {
+		t.Fatalf("create task = %d %v", code, task)
+	}
+	name, _ := task["name"].(string)
+	if name == "" {
+		t.Fatalf("task has no name: %v", task)
+	}
+
+	// :run dispatches now; the target refuses the connection, but the call
+	// itself must be accepted and routed.
+	runURL := emu.BaseURL() + "/v2/" + name + ":run"
+	if code, _ := ctPost(t, http.MethodPost, runURL, ""); code != http.StatusOK {
+		t.Errorf("run task = %d", code)
+	}
+
+	if code, _ := ctPost(t, http.MethodDelete, base+"/work", ""); code != http.StatusOK {
+		t.Errorf("delete queue = %d", code)
+	}
+}
+
+// TestCloudTasksRESTAndGRPCShareState is the claim worth holding: one service
+// behind two APIs.
+func TestCloudTasksRESTAndGRPCShareState(t *testing.T) {
+	c, emu, ctx := ctClient(t)
+
+	// Made over REST, the way gcloud would.
+	base := emu.BaseURL() + "/v2/projects/test-project/locations/us-central1/queues"
+	if code, _ := ctPost(t, http.MethodPost, base+"?queueId=shared", `{}`); code != http.StatusOK {
+		t.Fatalf("REST create = %d", code)
+	}
+
+	// Visible to the gRPC client.
+	if _, err := c.GetQueue(ctx, &cloudtaskspb.GetQueueRequest{
+		Name: ctParent + "/queues/shared",
+	}); err != nil {
+		t.Fatalf("a queue made over REST is invisible to gRPC: %v", err)
 	}
 }

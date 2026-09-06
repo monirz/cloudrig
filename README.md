@@ -721,13 +721,26 @@ clock an hour, not after a real hour:
 emu.FakeClock(t).Advance(time.Hour)   // the task fires now
 ```
 
+`gcloud tasks` works against it too — the Go client speaks gRPC, gcloud speaks
+REST, both over the same service:
+
+```sh
+export CLOUDSDK_CORE_PROJECT=cloudrig-local
+. ./cloudrig-env.sh
+
+gcloud tasks queues create work --location=us-central1
+gcloud tasks create-http-task --queue=work --location=us-central1 \
+  --url=https://worker.example/handle
+gcloud tasks list --queue=work --location=us-central1
+```
+
 Queue CRUD, pause and resume, purge, task create/get/list/delete, `RunTask` to
 force a task ahead of its schedule, and retries with exponential backoff bounded
 by the queue's `RetryConfig`.
 
 Not supported: App Engine task targets (use an HTTP target), OIDC/OAuth token
-minting on the request, rate limiting (`maxDispatchesPerSecond` is stored but
-not enforced), and the REST surface `gcloud tasks` uses.
+minting on the request, and rate limiting (`maxDispatchesPerSecond` is stored
+but not enforced).
 
 ---
 
