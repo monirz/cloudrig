@@ -83,7 +83,6 @@ func New(reg *functions.Registry, clk clock.Clock, events io.Writer) *Service {
 	// leak. See stubs.go.
 	s.router.Handle(http.MethodGet, "/v1/projects/{project}", s.getProject)
 	s.router.Handle(http.MethodPost, "/v1/projects/{project}", s.testProjectPermissions)
-	s.router.Handle(http.MethodGet, "/v1/projects/{project}/services/{service}", s.getService)
 	s.router.Handle(http.MethodGet, "/v1/projects/{project}/locations/{location}/defaultServiceAccount", s.defaultServiceAccount)
 
 	s.router.Handle(http.MethodGet, "/v1/operations/{operation}", s.getOperation)

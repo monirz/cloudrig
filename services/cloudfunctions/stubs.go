@@ -29,16 +29,6 @@ func (s *Service) getProject(w http.ResponseWriter, r *http.Request, p transport
 	})
 }
 
-// getService is serviceusage services.get. Everything reports enabled: there is
-// no billing or quota here to gate a service behind.
-func (s *Service) getService(w http.ResponseWriter, r *http.Request, p transport.Params) error {
-	return writeJSON(w, http.StatusOK, map[string]any{
-		"name":   "projects/" + p["project"] + "/services/" + p["service"],
-		"config": map[string]any{"name": p["service"]},
-		"state":  "ENABLED",
-	})
-}
-
 // testProjectPermissions is cloudresourcemanager projects.testIamPermissions.
 // Every requested permission is granted: there is no IAM here to deny one, and
 // answering with an empty set makes gcloud refuse the deploy.

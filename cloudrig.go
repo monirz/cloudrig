@@ -41,6 +41,7 @@ import (
 	"github.com/monirz/cloudrig/services/firestore"
 	"github.com/monirz/cloudrig/services/pubsub"
 	"github.com/monirz/cloudrig/services/secretmanager"
+	"github.com/monirz/cloudrig/services/serviceusage"
 	"github.com/monirz/cloudrig/services/storage"
 	"github.com/monirz/cloudrig/store"
 	"github.com/monirz/cloudrig/store/blob"
@@ -151,8 +152,9 @@ func Start(ctx context.Context, o Options) (*Emulator, error) {
 	smsvc := secretmanager.New(stack.kvStore, clk)
 	ctsvc := cloudtasks.New(stack.kvStore, clk)
 	cssvc := cloudscheduler.New(stack.kvStore, clk, publishTo(psvc))
+	susvc := serviceusage.New(stack.kvStore)
 	runReg := cloudrun.NewRegistry()
-	handler, closeAPIs := newHandler(clk, o, reg, runReg, stack.svc, psvc, smsvc, ctsvc, cssvc, newGRPC(psvc, fsvc, smsvc, ctsvc, cssvc), flt)
+	handler, closeAPIs := newHandler(clk, o, reg, runReg, stack.svc, psvc, smsvc, ctsvc, cssvc, susvc, newGRPC(psvc, fsvc, smsvc, ctsvc, cssvc), flt)
 	srv := &http.Server{
 		Handler:   handler,
 		Protocols: transport.Protocols(), // HTTP/1.1 and h2c on one port
@@ -292,9 +294,10 @@ func serveForTest(t testing.TB, o Options, stack storageStack) *Emulator {
 	smsvc := secretmanager.New(stack.kvStore, o.Clock)
 	ctsvc := cloudtasks.New(stack.kvStore, o.Clock)
 	cssvc := cloudscheduler.New(stack.kvStore, o.Clock, publishTo(psvc))
+	susvc := serviceusage.New(stack.kvStore)
 	runReg := cloudrun.NewRegistry()
 	t.Cleanup(runReg.StopAll)
-	handler, closeAPIs := newHandler(o.Clock, o, reg, runReg, stack.svc, psvc, smsvc, ctsvc, cssvc, newGRPC(psvc, fsvc, smsvc, ctsvc, cssvc), flt)
+	handler, closeAPIs := newHandler(o.Clock, o, reg, runReg, stack.svc, psvc, smsvc, ctsvc, cssvc, susvc, newGRPC(psvc, fsvc, smsvc, ctsvc, cssvc), flt)
 	t.Cleanup(closeAPIs)
 
 	srv := httptest.NewUnstartedServer(handler)
@@ -407,7 +410,7 @@ func routeV1(fallback http.Handler, services ...matcher) http.Handler {
 
 // newHandler builds the request surface and returns what it must tear down:
 // the API objects own temporary directories, and nothing else can reach them.
-func newHandler(clk clock.Clock, o Options, reg *functions.Registry, runReg *cloudrun.Registry, gcs *storage.Service, psvc *pubsub.Service, smsvc *secretmanager.Service, ctsvc *cloudtasks.Service, cssvc *cloudscheduler.Service, grpcSrv http.Handler, flt *faults.Set) (http.Handler, func()) {
+func newHandler(clk clock.Clock, o Options, reg *functions.Registry, runReg *cloudrun.Registry, gcs *storage.Service, psvc *pubsub.Service, smsvc *secretmanager.Service, ctsvc *cloudtasks.Service, cssvc *cloudscheduler.Service, susvc *serviceusage.Service, grpcSrv http.Handler, flt *faults.Set) (http.Handler, func()) {
 	configured := o.Runner
 	if configured == "" {
 		configured = "auto"
@@ -440,6 +443,7 @@ func newHandler(clk clock.Clock, o Options, reg *functions.Registry, runReg *clo
 		mounts[prefix] = runAPI
 	}
 	mounts["/v1/"] = routeV1(api,
+		susvc,
 		pubsub.NewREST(psvc), runAPI, secretmanager.NewREST(smsvc),
 		cloudscheduler.NewREST(cssvc))
 
