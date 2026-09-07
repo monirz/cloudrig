@@ -61,6 +61,7 @@ process the same way they would reach Google.
 | `services/cloudtasks` | Deferred HTTP tasks, dispatched on the injected clock |
 | `services/cloudscheduler` | Cron jobs, fired on the injected clock |
 | `services/serviceusage` | Which APIs a project has enabled |
+| `services/cloudlogging` | Log entries, written and read back by filter |
 | `lint` | Build-time invariants enforced as tests |
 
 ---

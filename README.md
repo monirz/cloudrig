@@ -1015,6 +1015,9 @@ injected clock.
 **Service Usage** — `gcloud services enable/disable/list`, tracking real per-
 project state so a Terraform config that toggles an API round-trips.
 
+**Cloud Logging** — write structured log entries and read them back with a
+filter, so a test can assert on what a service logged.
+
 **Secret Manager** — secrets, versions, the `latest` alias, and disable,
 enable and destroy. gRPC for the client libraries, REST for `gcloud secrets`,
 one service behind both.

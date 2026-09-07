@@ -72,6 +72,16 @@ Service Usage: state is tracked, but no dependency graph — enabling a service
 does not auto-enable the services it depends on, and quota/billing gating does
 not exist (an untouched service reads as enabled).
 
+Cloud Logging:
+
+- Entries live in memory, bounded to the most recent 10000, and are not
+  persisted by --data-dir; a long-running or chatty service loses old ones.
+- The filter language is a subset: logName, severity comparisons,
+  resource.type, labels.<k>, insertId and trace, joined by AND. Anything else
+  is a loud error rather than a silent match-all. No OR, no timestamp ranges,
+  no functions.
+- No TailLogEntries (streaming), no log-based metrics, no sinks or exclusions.
+
 gRPC: everything except Pub/Sub.
 
 Firestore:
