@@ -74,9 +74,9 @@ not exist (an untouched service reads as enabled).
 
 GKE:
 
-- A cluster is a real local Kubernetes (kind); without kind and a container
-  runtime, CreateCluster fails at the honest boundary rather than returning a
-  cluster that cannot run a pod. k3s/k3d can replace kind at the same seam.
+- A cluster is a real local Kubernetes: k3s (via k3d) when available, otherwise
+  kind. Without either and a container runtime, CreateCluster fails at the
+  honest boundary rather than returning a cluster that cannot run a pod.
 - Node pools, autoscaling, upgrades, IP rotation and the other cluster-mutation
   RPCs are not modelled; a cluster comes up with kind's defaults.
 - gRPC only so far. `gcloud container clusters` speaks REST, and get-credentials

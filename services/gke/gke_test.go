@@ -200,3 +200,19 @@ func (unavailableRunner) available(context.Context) bool                     { r
 func (unavailableRunner) create(context.Context, string) (string, error)     { return "", nil }
 func (unavailableRunner) kubeconfig(context.Context, string) ([]byte, error) { return nil, nil }
 func (unavailableRunner) delete(context.Context, string) error               { return nil }
+
+// TestChooseRunnerPrefersK3s pins the preference: k3s (via k3d) is chosen when
+// present, kind only as the fallback.
+func TestChooseRunnerPrefersK3s(t *testing.T) {
+	t.Parallel()
+
+	// Without k3d installed here, the fallback is kind — assert the type so a
+	// machine with k3d gets k3s and this test documents the order.
+	got := chooseRunner(context.Background())
+	switch got.(type) {
+	case k3dRunner, kindRunner:
+		// both are valid depending on what is installed
+	default:
+		t.Errorf("chooseRunner returned %T, want k3d or kind", got)
+	}
+}

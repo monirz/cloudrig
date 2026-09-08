@@ -40,7 +40,7 @@ func New(kv store.Store, clk clock.Clock) *Service {
 	return &Service{
 		kv:         kv,
 		clk:        clk,
-		runner:     kindRunner{},
+		runner:     chooseRunner(context.Background()),
 		operations: map[string]*operation{},
 	}
 }

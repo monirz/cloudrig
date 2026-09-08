@@ -22,11 +22,14 @@ func TestKindClusterIsReal(t *testing.T) {
 	if os.Getenv("CLOUDRIG_KIND_TEST") == "" {
 		t.Skip("set CLOUDRIG_KIND_TEST=1 to run the real-cluster test")
 	}
-	if !(kindRunner{}).available(context.Background()) {
-		t.Skip("kind and a container runtime are not available")
+	runner := chooseRunner(context.Background())
+	if !runner.available(context.Background()) {
+		t.Skip("no local Kubernetes backend (k3d or kind) is available")
 	}
+	t.Logf("using the %T backend", runner)
 
 	s := New(store.NewMemory(), clock.Real())
+	s.runner = runner
 	ctx := context.Background()
 	const name = "conformance"
 
@@ -56,7 +59,7 @@ func TestKindClusterIsReal(t *testing.T) {
 
 	// The proof it is real: kubectl against the cluster's kubeconfig lists a
 	// running node.
-	kubeconfig, err := (kindRunner{}).kubeconfig(ctx, name)
+	kubeconfig, err := runner.kubeconfig(ctx, name)
 	if err != nil {
 		t.Fatal(err)
 	}
