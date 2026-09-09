@@ -50,9 +50,12 @@ func (s *Service) CreateCluster(ctx context.Context, req *containerpb.CreateClus
 	s.inFlight.Add(1)
 	go func() {
 		defer s.inFlight.Done()
-		endpoint, err := s.runner.create(context.WithoutCancel(ctx), cluster.GetName())
+		// Detached: this outlives the request that started it, so its store
+		// writes must not use a context the request cancels on return.
+		bg := context.WithoutCancel(ctx)
+		endpoint, err := s.runner.create(bg, cluster.GetName())
 		s.mu.Lock()
-		stored, gerr := s.getCluster(ctx, sc, cluster.GetName())
+		stored, gerr := s.getCluster(bg, sc, cluster.GetName())
 		if gerr == nil {
 			if err != nil {
 				stored.Status = containerpb.Cluster_ERROR
@@ -61,7 +64,7 @@ func (s *Service) CreateCluster(ctx context.Context, req *containerpb.CreateClus
 				stored.Status = containerpb.Cluster_RUNNING
 				stored.Endpoint = endpoint
 			}
-			_ = s.putCluster(ctx, sc, stored)
+			_ = s.putCluster(bg, sc, stored)
 		}
 		s.mu.Unlock()
 		s.finish(op.GetName(), err)
@@ -111,9 +114,10 @@ func (s *Service) DeleteCluster(ctx context.Context, req *containerpb.DeleteClus
 	s.inFlight.Add(1)
 	go func() {
 		defer s.inFlight.Done()
-		err := s.runner.delete(context.WithoutCancel(ctx), name)
+		bg := context.WithoutCancel(ctx)
+		err := s.runner.delete(bg, name)
 		s.mu.Lock()
-		_ = s.kv.Delete(ctx, clusterKey(sc.project, sc.location, name), 0)
+		_ = s.kv.Delete(bg, clusterKey(sc.project, sc.location, name), 0)
 		s.mu.Unlock()
 		s.finish(op.GetName(), err)
 	}()

@@ -79,9 +79,13 @@ GKE:
   honest boundary rather than returning a cluster that cannot run a pod.
 - Node pools, autoscaling, upgrades, IP rotation and the other cluster-mutation
   RPCs are not modelled; a cluster comes up with kind's defaults.
-- gRPC only so far. `gcloud container clusters` speaks REST, and get-credentials
-  (a kubeconfig for the cluster) is the next step — the runner already produces
-  the kubeconfig, it is not yet exposed over the API.
+- `gcloud container clusters get-credentials` runs but the kubeconfig it writes
+  cannot authenticate: GKE credentials use a GCP auth plugin, while the local
+  cluster uses client certificates. Use the backend's own kubeconfig instead
+  (`k3d kubeconfig get cloudrig-<name>` or `kind get kubeconfig --name
+  cloudrig-<name>`), which is what actually talks to the cluster.
+- Node pools, autoscaling and the other cluster-mutation RPCs beyond create,
+  get, list and delete are not modelled.
 
 gRPC: everything except Pub/Sub.
 

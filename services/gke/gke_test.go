@@ -52,7 +52,7 @@ func newTest(t *testing.T, runner clusterRunner) *Service {
 	return s
 }
 
-const parent = "projects/p/locations/us-central1"
+const testParent = "projects/p/locations/us-central1"
 
 // TestCreateProvisionsThenRuns is the operation lifecycle: create returns a
 // RUNNING operation and a PROVISIONING cluster, and once the runner finishes
@@ -65,7 +65,7 @@ func TestCreateProvisionsThenRuns(t *testing.T) {
 	ctx := context.Background()
 
 	op, err := s.CreateCluster(ctx, &containerpb.CreateClusterRequest{
-		Parent:  parent,
+		Parent:  testParent,
 		Cluster: &containerpb.Cluster{Name: "dev", InitialNodeCount: 1},
 	})
 	if err != nil {
@@ -78,12 +78,12 @@ func TestCreateProvisionsThenRuns(t *testing.T) {
 	s.Sync() // the real create finished
 
 	done, _ := s.GetOperation(ctx, &containerpb.GetOperationRequest{
-		Name: parent + "/operations/" + op.GetName(),
+		Name: testParent + "/operations/" + op.GetName(),
 	})
 	if done.GetStatus() != containerpb.Operation_DONE {
 		t.Errorf("operation after Sync = %v, want DONE", done.GetStatus())
 	}
-	cluster, err := s.GetCluster(ctx, &containerpb.GetClusterRequest{Name: parent + "/clusters/dev"})
+	cluster, err := s.GetCluster(ctx, &containerpb.GetClusterRequest{Name: testParent + "/clusters/dev"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -109,7 +109,7 @@ func TestCreateFailureMarksError(t *testing.T) {
 	ctx := context.Background()
 
 	op, err := s.CreateCluster(ctx, &containerpb.CreateClusterRequest{
-		Parent: parent, Cluster: &containerpb.Cluster{Name: "broken"},
+		Parent: testParent, Cluster: &containerpb.Cluster{Name: "broken"},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -120,7 +120,7 @@ func TestCreateFailureMarksError(t *testing.T) {
 	if done.GetStatus() != containerpb.Operation_DONE || done.GetError() == nil {
 		t.Errorf("operation = %v err=%v, want DONE with an error", done.GetStatus(), done.GetError())
 	}
-	cluster, _ := s.GetCluster(ctx, &containerpb.GetClusterRequest{Name: parent + "/clusters/broken"})
+	cluster, _ := s.GetCluster(ctx, &containerpb.GetClusterRequest{Name: testParent + "/clusters/broken"})
 	if cluster.GetStatus() != containerpb.Cluster_ERROR {
 		t.Errorf("cluster status = %v, want ERROR", cluster.GetStatus())
 	}
@@ -136,19 +136,19 @@ func TestDeleteTearsDownTheCluster(t *testing.T) {
 	ctx := context.Background()
 
 	s.CreateCluster(ctx, &containerpb.CreateClusterRequest{
-		Parent: parent, Cluster: &containerpb.Cluster{Name: "temp"},
+		Parent: testParent, Cluster: &containerpb.Cluster{Name: "temp"},
 	})
 	s.Sync()
 
 	if _, err := s.DeleteCluster(ctx, &containerpb.DeleteClusterRequest{
-		Name: parent + "/clusters/temp",
+		Name: testParent + "/clusters/temp",
 	}); err != nil {
 		t.Fatalf("DeleteCluster: %v", err)
 	}
 	s.Sync()
 
 	if _, err := s.GetCluster(ctx, &containerpb.GetClusterRequest{
-		Name: parent + "/clusters/temp",
+		Name: testParent + "/clusters/temp",
 	}); status.Code(err) != codes.NotFound {
 		t.Errorf("cluster survived delete: %v", err)
 	}
@@ -166,15 +166,15 @@ func TestGKEErrors(t *testing.T) {
 	ctx := context.Background()
 
 	s.CreateCluster(ctx, &containerpb.CreateClusterRequest{
-		Parent: parent, Cluster: &containerpb.Cluster{Name: "dup"},
+		Parent: testParent, Cluster: &containerpb.Cluster{Name: "dup"},
 	})
 	if _, err := s.CreateCluster(ctx, &containerpb.CreateClusterRequest{
-		Parent: parent, Cluster: &containerpb.Cluster{Name: "dup"},
+		Parent: testParent, Cluster: &containerpb.Cluster{Name: "dup"},
 	}); status.Code(err) != codes.AlreadyExists {
 		t.Errorf("duplicate = %v, want AlreadyExists", err)
 	}
 	if _, err := s.GetCluster(ctx, &containerpb.GetClusterRequest{
-		Name: parent + "/clusters/ghost",
+		Name: testParent + "/clusters/ghost",
 	}); status.Code(err) != codes.NotFound {
 		t.Errorf("missing cluster = %v, want NotFound", err)
 	}
@@ -187,7 +187,7 @@ func TestNoBackendIsAClearError(t *testing.T) {
 
 	s := newTest(t, unavailableRunner{})
 	_, err := s.CreateCluster(context.Background(), &containerpb.CreateClusterRequest{
-		Parent: parent, Cluster: &containerpb.Cluster{Name: "x"},
+		Parent: testParent, Cluster: &containerpb.Cluster{Name: "x"},
 	})
 	if status.Code(err) != codes.FailedPrecondition {
 		t.Errorf("err = %v, want FailedPrecondition when no backend is available", err)

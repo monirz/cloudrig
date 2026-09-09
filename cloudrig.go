@@ -158,7 +158,7 @@ func Start(ctx context.Context, o Options) (*Emulator, error) {
 	susvc := serviceusage.New(stack.kvStore)
 	gksvc := gke.New(stack.kvStore, clk)
 	runReg := cloudrun.NewRegistry()
-	handler, closeAPIs := newHandler(clk, o, reg, runReg, stack.svc, psvc, smsvc, ctsvc, cssvc, susvc, newGRPC(psvc, fsvc, smsvc, ctsvc, cssvc, gksvc), flt)
+	handler, closeAPIs := newHandler(clk, o, reg, runReg, stack.svc, psvc, smsvc, ctsvc, cssvc, susvc, gksvc, newGRPC(psvc, fsvc, smsvc, ctsvc, cssvc, gksvc), flt)
 	srv := &http.Server{
 		Handler:   handler,
 		Protocols: transport.Protocols(), // HTTP/1.1 and h2c on one port
@@ -303,7 +303,7 @@ func serveForTest(t testing.TB, o Options, stack storageStack) *Emulator {
 	gksvc := gke.New(stack.kvStore, o.Clock)
 	runReg := cloudrun.NewRegistry()
 	t.Cleanup(runReg.StopAll)
-	handler, closeAPIs := newHandler(o.Clock, o, reg, runReg, stack.svc, psvc, smsvc, ctsvc, cssvc, susvc, newGRPC(psvc, fsvc, smsvc, ctsvc, cssvc, gksvc), flt)
+	handler, closeAPIs := newHandler(o.Clock, o, reg, runReg, stack.svc, psvc, smsvc, ctsvc, cssvc, susvc, gksvc, newGRPC(psvc, fsvc, smsvc, ctsvc, cssvc, gksvc), flt)
 	t.Cleanup(closeAPIs)
 
 	srv := httptest.NewUnstartedServer(handler)
@@ -418,7 +418,7 @@ func routeV1(fallback http.Handler, services ...matcher) http.Handler {
 
 // newHandler builds the request surface and returns what it must tear down:
 // the API objects own temporary directories, and nothing else can reach them.
-func newHandler(clk clock.Clock, o Options, reg *functions.Registry, runReg *cloudrun.Registry, gcs *storage.Service, psvc *pubsub.Service, smsvc *secretmanager.Service, ctsvc *cloudtasks.Service, cssvc *cloudscheduler.Service, susvc *serviceusage.Service, grpcSrv http.Handler, flt *faults.Set) (http.Handler, func()) {
+func newHandler(clk clock.Clock, o Options, reg *functions.Registry, runReg *cloudrun.Registry, gcs *storage.Service, psvc *pubsub.Service, smsvc *secretmanager.Service, ctsvc *cloudtasks.Service, cssvc *cloudscheduler.Service, susvc *serviceusage.Service, gksvc *gke.Service, grpcSrv http.Handler, flt *faults.Set) (http.Handler, func()) {
 	configured := o.Runner
 	if configured == "" {
 		configured = "auto"
@@ -453,7 +453,7 @@ func newHandler(clk clock.Clock, o Options, reg *functions.Registry, runReg *clo
 	mounts["/v1/"] = routeV1(api,
 		susvc,
 		pubsub.NewREST(psvc), runAPI, secretmanager.NewREST(smsvc),
-		cloudscheduler.NewREST(cssvc))
+		cloudscheduler.NewREST(cssvc), gke.NewREST(gksvc))
 
 	var gcsAPI http.Handler
 	if gcs != nil {
