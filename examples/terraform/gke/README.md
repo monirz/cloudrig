@@ -2,7 +2,8 @@
 
 `terraform apply` here provisions a **real** local Kubernetes cluster through
 cloudrig's GKE admin API — not a stub. Needs a container runtime (Docker/colima)
-and k3d or kind (`brew install k3d`).
+and k3d or kind installed — see [Install a backend](../../../README.md#install-a-backend)
+in the main README.
 
 ```sh
 # terminal 1

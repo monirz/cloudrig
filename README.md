@@ -862,8 +862,22 @@ Not supported: App Engine targets, OIDC/OAuth token minting, and time zones
 k3s (via k3d) or kind — not a stub. gcloud manages it; `kubectl` runs real
 workloads on it.
 
-Needs a container runtime (Docker/colima) and k3d or kind installed:
-`brew install k3d`.
+### Install a backend
+
+cloudrig runs the cluster through **k3d** (k3s packaged to run in Docker) or
+**kind**, whichever it finds on `PATH` — it prefers k3d. Both need a container
+runtime (Docker or colima) running underneath. cloudrig does not detect a
+native `k3s` binary; on Linux use k3d, which runs the same k3s inside Docker.
+
+```sh
+# macOS
+brew install k3d                                     # or: brew install kind
+
+# Linux
+curl -s https://raw.githubusercontent.com/k3d-io/k3d/main/install.sh | bash
+```
+
+Check it: `k3d version` (and `docker ps` to confirm the runtime is up).
 
 **1. Create a cluster.** This spins a real cluster, so it takes a minute:
 
