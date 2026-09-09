@@ -875,6 +875,13 @@ kubectl get pods                    # web-... Running 1/1
 
 That pod is running on a real Kubernetes cluster.
 
+Reach it with `kubectl port-forward svc/web 8080:80` after
+`kubectl expose deployment web --port=80`. Anything that runs *on* Kubernetes
+works, because it is a real cluster — but cluster add-ons are not pre-installed:
+a default k3d/kind cluster has no ingress controller, so an Ingress resource is
+accepted but not routed until you install one (e.g. ingress-nginx). That is
+standard k3d/kind behaviour, not a cloudrig limit.
+
 **4. Tear it down.** `gcloud delete` removes the real cluster:
 
 ```sh
