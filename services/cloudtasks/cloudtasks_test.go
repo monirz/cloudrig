@@ -107,17 +107,28 @@ func TestBackoffDoublesAndCaps(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// First attempt is immediate (due-now dispatch runs on a goroutine).
-	waitCalls(t, rec, 1)
-	// Backoff 1s → second attempt.
+	// The first attempt is immediate and runs on a goroutine; Sync drains it
+	// AND the retry timer it arms, so the clock cannot be advanced through the
+	// gap between the dispatch and its rescheduling. waitCalls would race there:
+	// the count is bumped during the request, the retry armed only after it.
+	s.Sync()
+	if got := rec.count(); got != 1 {
+		t.Fatalf("first attempt: %d dispatches, want 1", got)
+	}
+	// Backoff 1s → second attempt. A timer-driven dispatch runs synchronously
+	// inside Advance and arms the next retry before Advance returns, so the
+	// count is exact with no waiting.
 	clk.Advance(time.Second)
-	waitCalls(t, rec, 2)
+	if got := rec.count(); got != 2 {
+		t.Fatalf("after 1s: %d dispatches, want 2", got)
+	}
 	// Backoff doubles to 2s → third attempt.
 	clk.Advance(2 * time.Second)
-	waitCalls(t, rec, 3)
+	if got := rec.count(); got != 3 {
+		t.Fatalf("after 2s more: %d dispatches, want 3", got)
+	}
 	// The cap holds: no fourth, ever.
 	clk.Advance(time.Hour)
-	time.Sleep(20 * time.Millisecond)
 	if got := rec.count(); got != 3 {
 		t.Errorf("attempts = %d, want 3", got)
 	}
