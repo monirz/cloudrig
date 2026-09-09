@@ -25,7 +25,7 @@ func (s *Service) CreateCluster(ctx context.Context, req *containerpb.CreateClus
 
 	if !s.runner.available(ctx) {
 		return nil, status.Error(codes.FailedPrecondition,
-			"no local Kubernetes backend is available; install kind and a container runtime")
+			"no local Kubernetes backend is available; install k3d or kind and start a container runtime (e.g. Docker)")
 	}
 
 	s.mu.Lock()
