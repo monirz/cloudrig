@@ -2,6 +2,8 @@ package gke
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"strings"
 	"sync"
@@ -26,6 +28,7 @@ type Service struct {
 
 	mu         sync.Mutex
 	operations map[string]*operation // name -> live operation
+	opSeq      uint64                // monotonic, so op IDs are unique regardless of the clock
 	inFlight   sync.WaitGroup
 }
 
@@ -100,9 +103,40 @@ func (s *Service) putCluster(ctx context.Context, sc scope, c *containerpb.Clust
 	return err
 }
 
-// newOperation records a pending operation and returns it.
+// physicalName is the backend (k3d/kind) cluster name for a scoped GKE cluster.
+// Store keys are scoped by project and location, but the runner only sees a
+// name, so the scope must be folded in here — otherwise the same cluster name
+// in two projects maps to one physical cluster, and deleting one tears down the
+// other. A hash of the full scope keeps it unique; the readable label prefix is
+// only for humans reading `docker ps`. Bounded because k3d caps the cluster
+// name at 32 chars, including the runner's "cloudrig-" prefix.
+func physicalName(sc scope, name string) string {
+	sum := sha256.Sum256([]byte(sc.project + "\x00" + sc.location + "\x00" + name))
+	label := sanitizeLabel(name)
+	if len(label) > 13 {
+		label = strings.TrimRight(label[:13], "-")
+	}
+	if label == "" {
+		label = "c"
+	}
+	return label + "-" + hex.EncodeToString(sum[:4])
+}
+
+// sanitizeLabel lowercases name and keeps only DNS-label characters.
+func sanitizeLabel(name string) string {
+	var b strings.Builder
+	for _, r := range strings.ToLower(name) {
+		if r >= 'a' && r <= 'z' || r >= '0' && r <= '9' || r == '-' {
+			b.WriteByte(byte(r))
+		}
+	}
+	return strings.Trim(b.String(), "-")
+}
+
+// newOperation records a pending operation and returns it. Callers hold s.mu.
 func (s *Service) newOperation(sc scope, opType containerpb.Operation_Type, cluster string) *containerpb.Operation {
-	id := fmt.Sprintf("operation-%d", s.clk.Now().UnixNano())
+	s.opSeq++
+	id := fmt.Sprintf("operation-%d-%d", s.clk.Now().UnixNano(), s.opSeq)
 	pb := &containerpb.Operation{
 		Name:          id,
 		OperationType: opType,

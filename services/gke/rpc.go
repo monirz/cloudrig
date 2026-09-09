@@ -66,7 +66,7 @@ func (s *Service) CreateCluster(ctx context.Context, req *containerpb.CreateClus
 		// Detached: this outlives the request that started it, so its store
 		// writes must not use a context the request cancels on return.
 		bg := context.WithoutCancel(ctx)
-		endpoint, err := s.runner.create(bg, cluster.GetName())
+		endpoint, err := s.runner.create(bg, physicalName(sc, cluster.GetName()))
 		s.mu.Lock()
 		stored, gerr := s.getCluster(bg, sc, cluster.GetName())
 		if gerr == nil {
@@ -128,9 +128,18 @@ func (s *Service) DeleteCluster(ctx context.Context, req *containerpb.DeleteClus
 	go func() {
 		defer s.inFlight.Done()
 		bg := context.WithoutCancel(ctx)
-		err := s.runner.delete(bg, name)
+		err := s.runner.delete(bg, physicalName(sc, name))
 		s.mu.Lock()
-		_ = s.kv.Delete(bg, clusterKey(sc.project, sc.location, name), 0)
+		if err == nil {
+			_ = s.kv.Delete(bg, clusterKey(sc.project, sc.location, name), 0)
+		} else if c, gerr := s.getCluster(bg, sc, name); gerr == nil {
+			// The physical cluster may still be up: keep the record so it is not
+			// silently orphaned, and surface the failure instead of a false
+			// NotFound on the next Get or a retry that reports NotFound.
+			c.Status = containerpb.Cluster_ERROR
+			c.StatusMessage = err.Error()
+			_ = s.putCluster(bg, sc, c)
+		}
 		s.mu.Unlock()
 		s.finish(op.GetName(), err)
 	}()

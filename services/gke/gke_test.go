@@ -21,6 +21,7 @@ var epoch = time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 type fakeRunner struct {
 	mu        sync.Mutex
 	createErr error
+	deleteErr error
 	created   []string
 	deleted   []string
 }
@@ -39,6 +40,9 @@ func (f *fakeRunner) kubeconfig(context.Context, string) ([]byte, error) {
 	return []byte("kubeconfig"), nil
 }
 func (f *fakeRunner) delete(_ context.Context, name string) error {
+	if f.deleteErr != nil {
+		return f.deleteErr
+	}
 	f.mu.Lock()
 	f.deleted = append(f.deleted, name)
 	f.mu.Unlock()
@@ -251,5 +255,112 @@ func TestNetworkDefaultsAreStable(t *testing.T) {
 	}
 	if got, want := c.GetNetworkConfig().GetSubnetwork(), "projects/p/regions/us-central1/subnetworks/default"; got != want {
 		t.Errorf("networkConfig.subnetwork = %q, want %q", got, want)
+	}
+}
+
+// TestScopeCollisionIsolatesClusters holds that the same cluster name in two
+// projects maps to two distinct physical clusters, so deleting one does not
+// tear down the other. Regression: the runner name was derived from the short
+// cluster name alone, while store keys are scoped by project and location.
+func TestScopeCollisionIsolatesClusters(t *testing.T) {
+	t.Parallel()
+
+	f := &fakeRunner{}
+	s := newTest(t, f)
+	ctx := context.Background()
+
+	for _, project := range []string{"projects/a/locations/us-central1", "projects/b/locations/us-central1"} {
+		if _, err := s.CreateCluster(ctx, &containerpb.CreateClusterRequest{
+			Parent:  project,
+			Cluster: &containerpb.Cluster{Name: "dev", InitialNodeCount: 1},
+		}); err != nil {
+			t.Fatalf("CreateCluster in %s: %v", project, err)
+		}
+	}
+	s.Sync()
+
+	f.mu.Lock()
+	created := append([]string(nil), f.created...)
+	f.mu.Unlock()
+	if len(created) != 2 {
+		t.Fatalf("created %v, want two clusters", created)
+	}
+	if created[0] == created[1] {
+		t.Fatalf("both scopes produced the same physical name %q; they must differ", created[0])
+	}
+
+	// Deleting project a's cluster must not remove project b's record.
+	if _, err := s.DeleteCluster(ctx, &containerpb.DeleteClusterRequest{
+		Name: "projects/a/locations/us-central1/clusters/dev",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	s.Sync()
+	if _, err := s.GetCluster(ctx, &containerpb.GetClusterRequest{
+		Name: "projects/b/locations/us-central1/clusters/dev",
+	}); err != nil {
+		t.Errorf("project b's cluster went missing after deleting a's: %v", err)
+	}
+}
+
+// TestOperationIDsAreUniqueWithoutClockTicks holds that two operations started
+// without the fake clock advancing get distinct IDs, so polling one does not
+// return the other. Regression: the ID was purely timestamp-derived.
+func TestOperationIDsAreUniqueWithoutClockTicks(t *testing.T) {
+	t.Parallel()
+
+	s := newTest(t, &fakeRunner{})
+	ctx := context.Background()
+
+	op1, err := s.CreateCluster(ctx, &containerpb.CreateClusterRequest{
+		Parent: testParent, Cluster: &containerpb.Cluster{Name: "one"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	op2, err := s.CreateCluster(ctx, &containerpb.CreateClusterRequest{
+		Parent: testParent, Cluster: &containerpb.Cluster{Name: "two"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if op1.GetName() == op2.GetName() {
+		t.Fatalf("two operations share the ID %q without the clock advancing", op1.GetName())
+	}
+	s.Sync()
+}
+
+// TestFailedDeleteKeepsClusterRecord holds that when the runner cannot delete
+// the physical cluster, the record survives (as ERROR) rather than vanishing,
+// so the cluster is not silently orphaned. Regression: the record was removed
+// unconditionally.
+func TestFailedDeleteKeepsClusterRecord(t *testing.T) {
+	t.Parallel()
+
+	s := newTest(t, &fakeRunner{})
+	ctx := context.Background()
+
+	if _, err := s.CreateCluster(ctx, &containerpb.CreateClusterRequest{
+		Parent: testParent, Cluster: &containerpb.Cluster{Name: "stuck"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	s.Sync()
+
+	// Now make deletion fail.
+	s.runner = &fakeRunner{deleteErr: errors.New("k3d down")}
+	if _, err := s.DeleteCluster(ctx, &containerpb.DeleteClusterRequest{
+		Name: testParent + "/clusters/stuck",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	s.Sync()
+
+	c, err := s.GetCluster(ctx, &containerpb.GetClusterRequest{Name: testParent + "/clusters/stuck"})
+	if err != nil {
+		t.Fatalf("cluster record vanished after a failed delete: %v", err)
+	}
+	if c.GetStatus() != containerpb.Cluster_ERROR {
+		t.Errorf("status = %v, want ERROR", c.GetStatus())
 	}
 }
