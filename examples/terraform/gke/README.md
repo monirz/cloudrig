@@ -9,7 +9,7 @@ and k3d or kind (`brew install k3d`).
 make build && ./cloudrig start
 
 # terminal 2
-cd examples/gke
+cd examples/terraform/gke
 terraform init
 terraform apply -auto-approve      # spins a real cluster, ~1 min
 ```

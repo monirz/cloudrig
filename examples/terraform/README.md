@@ -1,22 +1,20 @@
 # Terraform against cloudrig
 
-```sh
-# terminal 1
-make build && ./cloudrig start
+Two runnable examples, each in its own directory (Terraform reads every `.tf`
+in a directory together, so they are kept apart):
 
-# terminal 2
-cd examples/terraform
-terraform init
-terraform apply -auto-approve
+- [`services/`](services/) — Storage and Pub/Sub. Lightweight; applies in
+  seconds. Start here.
+- [`gke/`](gke/) — a `google_container_cluster` that provisions a **real**
+  local Kubernetes cluster (k3d/kind). Slow (~1 min) and needs a container
+  runtime, so it lives on its own.
+
+Both point the provider at `http://localhost:4599` and need the emulator
+running:
+
+```sh
+make build && ./cloudrig start
 ```
 
-Two things make it work, both in the provider block:
-
-- `access_token = "cloudrig-local"` — real credentials make the provider sign a
-  JWT and exchange it at `oauth2.googleapis.com`. The emulator never looks at
-  the token.
-- `storage_custom_endpoint` — one `*_custom_endpoint` per service you use.
-
-IAM policies are stored but never enforced, so `allUsers` grants nothing here.
-It is routed because Terraform reads and writes it; without the endpoint the
-provider retries a 404 as eventual consistency and the apply hangs.
+Then `cd` into either directory and run `terraform init && terraform apply`.
+See each directory's README for details.
