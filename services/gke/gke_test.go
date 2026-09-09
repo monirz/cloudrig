@@ -120,7 +120,7 @@ func TestCreateFailureMarksError(t *testing.T) {
 	}
 	s.Sync()
 
-	done, _ := s.GetOperation(ctx, &containerpb.GetOperationRequest{OperationId: op.GetName()})
+	done, _ := s.GetOperation(ctx, &containerpb.GetOperationRequest{Name: testParent + "/operations/" + op.GetName()})
 	if done.GetStatus() != containerpb.Operation_DONE || done.GetError() == nil {
 		t.Errorf("operation = %v err=%v, want DONE with an error", done.GetStatus(), done.GetError())
 	}
@@ -362,5 +362,81 @@ func TestFailedDeleteKeepsClusterRecord(t *testing.T) {
 	}
 	if c.GetStatus() != containerpb.Cluster_ERROR {
 		t.Errorf("status = %v, want ERROR", c.GetStatus())
+	}
+}
+
+// TestGetOperationIsScopeChecked holds that an operation identifier from one
+// project cannot be polled through another project's scope. Regression: the
+// operation store was keyed by bare ID, so a caller in project b could read
+// project a's operation, including a's cluster, status and error.
+func TestGetOperationIsScopeChecked(t *testing.T) {
+	t.Parallel()
+
+	s := newTest(t, &fakeRunner{})
+	ctx := context.Background()
+
+	op, err := s.CreateCluster(ctx, &containerpb.CreateClusterRequest{
+		Parent:  "projects/a/locations/us-central1",
+		Cluster: &containerpb.Cluster{Name: "dev"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.Sync()
+
+	// Same identifier, a different project: must not resolve.
+	if _, err := s.GetOperation(ctx, &containerpb.GetOperationRequest{
+		Name: "projects/b/locations/us-central1/operations/" + op.GetName(),
+	}); status.Code(err) != codes.NotFound {
+		t.Errorf("cross-scope GetOperation = %v, want NotFound", err)
+	}
+	// The owning scope still resolves it.
+	if _, err := s.GetOperation(ctx, &containerpb.GetOperationRequest{
+		Name: "projects/a/locations/us-central1/operations/" + op.GetName(),
+	}); err != nil {
+		t.Errorf("owning-scope GetOperation failed: %v", err)
+	}
+}
+
+// TestPhysicalNamesAreUniqueUnderCollision holds that two clusters are never
+// given the same backend name, even when their candidate names would collide:
+// assignPhysical disambiguates against what is already in use. Regression: a
+// fixed-length hash could map two distinct tuples to one physical cluster.
+func TestPhysicalNamesAreUniqueUnderCollision(t *testing.T) {
+	t.Parallel()
+
+	f := &fakeRunner{}
+	s := newTest(t, f)
+	ctx := context.Background()
+
+	// Two different scopes. Their assigned names must differ regardless of how
+	// the candidate hashes come out.
+	p1, err := s.assignPhysical(ctx, scope{"a", "us-central1"}, "dev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	p2, err := s.assignPhysical(ctx, scope{"b", "us-central1"}, "dev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p1 == p2 {
+		t.Fatalf("two scopes got the same physical name %q", p1)
+	}
+
+	// Force a candidate clash: pre-seed the store with p1's candidate under a
+	// third tuple, then assign that tuple — it must not reuse p1.
+	third := scope{"c", "us-central1"}
+	if _, err := s.kv.Put(ctx, physKey(third, "dev"), []byte(p1), 0); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.assignPhysical(ctx, scope{"d", "us-central1"}, "dev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got == p1 {
+		t.Fatalf("assignPhysical reused an in-use name %q", p1)
+	}
+	if got == "" || len("cloudrig-"+got) > 32 {
+		t.Fatalf("physical name %q exceeds the k3d 32-char limit with its prefix", got)
 	}
 }

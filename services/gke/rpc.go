@@ -55,6 +55,13 @@ func (s *Service) CreateCluster(ctx context.Context, req *containerpb.CreateClus
 		s.mu.Unlock()
 		return nil, err
 	}
+	// A backend name unique across every scope, so two clusters that happen to
+	// share a name never map to the same physical cluster.
+	phys, err := s.assignPhysical(ctx, sc, cluster.GetName())
+	if err != nil {
+		s.mu.Unlock()
+		return nil, err
+	}
 	op := s.newOperation(sc, containerpb.Operation_CREATE_CLUSTER, cluster.GetName())
 	s.mu.Unlock()
 
@@ -66,7 +73,7 @@ func (s *Service) CreateCluster(ctx context.Context, req *containerpb.CreateClus
 		// Detached: this outlives the request that started it, so its store
 		// writes must not use a context the request cancels on return.
 		bg := context.WithoutCancel(ctx)
-		endpoint, err := s.runner.create(bg, physicalName(sc, cluster.GetName()))
+		endpoint, err := s.runner.create(bg, phys)
 		s.mu.Lock()
 		stored, gerr := s.getCluster(bg, sc, cluster.GetName())
 		if gerr == nil {
@@ -80,7 +87,7 @@ func (s *Service) CreateCluster(ctx context.Context, req *containerpb.CreateClus
 			_ = s.putCluster(bg, sc, stored)
 		}
 		s.mu.Unlock()
-		s.finish(op.GetName(), err)
+		s.finish(sc, op.GetName(), err)
 	}()
 	return op, nil
 }
@@ -121,6 +128,13 @@ func (s *Service) DeleteCluster(ctx context.Context, req *containerpb.DeleteClus
 	}
 	cluster.Status = containerpb.Cluster_STOPPING
 	_ = s.putCluster(ctx, sc, cluster)
+	// The name assigned at create; recomputing could drift, and a restart would
+	// have reloaded the record, so resolve it from the store.
+	phys, err := s.physicalOf(ctx, sc, name)
+	if err != nil {
+		s.mu.Unlock()
+		return nil, err
+	}
 	op := s.newOperation(sc, containerpb.Operation_DELETE_CLUSTER, name)
 	s.mu.Unlock()
 
@@ -128,10 +142,11 @@ func (s *Service) DeleteCluster(ctx context.Context, req *containerpb.DeleteClus
 	go func() {
 		defer s.inFlight.Done()
 		bg := context.WithoutCancel(ctx)
-		err := s.runner.delete(bg, physicalName(sc, name))
+		err := s.runner.delete(bg, phys)
 		s.mu.Lock()
 		if err == nil {
 			_ = s.kv.Delete(bg, clusterKey(sc.project, sc.location, name), 0)
+			_ = s.kv.Delete(bg, physKey(sc, name), 0)
 		} else if c, gerr := s.getCluster(bg, sc, name); gerr == nil {
 			// The physical cluster may still be up: keep the record so it is not
 			// silently orphaned, and surface the failure instead of a false
@@ -141,19 +156,22 @@ func (s *Service) DeleteCluster(ctx context.Context, req *containerpb.DeleteClus
 			_ = s.putCluster(bg, sc, c)
 		}
 		s.mu.Unlock()
-		s.finish(op.GetName(), err)
+		s.finish(sc, op.GetName(), err)
 	}()
 	return op, nil
 }
 
 func (s *Service) GetOperation(ctx context.Context, req *containerpb.GetOperationRequest) (*containerpb.Operation, error) {
+	sc := scopeOf(req.GetName(), req.GetProjectId(), req.GetZone())
 	name := req.GetOperationId()
 	if name == "" {
 		name = lastSegment(req.GetName())
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	op := s.operations[name]
+	// Keyed by scope: an identifier from one project must not resolve another
+	// project's operation.
+	op := s.operations[opKey(sc, name)]
 	if op == nil {
 		return nil, status.Errorf(codes.NotFound, "operation %q not found", name)
 	}

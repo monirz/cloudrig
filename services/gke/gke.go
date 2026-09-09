@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -36,6 +37,13 @@ type Service struct {
 // delete: the call returns an operation, and the caller polls it to DONE.
 type operation struct {
 	pb *containerpb.Operation
+}
+
+// opKey scopes an operation by project and location, so a caller cannot poll an
+// operation identifier that belongs to a different project and read back its
+// cluster, status and error.
+func opKey(sc scope, id string) string {
+	return sc.project + "/" + sc.location + "/" + id
 }
 
 // New wires a service. runner defaults to kind; a test injects a fake.
@@ -103,23 +111,73 @@ func (s *Service) putCluster(ctx context.Context, sc scope, c *containerpb.Clust
 	return err
 }
 
-// physicalName is the backend (k3d/kind) cluster name for a scoped GKE cluster.
-// Store keys are scoped by project and location, but the runner only sees a
-// name, so the scope must be folded in here — otherwise the same cluster name
-// in two projects maps to one physical cluster, and deleting one tears down the
-// other. A hash of the full scope keeps it unique; the readable label prefix is
-// only for humans reading `docker ps`. Bounded because k3d caps the cluster
-// name at 32 chars, including the runner's "cloudrig-" prefix.
-func physicalName(sc scope, name string) string {
+// physKeyPrefix namespaces the cluster-tuple -> physical-name records.
+const physKeyPrefix = "gke/phys/"
+
+// physMaxLen is the physical name budget: k3d caps a cluster name at 32 chars,
+// and the runner prefixes it with "cloudrig-" (9).
+const physMaxLen = 32 - len("cloudrig-")
+
+func physKey(sc scope, name string) string {
+	return physKeyPrefix + sc.project + "/" + sc.location + "/" + name
+}
+
+// candidateName is the preferred backend (k3d/kind) cluster name for a scoped
+// cluster: a readable label from the cluster name plus a hash of the full scope
+// so two projects do not start from the same string. It is only a starting
+// point — assignPhysical guarantees uniqueness, because a hash alone can
+// collide. Bounded to physMaxLen with room for a disambiguating suffix.
+func candidateName(sc scope, name string) string {
 	sum := sha256.Sum256([]byte(sc.project + "\x00" + sc.location + "\x00" + name))
 	label := sanitizeLabel(name)
-	if len(label) > 13 {
-		label = strings.TrimRight(label[:13], "-")
+	if len(label) > 8 {
+		label = strings.TrimRight(label[:8], "-")
 	}
 	if label == "" {
 		label = "c"
 	}
-	return label + "-" + hex.EncodeToString(sum[:4])
+	return label + "-" + hex.EncodeToString(sum[:6]) // <= 8 + 1 + 12 = 21
+}
+
+// assignPhysical picks a backend cluster name no other cluster is using and
+// records it under the cluster's tuple. Called under s.mu, so two concurrent
+// creates cannot claim the same name. Storing the assignment (rather than
+// recomputing a hash on demand) makes the mapping injective: distinct clusters
+// never share one physical cluster even when their names hash alike, and the
+// record survives a restart so delete resolves the same name.
+func (s *Service) assignPhysical(ctx context.Context, sc scope, name string) (string, error) {
+	entries, _, err := s.kv.List(ctx, physKeyPrefix, 0, "")
+	if err != nil {
+		return "", status.Errorf(codes.Internal, "listing physical names: %v", err)
+	}
+	used := make(map[string]bool, len(entries))
+	for _, e := range entries {
+		used[string(e.Val)] = true
+	}
+
+	base := candidateName(sc, name)
+	cand := base
+	for i := 2; used[cand]; i++ {
+		suffix := "-" + strconv.Itoa(i)
+		trimmed := base
+		if len(trimmed) > physMaxLen-len(suffix) {
+			trimmed = strings.TrimRight(trimmed[:physMaxLen-len(suffix)], "-")
+		}
+		cand = trimmed + suffix
+	}
+	if _, err := s.kv.Put(ctx, physKey(sc, name), []byte(cand), 0); err != nil {
+		return "", status.Errorf(codes.Internal, "recording physical name: %v", err)
+	}
+	return cand, nil
+}
+
+// physicalOf resolves a cluster's assigned backend name.
+func (s *Service) physicalOf(ctx context.Context, sc scope, name string) (string, error) {
+	v, _, err := s.kv.Get(ctx, physKey(sc, name))
+	if err != nil {
+		return "", status.Errorf(codes.NotFound, "no physical name for cluster %q", name)
+	}
+	return string(v), nil
 }
 
 // sanitizeLabel lowercases name and keeps only DNS-label characters.
@@ -146,7 +204,7 @@ func (s *Service) newOperation(sc scope, opType containerpb.Operation_Type, clus
 		Zone:          sc.location,
 		StartTime:     s.clk.Now().UTC().Format("2006-01-02T15:04:05Z"),
 	}
-	s.operations[id] = &operation{pb: pb}
+	s.operations[opKey(sc, id)] = &operation{pb: pb}
 	// A clone for the response: the stored one is mutated by finish under the
 	// lock, and a caller must not read a proto another goroutine is writing.
 	return proto.Clone(pb).(*containerpb.Operation)
@@ -154,10 +212,10 @@ func (s *Service) newOperation(sc scope, opType containerpb.Operation_Type, clus
 
 // finish flips an operation to DONE, recording an error message if the action
 // failed. Safe to call from the action goroutine.
-func (s *Service) finish(name string, err error) {
+func (s *Service) finish(sc scope, name string, err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	op := s.operations[name]
+	op := s.operations[opKey(sc, name)]
 	if op == nil {
 		return
 	}
