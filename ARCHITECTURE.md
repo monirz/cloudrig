@@ -62,6 +62,7 @@ process the same way they would reach Google.
 | `services/cloudscheduler` | Cron jobs, fired on the injected clock |
 | `services/gke` | The cluster admin API over a real local Kubernetes |
 | `services/serviceusage` | Which APIs a project has enabled |
+| `services/cloudlogging` | Log entries, written and read back by filter |
 | `lint` | Build-time invariants enforced as tests |
 
 ---

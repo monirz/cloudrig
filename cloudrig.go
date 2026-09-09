@@ -25,6 +25,7 @@ import (
 	"cloud.google.com/go/cloudtasks/apiv2/cloudtaskspb"
 	"cloud.google.com/go/container/apiv1/containerpb"
 	"cloud.google.com/go/firestore/apiv1/firestorepb"
+	"cloud.google.com/go/logging/apiv2/loggingpb"
 	"cloud.google.com/go/pubsub/v2/apiv1/pubsubpb"
 	"cloud.google.com/go/scheduler/apiv1/schedulerpb"
 	"cloud.google.com/go/secretmanager/apiv1/secretmanagerpb"
@@ -36,6 +37,7 @@ import (
 	"google.golang.org/grpc"
 
 	"github.com/monirz/cloudrig/services/cloudfunctions"
+	"github.com/monirz/cloudrig/services/cloudlogging"
 	"github.com/monirz/cloudrig/services/cloudrun"
 	"github.com/monirz/cloudrig/services/cloudscheduler"
 	"github.com/monirz/cloudrig/services/cloudtasks"
@@ -107,6 +109,7 @@ type Emulator struct {
 	tasks    *cloudtasks.Service
 	sched    *cloudscheduler.Service
 	svcusage *serviceusage.Service
+	logging  *cloudlogging.Service
 }
 
 // Start runs the emulator on a real listener; the caller owns shutdown. ctx
@@ -157,8 +160,9 @@ func Start(ctx context.Context, o Options) (*Emulator, error) {
 	cssvc := cloudscheduler.New(stack.kvStore, clk, publishTo(psvc))
 	susvc := serviceusage.New(stack.kvStore)
 	gksvc := gke.New(stack.kvStore, clk)
+	lgsvc := cloudlogging.New(clk)
 	runReg := cloudrun.NewRegistry()
-	handler, closeAPIs := newHandler(clk, o, reg, runReg, stack.svc, psvc, smsvc, ctsvc, cssvc, susvc, gksvc, newGRPC(psvc, fsvc, smsvc, ctsvc, cssvc, gksvc), flt)
+	handler, closeAPIs := newHandler(clk, o, reg, runReg, stack.svc, psvc, smsvc, ctsvc, cssvc, susvc, gksvc, lgsvc, newGRPC(psvc, fsvc, smsvc, ctsvc, cssvc, gksvc, lgsvc), flt)
 	srv := &http.Server{
 		Handler:   handler,
 		Protocols: transport.Protocols(), // HTTP/1.1 and h2c on one port
@@ -174,6 +178,7 @@ func Start(ctx context.Context, o Options) (*Emulator, error) {
 		tasks:    ctsvc,
 		sched:    cssvc,
 		svcusage: susvc,
+		logging:  lgsvc,
 		addr:     dialable(ln.Addr().String()),
 		fns:      reg,
 		storage:  stack.svc,
@@ -301,9 +306,10 @@ func serveForTest(t testing.TB, o Options, stack storageStack) *Emulator {
 	cssvc := cloudscheduler.New(stack.kvStore, o.Clock, publishTo(psvc))
 	susvc := serviceusage.New(stack.kvStore)
 	gksvc := gke.New(stack.kvStore, o.Clock)
+	lgsvc := cloudlogging.New(o.Clock)
 	runReg := cloudrun.NewRegistry()
 	t.Cleanup(runReg.StopAll)
-	handler, closeAPIs := newHandler(o.Clock, o, reg, runReg, stack.svc, psvc, smsvc, ctsvc, cssvc, susvc, gksvc, newGRPC(psvc, fsvc, smsvc, ctsvc, cssvc, gksvc), flt)
+	handler, closeAPIs := newHandler(o.Clock, o, reg, runReg, stack.svc, psvc, smsvc, ctsvc, cssvc, susvc, gksvc, lgsvc, newGRPC(psvc, fsvc, smsvc, ctsvc, cssvc, gksvc, lgsvc), flt)
 	t.Cleanup(closeAPIs)
 
 	srv := httptest.NewUnstartedServer(handler)
@@ -318,6 +324,7 @@ func serveForTest(t testing.TB, o Options, stack storageStack) *Emulator {
 		tasks:    ctsvc,
 		sched:    cssvc,
 		svcusage: susvc,
+		logging:  lgsvc,
 		addr:     srv.Listener.Addr().String(),
 		fns:      reg,
 		storage:  stack.svc,
@@ -382,7 +389,7 @@ func publishTo(ps *pubsub.Service) cloudscheduler.PublishFunc {
 //
 // Requests reach it through the transport's h2c dispatch, so gRPC and REST
 // share the one port.
-func newGRPC(ps *pubsub.Service, fs *firestore.Service, sm *secretmanager.Service, ct *cloudtasks.Service, cs *cloudscheduler.Service, gk *gke.Service) *grpc.Server {
+func newGRPC(ps *pubsub.Service, fs *firestore.Service, sm *secretmanager.Service, ct *cloudtasks.Service, cs *cloudscheduler.Service, gk *gke.Service, lg *cloudlogging.Service) *grpc.Server {
 	srv := grpc.NewServer()
 	pubsubpb.RegisterPublisherServer(srv, pubsub.NewPublisher(ps))
 	pubsubpb.RegisterSubscriberServer(srv, pubsub.NewSubscriber(ps))
@@ -391,6 +398,7 @@ func newGRPC(ps *pubsub.Service, fs *firestore.Service, sm *secretmanager.Servic
 	cloudtaskspb.RegisterCloudTasksServer(srv, ct)
 	schedulerpb.RegisterCloudSchedulerServer(srv, cs)
 	containerpb.RegisterClusterManagerServer(srv, gk)
+	loggingpb.RegisterLoggingServiceV2Server(srv, lg)
 	return srv
 }
 
@@ -418,7 +426,7 @@ func routeV1(fallback http.Handler, services ...matcher) http.Handler {
 
 // newHandler builds the request surface and returns what it must tear down:
 // the API objects own temporary directories, and nothing else can reach them.
-func newHandler(clk clock.Clock, o Options, reg *functions.Registry, runReg *cloudrun.Registry, gcs *storage.Service, psvc *pubsub.Service, smsvc *secretmanager.Service, ctsvc *cloudtasks.Service, cssvc *cloudscheduler.Service, susvc *serviceusage.Service, gksvc *gke.Service, grpcSrv http.Handler, flt *faults.Set) (http.Handler, func()) {
+func newHandler(clk clock.Clock, o Options, reg *functions.Registry, runReg *cloudrun.Registry, gcs *storage.Service, psvc *pubsub.Service, smsvc *secretmanager.Service, ctsvc *cloudtasks.Service, cssvc *cloudscheduler.Service, susvc *serviceusage.Service, gksvc *gke.Service, lgsvc *cloudlogging.Service, grpcSrv http.Handler, flt *faults.Set) (http.Handler, func()) {
 	configured := o.Runner
 	if configured == "" {
 		configured = "auto"
@@ -477,7 +485,7 @@ func newHandler(clk clock.Clock, o Options, reg *functions.Registry, runReg *clo
 		GRPC:      grpcSrv,
 		Faults:    flt,
 		Reset: func(ctx context.Context, project string) error {
-			return resetAll(ctx, project, runReg, susvc, gcs)
+			return resetAll(ctx, project, runReg, susvc, lgsvc, gcs)
 		},
 	})
 
@@ -490,19 +498,24 @@ func newHandler(clk clock.Clock, o Options, reg *functions.Registry, runReg *clo
 
 // Reset clears emulator state. An empty project clears everything.
 func (e *Emulator) Reset(ctx context.Context, project string) error {
-	return resetAll(ctx, project, e.run, e.svcusage, e.storage)
+	return resetAll(ctx, project, e.run, e.svcusage, e.logging, e.storage)
 }
 
 // resetAll is the one reset path: the /_emu/reset endpoint and Emulator.Reset
 // both call it, so they cannot drift. Cloud Run services are stopped, Service
 // Usage state is cleared from its own key prefix, and the storage tree is
 // reset last.
-func resetAll(ctx context.Context, project string, run *cloudrun.Registry, su *serviceusage.Service, gcs *storage.Service) error {
+func resetAll(ctx context.Context, project string, run *cloudrun.Registry, su *serviceusage.Service, lg *cloudlogging.Service, gcs *storage.Service) error {
 	if run != nil {
 		run.StopAll()
 	}
 	if su != nil {
 		if err := su.Reset(ctx, project); err != nil {
+			return err
+		}
+	}
+	if lg != nil {
+		if err := lg.Reset(ctx, project); err != nil {
 			return err
 		}
 	}

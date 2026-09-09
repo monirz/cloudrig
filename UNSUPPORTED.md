@@ -78,14 +78,23 @@ GKE:
   kind. Without either and a container runtime, CreateCluster fails at the
   honest boundary rather than returning a cluster that cannot run a pod.
 - Node pools, autoscaling, upgrades, IP rotation and the other cluster-mutation
-  RPCs are not modelled; a cluster comes up with kind's defaults.
+  RPCs beyond create, get, list and delete are not modelled; a cluster comes up
+  with the backend's defaults.
 - `gcloud container clusters get-credentials` runs but the kubeconfig it writes
   cannot authenticate: GKE credentials use a GCP auth plugin, while the local
   cluster uses client certificates. Use the backend's own kubeconfig instead
   (`k3d kubeconfig get cloudrig-<name>` or `kind get kubeconfig --name
   cloudrig-<name>`), which is what actually talks to the cluster.
-- Node pools, autoscaling and the other cluster-mutation RPCs beyond create,
-  get, list and delete are not modelled.
+
+Cloud Logging:
+
+- Entries live in memory, bounded to the most recent 10000, and are not
+  persisted by --data-dir; a long-running or chatty service loses old ones.
+- The filter language is a subset: logName, severity comparisons,
+  resource.type, labels.<k>, insertId and trace, joined by AND. Anything else
+  is a loud error rather than a silent match-all. No OR, no timestamp ranges,
+  no functions.
+- No TailLogEntries (streaming), no log-based metrics, no sinks or exclusions.
 
 gRPC: everything except Pub/Sub.
 
