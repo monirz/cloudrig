@@ -216,3 +216,40 @@ func TestChooseRunnerPrefersK3s(t *testing.T) {
 		t.Errorf("chooseRunner returned %T, want k3d or kind", got)
 	}
 }
+
+// TestNetworkDefaultsAreStable holds that a create with no network echoes the
+// short name in the top-level fields and the full resource path under
+// networkConfig, matching real GKE. The Terraform provider reads networkConfig
+// and treats network as ForceNew; without these a fresh plan wants to replace
+// the cluster on every run.
+func TestNetworkDefaultsAreStable(t *testing.T) {
+	t.Parallel()
+
+	s := newTest(t, &fakeRunner{})
+	ctx := context.Background()
+
+	if _, err := s.CreateCluster(ctx, &containerpb.CreateClusterRequest{
+		Parent:  testParent,
+		Cluster: &containerpb.Cluster{Name: "net", InitialNodeCount: 1},
+	}); err != nil {
+		t.Fatalf("CreateCluster: %v", err)
+	}
+	s.Sync()
+
+	c, err := s.GetCluster(ctx, &containerpb.GetClusterRequest{Name: testParent + "/clusters/net"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.GetNetwork() != "default" {
+		t.Errorf("network = %q, want %q", c.GetNetwork(), "default")
+	}
+	if c.GetSubnetwork() != "default" {
+		t.Errorf("subnetwork = %q, want %q", c.GetSubnetwork(), "default")
+	}
+	if got, want := c.GetNetworkConfig().GetNetwork(), "projects/p/global/networks/default"; got != want {
+		t.Errorf("networkConfig.network = %q, want %q", got, want)
+	}
+	if got, want := c.GetNetworkConfig().GetSubnetwork(), "projects/p/regions/us-central1/subnetworks/default"; got != want {
+		t.Errorf("networkConfig.subnetwork = %q, want %q", got, want)
+	}
+}

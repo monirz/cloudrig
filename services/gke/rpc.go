@@ -37,6 +37,19 @@ func (s *Service) CreateCluster(ctx context.Context, req *containerpb.CreateClus
 	cluster.Status = containerpb.Cluster_PROVISIONING
 	cluster.SelfLink = "projects/" + sc.project + "/locations/" + sc.location + "/clusters/" + cluster.GetName()
 	cluster.Location = sc.location
+	// Real GKE defaults the network to "default" and echoes it in two places:
+	// the short name in the top-level fields, and the full resource path under
+	// networkConfig. The Terraform provider reads networkConfig and treats
+	// network as ForceNew, so both must be present and stable or every plan
+	// wants to replace the cluster.
+	net := lastSegmentOr(cluster.GetNetwork(), "default")
+	subnet := lastSegmentOr(cluster.GetSubnetwork(), "default")
+	cluster.Network = net
+	cluster.Subnetwork = subnet
+	cluster.NetworkConfig = &containerpb.NetworkConfig{
+		Network:    "projects/" + sc.project + "/global/networks/" + net,
+		Subnetwork: "projects/" + sc.project + "/regions/" + sc.location + "/subnetworks/" + subnet,
+	}
 	cluster.CreateTime = s.clk.Now().UTC().Format("2006-01-02T15:04:05Z")
 	if err := s.putCluster(ctx, sc, cluster); err != nil {
 		s.mu.Unlock()
@@ -154,4 +167,12 @@ func lastSegment(name string) string {
 		}
 	}
 	return name
+}
+
+// lastSegmentOr returns the last path segment of name, or def when name is empty.
+func lastSegmentOr(name, def string) string {
+	if name == "" {
+		return def
+	}
+	return lastSegment(name)
 }
