@@ -45,6 +45,7 @@ Each one is a sequence you can paste, in order, against a running emulator.
 | [Secret Manager](#secret-manager) | Secrets, versions, and the latest alias |
 | [Cloud Tasks](#cloud-tasks) | Deferred HTTP work, fired on the clock |
 | [Cloud Scheduler](#cloud-scheduler) | Cron jobs, fired on the clock |
+| [GKE](#gke) | A real Kubernetes cluster, driven by gcloud |
 | [Cloud Run](#cloud-run) | Deploy a container, and call it |
 | [Run a service without Docker](#run-a-service-without-docker) | The same service as a process |
 
@@ -834,6 +835,58 @@ Job CRUD, pause and resume, `RunJob`/`jobs run` to fire ahead of schedule, and
 
 Not supported: App Engine targets, OIDC/OAuth token minting, and time zones
 (cron is evaluated in UTC).
+
+## GKE
+
+`gcloud container clusters create` starts a **real** local Kubernetes cluster —
+k3s (via k3d) or kind — not a stub. gcloud manages it; `kubectl` runs real
+workloads on it.
+
+Needs a container runtime (Docker/colima) and k3d or kind installed:
+`brew install k3d`.
+
+**1. Create a cluster.** This spins a real cluster, so it takes a minute:
+
+```sh
+export CLOUDSDK_CORE_PROJECT=cloudrig-local
+. ./cloudrig-env.sh
+
+gcloud container clusters create demo --location=us-central1 --num-nodes=1
+gcloud container clusters list --location=us-central1     # STATUS: RUNNING
+```
+
+**2. Point kubectl at it.** Use the backend's own kubeconfig, not the one
+gcloud writes — GKE credentials use a Google auth plugin the local cluster
+cannot satisfy, so gcloud's kubeconfig will not authenticate. The cluster is
+named `cloudrig-demo` (a prefix that keeps it distinct from your own clusters):
+
+```sh
+export KUBECONFIG=$(k3d kubeconfig write cloudrig-demo)   # k3d
+# or, with kind:  kind get kubeconfig --name cloudrig-demo > /tmp/kc && export KUBECONFIG=/tmp/kc
+```
+
+**3. Run a real workload:**
+
+```sh
+kubectl create deployment web --image=nginx
+kubectl wait --for=condition=available deployment/web --timeout=60s
+kubectl get pods                    # web-... Running 1/1
+```
+
+That pod is running on a real Kubernetes cluster.
+
+**4. Tear it down.** `gcloud delete` removes the real cluster:
+
+```sh
+unset KUBECONFIG
+gcloud container clusters delete demo --location=us-central1
+```
+
+`gcloud container` is the admin API cloudrig emulates (create, list, describe,
+delete, on `localhost:4599`). `kubectl` talks to the cluster itself — a
+different server, reached with the backend's kubeconfig. That split is why
+`gcloud container clusters list` works with auth off while `kubectl` needs the
+cluster's own credentials.
 
 ---
 
