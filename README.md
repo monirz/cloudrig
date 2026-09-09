@@ -198,16 +198,21 @@ Payload bytes never enter the heap: 2 GiB moves for about 1 MiB of allocation.
 
 ## Terraform
 
-**1. Apply the example stack:**
+Two ready examples live under [`examples/terraform/`](examples/terraform/):
+`services/` (Storage and Pub/Sub — fast) and `gke/` (a real Kubernetes cluster
+— slow). Every command below uses `terraform -chdir=…`, so you run them from
+the repo root without changing directories. The emulator must be running
+(`./cloudrig start`).
+
+**1. Apply the services stack:**
 
 ```sh
-cd examples/terraform
-terraform init
-terraform apply -auto-approve
+terraform -chdir=examples/terraform/services init
+terraform -chdir=examples/terraform/services apply -auto-approve
 ```
 
 ```
-Apply complete! Resources: 3 added, 0 changed, 0 destroyed.
+Apply complete! Resources: 5 added, 0 changed, 0 destroyed.
 
 Outputs:
 object_url = "http://localhost:4599/storage/v1/b/tf-bucket/o/hello.txt?alt=media"
@@ -216,9 +221,9 @@ object_url = "http://localhost:4599/storage/v1/b/tf-bucket/o/hello.txt?alt=media
 **2. Read back what it made, confirm the plan is clean, then tear it down:**
 
 ```sh
-curl "$(terraform output -raw object_url)"    # from terraform
-terraform plan                                 # no changes
-terraform destroy -auto-approve
+curl "$(terraform -chdir=examples/terraform/services output -raw object_url)"
+terraform -chdir=examples/terraform/services plan          # no changes
+terraform -chdir=examples/terraform/services destroy -auto-approve
 ```
 
 Two lines in the provider block point Terraform at the emulator:
@@ -242,6 +247,21 @@ policies are stored but not enforced.
 The provider speaks REST for every resource, so Pub/Sub needs
 `pubsub_custom_endpoint` even though the client libraries reach the same
 service over gRPC.
+
+**3. GKE — provision a real cluster with Terraform.** This one is slower and
+needs a container runtime plus k3d or kind, so it is a separate stack:
+
+```sh
+terraform -chdir=examples/terraform/gke init
+terraform -chdir=examples/terraform/gke apply -auto-approve   # real cluster, ~1 min
+terraform -chdir=examples/terraform/gke plan                  # no changes
+terraform -chdir=examples/terraform/gke destroy -auto-approve # tears the cluster down
+```
+
+`terraform apply` here spins an actual local Kubernetes cluster through the GKE
+admin API. Reach it with the backend's own kubeconfig — see
+[examples/terraform/gke/README.md](examples/terraform/gke/README.md) and the
+[GKE guide](#gke) below.
 
 ---
 
