@@ -72,6 +72,20 @@ Service Usage: state is tracked, but no dependency graph — enabling a service
 does not auto-enable the services it depends on, and quota/billing gating does
 not exist (an untouched service reads as enabled).
 
+GKE:
+
+- A cluster is a real local Kubernetes: k3s (via k3d) when available, otherwise
+  kind. Without either and a container runtime, CreateCluster fails at the
+  honest boundary rather than returning a cluster that cannot run a pod.
+- Node pools, autoscaling, upgrades, IP rotation and the other cluster-mutation
+  RPCs beyond create, get, list and delete are not modelled; a cluster comes up
+  with the backend's defaults.
+- `gcloud container clusters get-credentials` runs but the kubeconfig it writes
+  cannot authenticate: GKE credentials use a GCP auth plugin, while the local
+  cluster uses client certificates. Use the backend's own kubeconfig instead
+  (`k3d kubeconfig get cloudrig-<name>` or `kind get kubeconfig --name
+  cloudrig-<name>`), which is what actually talks to the cluster.
+
 Cloud Logging:
 
 - Entries live in memory, bounded to the most recent 10000, and are not

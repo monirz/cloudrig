@@ -31,8 +31,11 @@ import (
 
 // StartupTimeout bounds how long a container may take to listen. Cloud Run's
 // own default is four minutes; a local process that has not listened in ten
-// seconds has failed, and waiting longer only delays the log that says why.
-const StartupTimeout = 10 * time.Second
+// seconds has failed, and waiting longer only delays the log that says why. It
+// is a var, not a const, so the test suite can raise it: under `go test -race`
+// with every package running at once the machine is saturated and a
+// freshly-forked process is starved well past ten seconds.
+var StartupTimeout = 10 * time.Second
 
 // Instance is a running service.
 type Instance struct {

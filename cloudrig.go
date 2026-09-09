@@ -23,6 +23,7 @@ import (
 	"testing"
 
 	"cloud.google.com/go/cloudtasks/apiv2/cloudtaskspb"
+	"cloud.google.com/go/container/apiv1/containerpb"
 	"cloud.google.com/go/firestore/apiv1/firestorepb"
 	"cloud.google.com/go/logging/apiv2/loggingpb"
 	"cloud.google.com/go/pubsub/v2/apiv1/pubsubpb"
@@ -41,6 +42,7 @@ import (
 	"github.com/monirz/cloudrig/services/cloudscheduler"
 	"github.com/monirz/cloudrig/services/cloudtasks"
 	"github.com/monirz/cloudrig/services/firestore"
+	"github.com/monirz/cloudrig/services/gke"
 	"github.com/monirz/cloudrig/services/pubsub"
 	"github.com/monirz/cloudrig/services/secretmanager"
 	"github.com/monirz/cloudrig/services/serviceusage"
@@ -157,9 +159,10 @@ func Start(ctx context.Context, o Options) (*Emulator, error) {
 	ctsvc := cloudtasks.New(stack.kvStore, clk)
 	cssvc := cloudscheduler.New(stack.kvStore, clk, publishTo(psvc))
 	susvc := serviceusage.New(stack.kvStore)
+	gksvc := gke.New(stack.kvStore, clk)
 	lgsvc := cloudlogging.New(clk)
 	runReg := cloudrun.NewRegistry()
-	handler, closeAPIs := newHandler(clk, o, reg, runReg, stack.svc, psvc, smsvc, ctsvc, cssvc, susvc, lgsvc, newGRPC(psvc, fsvc, smsvc, ctsvc, cssvc, lgsvc), flt)
+	handler, closeAPIs := newHandler(clk, o, reg, runReg, stack.svc, psvc, smsvc, ctsvc, cssvc, susvc, gksvc, lgsvc, newGRPC(psvc, fsvc, smsvc, ctsvc, cssvc, gksvc, lgsvc), flt)
 	srv := &http.Server{
 		Handler:   handler,
 		Protocols: transport.Protocols(), // HTTP/1.1 and h2c on one port
@@ -302,10 +305,11 @@ func serveForTest(t testing.TB, o Options, stack storageStack) *Emulator {
 	ctsvc := cloudtasks.New(stack.kvStore, o.Clock)
 	cssvc := cloudscheduler.New(stack.kvStore, o.Clock, publishTo(psvc))
 	susvc := serviceusage.New(stack.kvStore)
+	gksvc := gke.New(stack.kvStore, o.Clock)
 	lgsvc := cloudlogging.New(o.Clock)
 	runReg := cloudrun.NewRegistry()
 	t.Cleanup(runReg.StopAll)
-	handler, closeAPIs := newHandler(o.Clock, o, reg, runReg, stack.svc, psvc, smsvc, ctsvc, cssvc, susvc, lgsvc, newGRPC(psvc, fsvc, smsvc, ctsvc, cssvc, lgsvc), flt)
+	handler, closeAPIs := newHandler(o.Clock, o, reg, runReg, stack.svc, psvc, smsvc, ctsvc, cssvc, susvc, gksvc, lgsvc, newGRPC(psvc, fsvc, smsvc, ctsvc, cssvc, gksvc, lgsvc), flt)
 	t.Cleanup(closeAPIs)
 
 	srv := httptest.NewUnstartedServer(handler)
@@ -385,7 +389,7 @@ func publishTo(ps *pubsub.Service) cloudscheduler.PublishFunc {
 //
 // Requests reach it through the transport's h2c dispatch, so gRPC and REST
 // share the one port.
-func newGRPC(ps *pubsub.Service, fs *firestore.Service, sm *secretmanager.Service, ct *cloudtasks.Service, cs *cloudscheduler.Service, lg *cloudlogging.Service) *grpc.Server {
+func newGRPC(ps *pubsub.Service, fs *firestore.Service, sm *secretmanager.Service, ct *cloudtasks.Service, cs *cloudscheduler.Service, gk *gke.Service, lg *cloudlogging.Service) *grpc.Server {
 	srv := grpc.NewServer()
 	pubsubpb.RegisterPublisherServer(srv, pubsub.NewPublisher(ps))
 	pubsubpb.RegisterSubscriberServer(srv, pubsub.NewSubscriber(ps))
@@ -393,6 +397,7 @@ func newGRPC(ps *pubsub.Service, fs *firestore.Service, sm *secretmanager.Servic
 	secretmanagerpb.RegisterSecretManagerServiceServer(srv, sm)
 	cloudtaskspb.RegisterCloudTasksServer(srv, ct)
 	schedulerpb.RegisterCloudSchedulerServer(srv, cs)
+	containerpb.RegisterClusterManagerServer(srv, gk)
 	loggingpb.RegisterLoggingServiceV2Server(srv, lg)
 	return srv
 }
@@ -421,7 +426,7 @@ func routeV1(fallback http.Handler, services ...matcher) http.Handler {
 
 // newHandler builds the request surface and returns what it must tear down:
 // the API objects own temporary directories, and nothing else can reach them.
-func newHandler(clk clock.Clock, o Options, reg *functions.Registry, runReg *cloudrun.Registry, gcs *storage.Service, psvc *pubsub.Service, smsvc *secretmanager.Service, ctsvc *cloudtasks.Service, cssvc *cloudscheduler.Service, susvc *serviceusage.Service, lgsvc *cloudlogging.Service, grpcSrv http.Handler, flt *faults.Set) (http.Handler, func()) {
+func newHandler(clk clock.Clock, o Options, reg *functions.Registry, runReg *cloudrun.Registry, gcs *storage.Service, psvc *pubsub.Service, smsvc *secretmanager.Service, ctsvc *cloudtasks.Service, cssvc *cloudscheduler.Service, susvc *serviceusage.Service, gksvc *gke.Service, lgsvc *cloudlogging.Service, grpcSrv http.Handler, flt *faults.Set) (http.Handler, func()) {
 	configured := o.Runner
 	if configured == "" {
 		configured = "auto"
@@ -456,7 +461,7 @@ func newHandler(clk clock.Clock, o Options, reg *functions.Registry, runReg *clo
 	mounts["/v1/"] = routeV1(api,
 		susvc,
 		pubsub.NewREST(psvc), runAPI, secretmanager.NewREST(smsvc),
-		cloudscheduler.NewREST(cssvc))
+		cloudscheduler.NewREST(cssvc), gke.NewREST(gksvc))
 
 	var gcsAPI http.Handler
 	if gcs != nil {

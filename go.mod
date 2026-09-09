@@ -9,6 +9,7 @@ toolchain go1.25.13
 
 require (
 	cloud.google.com/go/cloudtasks v1.19.0
+	cloud.google.com/go/container v1.54.0
 	cloud.google.com/go/firestore v1.25.0
 	cloud.google.com/go/logging v1.19.1
 	cloud.google.com/go/pubsub/v2 v2.7.0

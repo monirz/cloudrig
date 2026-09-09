@@ -14,6 +14,16 @@ import (
 	"github.com/monirz/cloudrig/services/cloudrun"
 )
 
+// TestMain raises the startup timeout for the whole package. These tests run
+// under `go test -race` alongside every other package, so the machine is
+// heavily oversubscribed and a just-started process can take far longer than
+// production's ten seconds to bind its port. Set once here, before any test
+// runs, so it is not a data race on the shared var.
+func TestMain(m *testing.M) {
+	cloudrun.StartupTimeout = 60 * time.Second
+	os.Exit(m.Run())
+}
+
 func registry(t *testing.T) *cloudrun.Registry {
 	t.Helper()
 

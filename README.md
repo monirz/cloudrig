@@ -45,6 +45,7 @@ Each one is a sequence you can paste, in order, against a running emulator.
 | [Secret Manager](#secret-manager) | Secrets, versions, and the latest alias |
 | [Cloud Tasks](#cloud-tasks) | Deferred HTTP work, fired on the clock |
 | [Cloud Scheduler](#cloud-scheduler) | Cron jobs, fired on the clock |
+| [GKE](#gke) | A real Kubernetes cluster, driven by gcloud |
 | [Cloud Run](#cloud-run) | Deploy a container, and call it |
 | [Run a service without Docker](#run-a-service-without-docker) | The same service as a process |
 
@@ -197,16 +198,21 @@ Payload bytes never enter the heap: 2 GiB moves for about 1 MiB of allocation.
 
 ## Terraform
 
-**1. Apply the example stack:**
+Two ready examples live under [`examples/terraform/`](examples/terraform/):
+`services/` (Storage and Pub/Sub — fast) and `gke/` (a real Kubernetes cluster
+— slow). Every command below uses `terraform -chdir=…`, so you run them from
+the repo root without changing directories. The emulator must be running
+(`./cloudrig start`).
+
+**1. Apply the services stack:**
 
 ```sh
-cd examples/terraform
-terraform init
-terraform apply -auto-approve
+terraform -chdir=examples/terraform/services init
+terraform -chdir=examples/terraform/services apply -auto-approve
 ```
 
 ```
-Apply complete! Resources: 3 added, 0 changed, 0 destroyed.
+Apply complete! Resources: 5 added, 0 changed, 0 destroyed.
 
 Outputs:
 object_url = "http://localhost:4599/storage/v1/b/tf-bucket/o/hello.txt?alt=media"
@@ -215,9 +221,9 @@ object_url = "http://localhost:4599/storage/v1/b/tf-bucket/o/hello.txt?alt=media
 **2. Read back what it made, confirm the plan is clean, then tear it down:**
 
 ```sh
-curl "$(terraform output -raw object_url)"    # from terraform
-terraform plan                                 # no changes
-terraform destroy -auto-approve
+curl "$(terraform -chdir=examples/terraform/services output -raw object_url)"
+terraform -chdir=examples/terraform/services plan          # no changes
+terraform -chdir=examples/terraform/services destroy -auto-approve
 ```
 
 Two lines in the provider block point Terraform at the emulator:
@@ -241,6 +247,21 @@ policies are stored but not enforced.
 The provider speaks REST for every resource, so Pub/Sub needs
 `pubsub_custom_endpoint` even though the client libraries reach the same
 service over gRPC.
+
+**3. GKE — provision a real cluster with Terraform.** This one is slower and
+needs a container runtime plus k3d or kind, so it is a separate stack:
+
+```sh
+terraform -chdir=examples/terraform/gke init
+terraform -chdir=examples/terraform/gke apply -auto-approve   # real cluster, ~1 min
+terraform -chdir=examples/terraform/gke plan                  # no changes
+terraform -chdir=examples/terraform/gke destroy -auto-approve # tears the cluster down
+```
+
+`terraform apply` here spins an actual local Kubernetes cluster through the GKE
+admin API. Reach it with the backend's own kubeconfig — see
+[examples/terraform/gke/README.md](examples/terraform/gke/README.md) and the
+[GKE guide](#gke) below.
 
 ---
 
@@ -835,6 +856,79 @@ Job CRUD, pause and resume, `RunJob`/`jobs run` to fire ahead of schedule, and
 Not supported: App Engine targets, OIDC/OAuth token minting, and time zones
 (cron is evaluated in UTC).
 
+## GKE
+
+`gcloud container clusters create` starts a **real** local Kubernetes cluster —
+k3s (via k3d) or kind — not a stub. gcloud manages it; `kubectl` runs real
+workloads on it.
+
+### Install a backend
+
+cloudrig runs the cluster through **k3d** (k3s packaged to run in Docker) or
+**kind**, whichever it finds on `PATH` — it prefers k3d. Both need a container
+runtime (Docker or colima) running underneath. cloudrig does not detect a
+native `k3s` binary; on Linux use k3d, which runs the same k3s inside Docker.
+
+```sh
+# macOS
+brew install k3d                                     # or: brew install kind
+
+# Linux
+curl -s https://raw.githubusercontent.com/k3d-io/k3d/main/install.sh | bash
+```
+
+Check it: `k3d version` (and `docker ps` to confirm the runtime is up).
+
+**1. Create a cluster.** This spins a real cluster, so it takes a minute:
+
+```sh
+export CLOUDSDK_CORE_PROJECT=cloudrig-local
+. ./cloudrig-env.sh
+
+gcloud container clusters create demo --location=us-central1 --num-nodes=1
+gcloud container clusters list --location=us-central1     # STATUS: RUNNING
+```
+
+**2. Point kubectl at it.** Use the backend's own kubeconfig, not the one
+gcloud writes — GKE credentials use a Google auth plugin the local cluster
+cannot satisfy, so gcloud's kubeconfig will not authenticate. The cluster is
+named `cloudrig-demo` (a prefix that keeps it distinct from your own clusters):
+
+```sh
+export KUBECONFIG=$(k3d kubeconfig write cloudrig-demo)   # k3d
+# or, with kind:  kind get kubeconfig --name cloudrig-demo > /tmp/kc && export KUBECONFIG=/tmp/kc
+```
+
+**3. Run a real workload:**
+
+```sh
+kubectl create deployment web --image=nginx
+kubectl wait --for=condition=available deployment/web --timeout=60s
+kubectl get pods                    # web-... Running 1/1
+```
+
+That pod is running on a real Kubernetes cluster.
+
+Reach it with `kubectl port-forward svc/web 8080:80` after
+`kubectl expose deployment web --port=80`. Anything that runs *on* Kubernetes
+works, because it is a real cluster — but cluster add-ons are not pre-installed:
+a default k3d/kind cluster has no ingress controller, so an Ingress resource is
+accepted but not routed until you install one (e.g. ingress-nginx). That is
+standard k3d/kind behaviour, not a cloudrig limit.
+
+**4. Tear it down.** `gcloud delete` removes the real cluster:
+
+```sh
+unset KUBECONFIG
+gcloud container clusters delete demo --location=us-central1
+```
+
+`gcloud container` is the admin API cloudrig emulates (create, list, describe,
+delete, on `localhost:4599`). `kubectl` talks to the cluster itself — a
+different server, reached with the backend's kubeconfig. That split is why
+`gcloud container clusters list` works with auth off while `kubectl` needs the
+cluster's own credentials.
+
 ---
 
 ## Cloud Run
@@ -1011,6 +1105,11 @@ the injected clock so a test drives it with `Advance`.
 
 **Cloud Scheduler** — cron jobs firing HTTP or Pub/Sub targets, recurring on the
 injected clock.
+
+**GKE** — `gcloud container clusters create` starts a *real* local Kubernetes,
+not a stub: gcloud polls the operation to RUNNING, and `kubectl` against the
+cluster schedules real pods. Prefers k3s (via k3d), falls back to kind; either
+needs a container runtime.
 
 **Service Usage** — `gcloud services enable/disable/list`, tracking real per-
 project state so a Terraform config that toggles an API round-trips.
