@@ -584,11 +584,21 @@ rather than sit through.
 
 ## Time travel
 
-Time in cloudrig is injected, not read from the wall clock. Freeze it, then
-travel it forward on command — scheduled jobs, Cloud Tasks, ack deadlines and
-TTLs all fire when the clock reaches them, so a test advances seven days in
-milliseconds instead of waiting seven days. Deterministic, and no flaky
-`time.Sleep` in sight.
+Test time-dependent GCP workloads without waiting. Fast-forward minutes, days or
+months and let scheduled jobs, task retries, message deadlines, TTLs and other
+time-dependent behaviour fire — without waiting for real time to pass.
+
+```sh
+# Start cloudrig with a virtual clock
+cloudrig start --clock virtual
+
+# Travel 7 days into the future
+cloudrig clock advance 7d
+```
+
+Instead of waiting 7 days, cloudrig immediately processes everything that became
+due during those 7 days. Time is injected, not read from the wall clock, so this
+is deterministic — no flaky `time.Sleep` in sight.
 
 **In a Go test** (`MustStart` already runs on a virtual clock):
 
