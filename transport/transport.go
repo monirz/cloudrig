@@ -48,6 +48,12 @@ type Config struct {
 
 	// Services hosts deployed Cloud Run services. Nil means none are served.
 	Services ServiceHost
+
+	// Drain waits for the asynchronous work a clock jump sets off (task and
+	// scheduler deliveries, triggered function invocations). Called after a
+	// virtual-clock advance/goto so the response follows the side effects. Nil
+	// waits for nothing.
+	Drain func()
 }
 
 // ServiceHost resolves a request to a running Cloud Run service. It is the
@@ -92,6 +98,7 @@ type Handler struct {
 	faults   *faults.Set
 	services ServiceHost
 	cc       clockController // non-nil only when the clock is virtual
+	drain    func()
 }
 
 // New builds the front door. Routes register here so the endpoint set is
@@ -120,6 +127,7 @@ func New(cfg Config) *Handler {
 		grpc:     cfg.GRPC,
 		faults:   cfg.Faults,
 		services: cfg.Services,
+		drain:    cfg.Drain,
 	}
 	h.rest.Handle(http.MethodGet, "/_emu/health", h.health)
 	if cfg.Reset != nil {

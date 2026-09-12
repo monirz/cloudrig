@@ -17,6 +17,7 @@ import (
 type clockController interface {
 	Now() time.Time
 	Advance(d time.Duration)
+	AdvanceTo(target time.Time) (reachable bool)
 	Pending() int
 }
 
@@ -64,7 +65,18 @@ func (h *Handler) clockAdvance(w http.ResponseWriter, r *http.Request, _ Params)
 		return gerr.New(gerr.InvalidArgument, "duration cannot be negative; the clock only moves forward")
 	}
 	h.cc.Advance(d)
+	h.drainDue()
 	return h.clockStatus(w, r, nil)
+}
+
+// drainDue waits for the asynchronous work a clock jump set off — HTTP task and
+// scheduler deliveries, and the function invocations a scheduler-to-Pub/Sub
+// target triggers — so a caller that advances the clock and then checks those
+// side effects sees them, as the "processed immediately" promise requires.
+func (h *Handler) drainDue() {
+	if h.drain != nil {
+		h.drain()
+	}
 }
 
 // parseTravel parses a Go duration extended with d (days) and w (weeks), so a
@@ -106,13 +118,15 @@ func (h *Handler) clockGoto(w http.ResponseWriter, r *http.Request, _ Params) er
 	if err != nil {
 		return gerr.Newf(gerr.InvalidArgument, "time %q: want RFC3339, e.g. 2026-09-12T15:00:00Z", req.Time)
 	}
-	delta := t.Sub(h.cc.Now())
-	if delta < 0 {
+	// AdvanceTo checks the target against now and applies it under one lock, so
+	// this cannot succeed on a stale check: if a concurrent jump has already
+	// moved past t, AdvanceTo reports it unreachable and the request is refused.
+	if !h.cc.AdvanceTo(t) {
 		return gerr.Newf(gerr.FailedPrecondition,
 			"cannot travel to %s: it is before now (%s) and time only moves forward",
 			t.UTC().Format(time.RFC3339), h.cc.Now().UTC().Format(time.RFC3339))
 	}
-	h.cc.Advance(delta)
+	h.drainDue()
 	return h.clockStatus(w, r, nil)
 }
 

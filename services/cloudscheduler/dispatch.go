@@ -63,6 +63,7 @@ func (s *Service) deliver(job *schedulerpb.Job) {
 	case *schedulerpb.Job_PubsubTarget:
 		s.deliverPubsub(t.PubsubTarget)
 	case *schedulerpb.Job_HttpTarget:
+		s.started.Add(1)
 		s.inFlight.Add(1)
 		go func() {
 			defer s.inFlight.Done()

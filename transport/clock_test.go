@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -115,5 +116,27 @@ func TestClockAdvanceAcceptsDaysAndWeeks(t *testing.T) {
 	// 7 days + 1 week = 14 days.
 	if got, want := getClock(t, srv.URL).Now, epoch.Add(14*24*time.Hour).Format(time.RFC3339Nano); got != want {
 		t.Errorf("now = %s, want %s", got, want)
+	}
+}
+
+// TestAdvanceDrainsAsyncWork holds that advancing and travelling both run the
+// Drain hook, so the response follows the asynchronous work a clock jump sets
+// off (task/scheduler HTTP deliveries and the functions they trigger) rather
+// than racing it.
+func TestAdvanceDrainsAsyncWork(t *testing.T) {
+	t.Parallel()
+
+	var drained int
+	var mu sync.Mutex
+	drain := func() { mu.Lock(); drained++; mu.Unlock() }
+	srv := serve(t, transport.Config{Clock: clock.NewFake(epoch), Drain: drain})
+
+	postJSON(t, srv.URL+"/_emu/clock/advance", `{"duration":"1h"}`).Body.Close()
+	postJSON(t, srv.URL+"/_emu/clock/goto", `{"time":"2027-01-01T00:00:00Z"}`).Body.Close()
+
+	mu.Lock()
+	defer mu.Unlock()
+	if drained != 2 {
+		t.Errorf("drain called %d times, want 2 (advance + goto)", drained)
 	}
 }

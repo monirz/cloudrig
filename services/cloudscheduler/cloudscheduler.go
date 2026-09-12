@@ -12,6 +12,7 @@ import (
 	"context"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"cloud.google.com/go/scheduler/apiv1/schedulerpb"
 	"github.com/monirz/cloudrig/core/clock"
@@ -50,6 +51,7 @@ type Service struct {
 	mu       sync.Mutex
 	timers   map[string]clock.Timer // job name -> its next fire
 	inFlight sync.WaitGroup
+	started  atomic.Uint64 // HTTP deliveries ever launched, for drain quiescence
 }
 
 // httpDoer sends an HTTP-target job's request; an interface so a test can
@@ -79,6 +81,10 @@ func New(kv store.Store, clk clock.Clock, publish PublishFunc) *Service {
 // job's time uses this before asserting, since an HTTP target dispatches on a
 // goroutine.
 func (s *Service) Sync() { s.inFlight.Wait() }
+
+// Started counts HTTP deliveries ever launched, so a drain can tell whether a
+// pass triggered new work and needs another round.
+func (s *Service) Started() uint64 { return s.started.Load() }
 
 func jobKey(name string) string { return "cs/j/" + name }
 

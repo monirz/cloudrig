@@ -58,9 +58,12 @@ func clockFlags(sub string, args []string, env lookupEnv, stderr *os.File) (clie
 }
 
 func clockShow(args []string, env lookupEnv, out, errOut *os.File) error {
-	c, _, err := clockFlags("status", args, env, errOut)
+	c, rest, err := clockFlags("status", args, env, errOut)
 	if err != nil {
 		return err
+	}
+	if len(rest) > 0 {
+		return fmt.Errorf("cloudrig clock takes no arguments; got %q", rest[0])
 	}
 	s, err := c.clockStatus(context.Background())
 	if err != nil {
@@ -71,15 +74,18 @@ func clockShow(args []string, env lookupEnv, out, errOut *os.File) error {
 }
 
 func clockFreeze(args []string, env lookupEnv, out, errOut *os.File) error {
-	c, _, err := clockFlags("freeze", args, env, errOut)
+	c, rest, err := clockFlags("freeze", args, env, errOut)
 	if err != nil {
 		return err
+	}
+	if len(rest) > 0 {
+		return fmt.Errorf("cloudrig clock freeze takes no arguments; got %q", rest[0])
 	}
 	s, err := c.clockStatus(context.Background())
 	if err != nil {
 		return err
 	}
-	if s.Mode != "manual" {
+	if s.Mode != "virtual" {
 		return errors.New("the clock is real; start the emulator with --clock virtual to travel time")
 	}
 	fmt.Fprintf(out, "clock frozen at %s (%d timers pending)\n", s.Now, s.Pending)
