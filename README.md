@@ -15,11 +15,10 @@ things real GCP makes hard: **time, failure, and state.**
 
 ---
 
-## Run a real Cloud Function
+## Why CloudRig?
 
-Deploy a function, trigger it by writing a file to a bucket, and read what it
-printed. It is compiled and run as a real process, so the log line is its actual
-stdout, not a canned response:
+**⚡ Real Cloud Functions.** Run your actual functions locally. Cloud Storage and
+Pub/Sub events trigger them and run real application code:
 
 ```bash
 ./cloudrig start &     # serves everything on :4599
@@ -34,8 +33,36 @@ curl -X POST "localhost:4599/upload/storage/v1/b/uploads/o?uploadType=media&name
 # google.storage.object.finalize: gs://uploads/report.csv (5 bytes)
 ```
 
-No Docker, no Pub/Sub daemon, no polling. One process wired the storage write
-to the function. → [Full walkthrough](docs/services.md#upload-a-file-run-a-function)
+No Docker, no daemon, no polling: one process wired the storage write to the
+function.
+
+**🔄 Connected, event-driven services.** Services are wired together like a real
+GCP environment. Upload a file to a bucket and the function deployed against it
+fires, in the same local environment. Chain Storage → Functions → Pub/Sub →
+Tasks → Functions and test the whole workflow locally.
+
+**☸️ GKE workloads.** Run Kubernetes workloads (k3d/kind) alongside your local
+GCP services and test how they interact with Google Cloud APIs.
+
+**🏗️ Terraform / OpenTofu.** Provision your local environment using the same
+infrastructure-as-code workflow you use in production.
+
+**⏩ Time travel.** Fast-forward minutes, days or months without waiting for real
+time. Test scheduled jobs, task retries, deadlines, TTLs and other
+time-dependent behaviour deterministically.
+
+**💥 Fault injection.** Break your infrastructure on purpose. Inject errors,
+latency, timeouts and transient failures, over REST and gRPC, to test retries,
+resilience and failure handling.
+
+**🌿 Fork state.** Create an environment once, then fork it into isolated states
+for different tests, scenarios or experiments.
+
+**🧪 In-process testing.** Start an isolated CloudRig environment directly inside
+your Go tests, with no separate emulator process or shared infrastructure.
+
+**🔌 Real GCP clients.** Use the Google Cloud SDKs, gcloud, Terraform and the
+familiar GCP APIs against your local environment.
 
 ---
 
@@ -60,66 +87,6 @@ export CLOUDRIG_ENDPOINT=http://localhost:4599
 ```
 
 Prebuilt binaries and a Homebrew tap are planned. → [Getting started](docs/services.md)
-
----
-
-## Why CloudRig?
-
-**Real Cloud Functions.** Your function runs as an actual process and is
-triggered by the services it depends on, not mocked.
-
-**Connected, event-driven services.** Services are wired together like real GCP,
-so whole workflows run locally instead of you stitching separate emulators
-yourself:
-
-```text
-Cloud Storage ──(object created)──► Function ──► Firestore
-                                        └──► Pub/Sub ──► Function ──► Cloud Tasks ──► Function
-```
-
-**Real GCP clients.** `gcloud`, Terraform/OpenTofu and the Google client
-libraries work unchanged, over gRPC and REST on a single port.
-
-**GKE + Terraform.** Provision your local environment with infrastructure-as-code,
-and run real Kubernetes workloads (k3d/kind) alongside your GCP services.
-
----
-
-## Built for testing
-
-CloudRig gives you control over what is slow or impossible to reproduce against
-real infrastructure.
-
-**⏩ [Time travel](docs/time-travel.md)** fast-forwards minutes, days or months
-without waiting. Scheduled jobs, retries, backoff, ack deadlines and TTLs all
-fire instantly and deterministically.
-
-```sh
-cloudrig start --clock virtual
-cloudrig clock advance 7d      # everything due in those 7 days runs now
-```
-
-**💥 [Fault injection](docs/fault-injection.md)** breaks your local
-infrastructure on purpose to test retries, backoff and circuit breakers. Errors,
-latency and timeouts, over REST *and* gRPC.
-
-```sh
-cloudrig fault pubsub --error 503
-cloudrig fault tasks  --failure-rate 20%
-```
-
-**🌿 [Fork state](docs/fork-state.md)** seeds an environment once, then branches
-it into isolated scenarios per test, cheaply.
-
-**🧪 [In-process testing](docs/in-process-testing.md)** runs CloudRig directly
-inside a Go test, one isolated instance per test:
-
-```go
-emu := cloudrig.MustStart(t)
-```
-
-The combination is the point: fast-forward 30 days, make Pub/Sub fail half the
-time, and see whether your retries actually hold, deterministically.
 
 ---
 
