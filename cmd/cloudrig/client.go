@@ -97,9 +97,9 @@ func (c client) clockAdvance(ctx context.Context, dur string) (clockState, error
 	return s, err
 }
 
-func (c client) clockSet(ctx context.Context, t string) (clockState, error) {
+func (c client) clockGoto(ctx context.Context, t string) (clockState, error) {
 	var s clockState
-	err := c.do(ctx, http.MethodPost, "/_emu/clock/set", map[string]string{"time": t}, &s)
+	err := c.do(ctx, http.MethodPost, "/_emu/clock/goto", map[string]string{"time": t}, &s)
 	return s, err
 }
 

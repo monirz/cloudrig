@@ -64,11 +64,19 @@ func run(args []string, env lookupEnv, stdout, stderr *os.File) error {
 		DataDir:  cfg.dataDir,
 		EventLog: stdout,
 	}
-	if cfg.clock == "manual" {
-		// A fake clock seeded at the real now: timestamps start realistic, then
-		// hold still until a client advances them. This is what makes cloudrig
-		// clock advance/set control scheduled tasks, TTLs and ack deadlines.
+	if cfg.clock == "virtual" {
+		// A fake clock that holds still until a client travels it forward. That
+		// is what lets cloudrig clock advance/goto drive scheduled tasks, TTLs
+		// and ack deadlines. --clock-start seeds it for a reproducible run;
+		// otherwise it starts at the real now so timestamps look realistic.
 		opts.Clock = clock.NewFakeNow()
+		if cfg.clockStart != "" {
+			start, err := cfg.startTime() // already validated
+			if err != nil {
+				return err
+			}
+			opts.Clock = clock.NewFake(start)
+		}
 	}
 	emu, err := cloudrig.Start(ctx, opts)
 	if err != nil {

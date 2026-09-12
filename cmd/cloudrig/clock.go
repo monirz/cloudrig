@@ -14,13 +14,13 @@ const clockUsage = `cloudrig clock - control a manual-mode emulator's time
 
 usage:
   cloudrig clock                     show the clock (mode, now, pending timers)
-  cloudrig clock freeze              confirm time is frozen (manual mode)
-  cloudrig clock advance <duration>  move time forward, e.g. 30m, 2h, 90s
-  cloudrig clock set <RFC3339>       set time, e.g. 2026-09-12T15:00:00Z
+  cloudrig clock freeze              confirm time is frozen (virtual mode)
+  cloudrig clock advance <duration>  travel forward, e.g. 30m, 2h, 90s
+  cloudrig clock goto <RFC3339>      travel to a time, e.g. 2026-09-12T15:00:00Z
 
-Time control needs a manual-mode server: cloudrig start --clock manual.
-Advancing fires everything due in the jump — scheduled jobs, tasks, ack
-deadlines and TTLs — so a test drives them without waiting.
+Time travel needs a virtual-clock server: cloudrig start --clock virtual.
+Time moves only forward. Advancing fires everything due in the jump — scheduled
+jobs, tasks, ack deadlines and TTLs — so a test drives them without waiting.
 
   --endpoint URL   emulator to talk to (default http://localhost:4599,
                    env CLOUDRIG_ENDPOINT)`
@@ -39,8 +39,8 @@ func runClockCommand(args []string, env lookupEnv, stdout, stderr *os.File) erro
 		return clockFreeze(args[1:], env, stdout, stderr)
 	case "advance":
 		return clockAdvance(args[1:], env, stdout, stderr)
-	case "set":
-		return clockSet(args[1:], env, stdout, stderr)
+	case "goto":
+		return clockGoto(args[1:], env, stdout, stderr)
 	default:
 		return fmt.Errorf("unknown clock subcommand %q\n%s", args[0], clockUsage)
 	}
@@ -80,7 +80,7 @@ func clockFreeze(args []string, env lookupEnv, out, errOut *os.File) error {
 		return err
 	}
 	if s.Mode != "manual" {
-		return errors.New("the clock is real; start the emulator with --clock manual to control time")
+		return errors.New("the clock is real; start the emulator with --clock virtual to travel time")
 	}
 	fmt.Fprintf(out, "clock frozen at %s (%d timers pending)\n", s.Now, s.Pending)
 	return nil
@@ -102,15 +102,15 @@ func clockAdvance(args []string, env lookupEnv, out, errOut *os.File) error {
 	return nil
 }
 
-func clockSet(args []string, env lookupEnv, out, errOut *os.File) error {
-	c, rest, err := clockFlags("set", args, env, errOut)
+func clockGoto(args []string, env lookupEnv, out, errOut *os.File) error {
+	c, rest, err := clockFlags("goto", args, env, errOut)
 	if err != nil {
 		return err
 	}
 	if len(rest) != 1 {
-		return errors.New("usage: cloudrig clock set <RFC3339>, e.g. 2026-09-12T15:00:00Z")
+		return errors.New("usage: cloudrig clock goto <RFC3339>, e.g. 2026-09-12T15:00:00Z")
 	}
-	s, err := c.clockSet(context.Background(), rest[0])
+	s, err := c.clockGoto(context.Background(), rest[0])
 	if err != nil {
 		return err
 	}

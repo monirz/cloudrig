@@ -46,8 +46,8 @@ func TestClockAdvanceFiresTimers(t *testing.T) {
 	fired := make(chan struct{}, 1)
 	fake.AfterFunc(time.Hour, func() { fired <- struct{}{} })
 
-	if s := getClock(t, srv.URL); s.Mode != "manual" || s.Pending != 1 {
-		t.Fatalf("status = %+v, want manual with 1 pending", s)
+	if s := getClock(t, srv.URL); s.Mode != "virtual" || s.Pending != 1 {
+		t.Fatalf("status = %+v, want virtual with 1 pending", s)
 	}
 
 	// Not yet due after 30m.
@@ -72,13 +72,13 @@ func TestClockAdvanceFiresTimers(t *testing.T) {
 	}
 }
 
-// TestClockSetRejectsThePast holds that time does not move backward: a fired
+// TestClockGotoRejectsThePast holds that time does not move backward: a fired
 // timer cannot un-fire, so a past target is refused.
-func TestClockSetRejectsThePast(t *testing.T) {
+func TestClockGotoRejectsThePast(t *testing.T) {
 	t.Parallel()
 
 	srv := serve(t, transport.Config{Clock: clock.NewFake(epoch)})
-	resp := postJSON(t, srv.URL+"/_emu/clock/set", `{"time":"2020-01-01T00:00:00Z"}`)
+	resp := postJSON(t, srv.URL+"/_emu/clock/goto", `{"time":"2020-01-01T00:00:00Z"}`)
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Errorf("status = %d, want 400 for a past time", resp.StatusCode)
@@ -98,5 +98,22 @@ func TestRealClockRejectsControl(t *testing.T) {
 	defer resp.Body.Close()
 	if resp.StatusCode == http.StatusOK {
 		t.Error("a real clock accepted advance; it should refuse")
+	}
+}
+
+// TestClockAdvanceAcceptsDaysAndWeeks holds that the day and week units the
+// time-travel pitch uses ("advance 7d") actually parse, since Go's duration
+// grammar stops at hours.
+func TestClockAdvanceAcceptsDaysAndWeeks(t *testing.T) {
+	t.Parallel()
+
+	srv := serve(t, transport.Config{Clock: clock.NewFake(epoch)})
+
+	postJSON(t, srv.URL+"/_emu/clock/advance", `{"duration":"7d"}`).Body.Close()
+	postJSON(t, srv.URL+"/_emu/clock/advance", `{"duration":"1w"}`).Body.Close()
+
+	// 7 days + 1 week = 14 days.
+	if got, want := getClock(t, srv.URL).Now, epoch.Add(14*24*time.Hour).Format(time.RFC3339Nano); got != want {
+		t.Errorf("now = %s, want %s", got, want)
 	}
 }

@@ -79,11 +79,28 @@ func TestParseConfig(t *testing.T) {
 			wantErr: "out of range",
 		},
 		{
-			name:       "manual clock via flag",
-			args:       []string{"start", "--clock", "manual"},
+			name:       "virtual clock via flag",
+			args:       []string{"start", "--clock", "virtual"},
 			wantPort:   4599,
 			wantRunner: "auto",
-			wantClock:  "manual",
+			wantClock:  "virtual",
+		},
+		{
+			name:       "virtual clock with a start seed",
+			args:       []string{"start", "--clock", "virtual", "--clock-start", "2026-01-01T00:00:00Z"},
+			wantPort:   4599,
+			wantRunner: "auto",
+			wantClock:  "virtual",
+		},
+		{
+			name:    "clock-start without virtual is rejected",
+			args:    []string{"start", "--clock-start", "2026-01-01T00:00:00Z"},
+			wantErr: "--clock-start only applies with --clock virtual",
+		},
+		{
+			name:    "a bad clock-start is rejected",
+			args:    []string{"start", "--clock", "virtual", "--clock-start", "not-a-time"},
+			wantErr: "want RFC3339",
 		},
 		{
 			name:       "clock defaults to real",

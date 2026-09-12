@@ -91,7 +91,7 @@ type Handler struct {
 	grpc     http.Handler
 	faults   *faults.Set
 	services ServiceHost
-	cc       clockController // non-nil only when the clock is manual
+	cc       clockController // non-nil only when the clock is virtual
 }
 
 // New builds the front door. Routes register here so the endpoint set is
@@ -126,15 +126,15 @@ func New(cfg Config) *Handler {
 		h.reset = cfg.Reset
 		h.rest.Handle(http.MethodPost, "/_emu/reset", h.handleReset)
 	}
-	// The clock endpoints are always routed; advance and set answer with a
+	// The clock endpoints are always routed; advance and goto answer with a
 	// clear FailedPrecondition on a real-clock server rather than a bare 404, so
-	// the caller learns to start with --clock manual.
+	// the caller learns to start with --clock virtual.
 	if cc, ok := cfg.Clock.(clockController); ok {
 		h.cc = cc
 	}
 	h.rest.Handle(http.MethodGet, "/_emu/clock", h.clockStatus)
 	h.rest.Handle(http.MethodPost, "/_emu/clock/advance", h.clockAdvance)
-	h.rest.Handle(http.MethodPost, "/_emu/clock/set", h.clockSet)
+	h.rest.Handle(http.MethodPost, "/_emu/clock/goto", h.clockGoto)
 	return h
 }
 
