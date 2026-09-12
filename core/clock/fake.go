@@ -19,6 +19,12 @@ type FakeClock struct {
 // NewFake returns a FakeClock reading now.
 func NewFake(now time.Time) *FakeClock { return &FakeClock{now: now} }
 
+// NewFakeNow returns a FakeClock seeded at the real wall-clock time. A
+// manual-mode server uses it so timestamps start realistic, then hold still
+// until a client advances the clock. Reading time.Now here is the point: this
+// is the one hand-off from the wall clock into a clock the emulator controls.
+func NewFakeNow() *FakeClock { return &FakeClock{now: time.Now().UTC()} }
+
 func (c *FakeClock) Now() time.Time {
 	c.mu.Lock()
 	defer c.mu.Unlock()

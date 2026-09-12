@@ -77,6 +77,32 @@ func (c client) delete(ctx context.Context, scope scope, name string) error {
 	return c.do(ctx, http.MethodDelete, functions.AdminPath+"/"+name+scope.query(), nil, nil)
 }
 
+// clockState mirrors transport.ClockStatus, kept local so the CLI does not
+// depend on the transport package.
+type clockState struct {
+	Mode    string `json:"mode"`
+	Now     string `json:"now"`
+	Pending int    `json:"pending"`
+}
+
+func (c client) clockStatus(ctx context.Context) (clockState, error) {
+	var s clockState
+	err := c.do(ctx, http.MethodGet, "/_emu/clock", nil, &s)
+	return s, err
+}
+
+func (c client) clockAdvance(ctx context.Context, dur string) (clockState, error) {
+	var s clockState
+	err := c.do(ctx, http.MethodPost, "/_emu/clock/advance", map[string]string{"duration": dur}, &s)
+	return s, err
+}
+
+func (c client) clockSet(ctx context.Context, t string) (clockState, error) {
+	var s clockState
+	err := c.do(ctx, http.MethodPost, "/_emu/clock/set", map[string]string{"time": t}, &s)
+	return s, err
+}
+
 // logs streams a function's output to out, following until the context ends.
 func (c client) logs(ctx context.Context, sc scope, name string, follow bool, out io.Writer) error {
 	path := functions.AdminPath + "/" + name + "/logs"

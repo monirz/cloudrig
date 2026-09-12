@@ -40,6 +40,7 @@ Each one is a sequence you can paste, in order, against a running emulator.
 | [Watch an unacknowledged message come back](#watch-an-unacknowledged-message-come-back) | Ack deadlines and redelivery |
 | [Use in a Go test](#use-in-a-go-test) | In-process, one isolated emulator per test |
 | [Inject failures](#inject-failures) | Make a request fail, to test your error handling |
+| [Control time](#control-time) | Freeze and advance the clock, from a test or the CLI |
 | [Fork state](#fork-state) | Branch an emulator, cheaply, mid-test |
 | [Firestore](#firestore) | Documents and queries, over gRPC |
 | [Secret Manager](#secret-manager) | Secrets, versions, and the latest alias |
@@ -578,6 +579,39 @@ match-everything rule cannot lock a test out of its own controls.
 `Latency` runs on the emulator's clock: under a `FakeClock` the request waits
 until the test advances time, so a slow backend is something to assert on
 rather than sit through.
+
+---
+
+## Control time
+
+Time in cloudrig is injected, not read from the wall clock. Freeze it, then move
+it on command — scheduled jobs, Cloud Tasks, ack deadlines and TTLs all fire
+when the clock reaches them, so a test drives them in milliseconds instead of
+waiting minutes.
+
+**In a Go test** (`MustStart` already runs on a controllable clock):
+
+```go
+emu := cloudrig.MustStart(t)
+// ... create a Cloud Scheduler job due in an hour ...
+emu.FakeClock(t).Advance(time.Hour) // the job fires now, deterministically
+```
+
+**From the CLI**, against a running server started in manual mode:
+
+```sh
+./cloudrig start --clock manual        # time freezes at startup
+
+# in another shell
+cloudrig clock                         # clock: manual  now: …  pending: 3
+cloudrig clock advance 30m             # fire everything due in the next 30m
+cloudrig clock set 2026-12-25T00:00:00Z
+```
+
+Time never runs backward — a fired timer cannot un-fire, so a past `set` is
+refused. Without `--clock manual` the server tracks the real clock and `cloudrig
+clock advance` says so rather than pretending. `pending` is how many timers are
+still waiting for the clock to reach them.
 
 ---
 

@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"slices"
 	"strconv"
 
 	"github.com/monirz/cloudrig/functions"
@@ -15,6 +16,7 @@ type config struct {
 	port    int
 	runner  string
 	dataDir string
+	clock   string
 }
 
 const (
@@ -25,9 +27,14 @@ const (
 // runnerModes are the accepted --runner values; all resolve to "none" today.
 var runnerModes = []string{"auto", "subprocess", "none"}
 
+// clockModes are the accepted --clock values. "real" tracks wall time; "manual"
+// freezes time and only moves it when a client calls cloudrig clock advance/set.
+var clockModes = []string{"real", "manual"}
+
 const (
 	defaultPort   = 4599
 	defaultRunner = "auto"
+	defaultClock  = "real"
 )
 
 // lookupEnv is os.LookupEnv's shape, injected so precedence is testable
@@ -81,6 +88,13 @@ func parseConfig(args []string, env lookupEnv, out io.Writer) (config, error) {
 	fs.StringVar(&dataDir, "data-dir", dataDir,
 		"persist Cloud Storage under this directory (env CLOUDRIG_DATA_DIR)")
 
+	clk := defaultClock
+	if v, ok := env("CLOUDRIG_CLOCK"); ok {
+		clk = v
+	}
+	fs.StringVar(&clk, "clock", clk,
+		fmt.Sprintf("clock: %v (env CLOUDRIG_CLOCK); manual enables cloudrig clock", clockModes))
+
 	if err := fs.Parse(args[1:]); err != nil {
 		return config{}, err
 	}
@@ -88,7 +102,7 @@ func parseConfig(args []string, env lookupEnv, out io.Writer) (config, error) {
 		return config{}, fmt.Errorf("unexpected argument %q", rest[0])
 	}
 
-	c := config{port: port, runner: runner, dataDir: dataDir}
+	c := config{port: port, runner: runner, dataDir: dataDir, clock: clk}
 	return c, c.validate()
 }
 
@@ -105,10 +119,16 @@ usage:
   cloudrig %s delete <name>
   cloudrig %s run <dir> [--name N] [--runtime R] [--entry-point F] [--port N]
 
+  cloudrig clock                     show the clock (needs --clock manual)
+  cloudrig clock advance <duration>  move time forward, e.g. 30m
+  cloudrig clock set <RFC3339>       set time, e.g. 2026-09-12T15:00:00Z
+
 start flags:
   --port N          port to listen on (default %d, env CLOUDRIG_PORT)
   --runner MODE     function runner: %v (default %q, env CLOUDRIG_RUNNER)
   --data-dir DIR    persist Cloud Storage here (default: in memory)
+  --clock MODE      real or manual (default real, env CLOUDRIG_CLOCK);
+                    manual freezes time so cloudrig clock can drive it
 
 fn flags:
   --source DIR      source directory
@@ -142,12 +162,13 @@ func (c config) validate() error {
 	if c.port < 0 || c.port > 65535 {
 		return fmt.Errorf("--port %d is out of range", c.port)
 	}
-	for _, m := range runnerModes {
-		if c.runner == m {
-			return nil
-		}
+	if !slices.Contains(runnerModes, c.runner) {
+		return fmt.Errorf("--runner %q is not one of %v", c.runner, runnerModes)
 	}
-	return fmt.Errorf("--runner %q is not one of %v", c.runner, runnerModes)
+	if !slices.Contains(clockModes, c.clock) {
+		return fmt.Errorf("--clock %q is not one of %v", c.clock, clockModes)
+	}
+	return nil
 }
 
 func (c config) addr() string { return fmt.Sprintf(":%d", c.port) }

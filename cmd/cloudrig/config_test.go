@@ -25,6 +25,7 @@ func TestParseConfig(t *testing.T) {
 		env        map[string]string
 		wantPort   int
 		wantRunner string
+		wantClock  string
 		wantErr    string
 	}{
 		{
@@ -76,6 +77,25 @@ func TestParseConfig(t *testing.T) {
 			name:    "an out-of-range port is rejected",
 			args:    []string{"start", "--port", "70000"},
 			wantErr: "out of range",
+		},
+		{
+			name:       "manual clock via flag",
+			args:       []string{"start", "--clock", "manual"},
+			wantPort:   4599,
+			wantRunner: "auto",
+			wantClock:  "manual",
+		},
+		{
+			name:       "clock defaults to real",
+			args:       []string{"start"},
+			wantPort:   4599,
+			wantRunner: "auto",
+			wantClock:  "real",
+		},
+		{
+			name:    "an unknown clock is rejected",
+			args:    []string{"start", "--clock", "frozen"},
+			wantErr: `--clock "frozen" is not one of`,
 		},
 		{
 			name:    "an unknown runner is rejected",
@@ -132,6 +152,13 @@ func TestParseConfig(t *testing.T) {
 			}
 			if got.runner != tc.wantRunner {
 				t.Errorf("runner = %q, want %q", got.runner, tc.wantRunner)
+			}
+			wantClock := tc.wantClock
+			if wantClock == "" {
+				wantClock = "real"
+			}
+			if got.clock != wantClock {
+				t.Errorf("clock = %q, want %q", got.clock, wantClock)
 			}
 		})
 	}
