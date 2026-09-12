@@ -103,6 +103,34 @@ func (c client) clockGoto(ctx context.Context, t string) (clockState, error) {
 	return s, err
 }
 
+// faultRule mirrors transport.FaultRule, kept local so the CLI does not depend
+// on the transport package.
+type faultRule struct {
+	Method  string  `json:"method,omitempty"`
+	Path    string  `json:"path"`
+	Status  int     `json:"status,omitempty"`
+	Message string  `json:"message,omitempty"`
+	Latency string  `json:"latency,omitempty"`
+	Count   int     `json:"count,omitempty"`
+	Rate    float64 `json:"rate,omitempty"`
+}
+
+func (c client) faultAdd(ctx context.Context, r faultRule) error {
+	return c.do(ctx, http.MethodPost, "/_emu/faults", r, nil)
+}
+
+func (c client) faultList(ctx context.Context) ([]faultRule, error) {
+	var body struct {
+		Rules []faultRule `json:"rules"`
+	}
+	err := c.do(ctx, http.MethodGet, "/_emu/faults", nil, &body)
+	return body.Rules, err
+}
+
+func (c client) faultClear(ctx context.Context) error {
+	return c.do(ctx, http.MethodDelete, "/_emu/faults", nil, nil)
+}
+
 // logs streams a function's output to out, following until the context ends.
 func (c client) logs(ctx context.Context, sc scope, name string, follow bool, out io.Writer) error {
 	path := functions.AdminPath + "/" + name + "/logs"

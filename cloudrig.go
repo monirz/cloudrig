@@ -166,7 +166,7 @@ func Start(ctx context.Context, o Options) (*Emulator, error) {
 	// returns only once scheduled deliveries and the functions they trigger
 	// have run.
 	drain := func() { drainAsync(cssvc, bus, ctsvc) }
-	handler, closeAPIs := newHandler(clk, o, reg, runReg, stack.svc, psvc, smsvc, ctsvc, cssvc, susvc, gksvc, lgsvc, newGRPC(psvc, fsvc, smsvc, ctsvc, cssvc, gksvc, lgsvc), flt, drain)
+	handler, closeAPIs := newHandler(clk, o, reg, runReg, stack.svc, psvc, smsvc, ctsvc, cssvc, susvc, gksvc, lgsvc, newGRPC(clk, flt, psvc, fsvc, smsvc, ctsvc, cssvc, gksvc, lgsvc), flt, drain)
 	srv := &http.Server{
 		Handler:   handler,
 		Protocols: transport.Protocols(), // HTTP/1.1 and h2c on one port
@@ -314,7 +314,7 @@ func serveForTest(t testing.TB, o Options, stack storageStack) *Emulator {
 	runReg := cloudrun.NewRegistry()
 	t.Cleanup(runReg.StopAll)
 	drain := func() { drainAsync(cssvc, bus, ctsvc) }
-	handler, closeAPIs := newHandler(o.Clock, o, reg, runReg, stack.svc, psvc, smsvc, ctsvc, cssvc, susvc, gksvc, lgsvc, newGRPC(psvc, fsvc, smsvc, ctsvc, cssvc, gksvc, lgsvc), flt, drain)
+	handler, closeAPIs := newHandler(o.Clock, o, reg, runReg, stack.svc, psvc, smsvc, ctsvc, cssvc, susvc, gksvc, lgsvc, newGRPC(o.Clock, flt, psvc, fsvc, smsvc, ctsvc, cssvc, gksvc, lgsvc), flt, drain)
 	t.Cleanup(closeAPIs)
 
 	srv := httptest.NewUnstartedServer(handler)
@@ -394,8 +394,10 @@ func publishTo(ps *pubsub.Service) cloudscheduler.PublishFunc {
 //
 // Requests reach it through the transport's h2c dispatch, so gRPC and REST
 // share the one port.
-func newGRPC(ps *pubsub.Service, fs *firestore.Service, sm *secretmanager.Service, ct *cloudtasks.Service, cs *cloudscheduler.Service, gk *gke.Service, lg *cloudlogging.Service) *grpc.Server {
-	srv := grpc.NewServer()
+func newGRPC(clk clock.Clock, flt *faults.Set, ps *pubsub.Service, fs *firestore.Service, sm *secretmanager.Service, ct *cloudtasks.Service, cs *cloudscheduler.Service, gk *gke.Service, lg *cloudlogging.Service) *grpc.Server {
+	// The fault interceptor applies the same rules to unary gRPC calls that the
+	// REST path applies to HTTP, so cloudrig fault reaches gRPC-first services.
+	srv := grpc.NewServer(grpc.UnaryInterceptor(flt.UnaryServerInterceptor(clk)))
 	pubsubpb.RegisterPublisherServer(srv, pubsub.NewPublisher(ps))
 	pubsubpb.RegisterSubscriberServer(srv, pubsub.NewSubscriber(ps))
 	firestorepb.RegisterFirestoreServer(srv, fs)
