@@ -297,3 +297,49 @@ func TestAcceptance3(t *testing.T) {
 		t.Errorf("pending = %d, want 1 (the 10s timer)", got)
 	}
 }
+
+// TestAdvanceToIsForwardOnly holds that AdvanceTo never moves the clock
+// backward: a target at or before now is a no-op.
+func TestAdvanceToIsForwardOnly(t *testing.T) {
+	c := clock.NewFake(epoch)
+	c.Advance(time.Hour) // now = epoch+1h
+
+	if reachable := c.AdvanceTo(epoch); reachable {
+		t.Error("AdvanceTo(past) reported reachable; want false")
+	}
+	if got := c.Now(); !got.Equal(epoch.Add(time.Hour)) {
+		t.Errorf("now = %s, want unchanged epoch+1h", got)
+	}
+	if reachable := c.AdvanceTo(epoch.Add(time.Hour)); !reachable {
+		t.Error("AdvanceTo(now) reported unreachable; want true (no-op)")
+	}
+	if reachable := c.AdvanceTo(epoch.Add(2 * time.Hour)); !reachable {
+		t.Error("AdvanceTo(future) reported unreachable; want true")
+	}
+	if got := c.Now(); !got.Equal(epoch.Add(2 * time.Hour)) {
+		t.Errorf("now = %s, want epoch+2h", got)
+	}
+}
+
+// TestConcurrentAdvanceToConverges holds that concurrent absolute travel lands
+// on the latest target rather than summing deltas and overshooting. Regression:
+// goto read now and applied a delta in two steps, so two gotos could stack.
+func TestConcurrentAdvanceToConverges(t *testing.T) {
+	c := clock.NewFake(epoch)
+
+	targets := []time.Duration{5 * time.Minute, 10 * time.Minute, 3 * time.Minute, 10 * time.Minute}
+	var wg sync.WaitGroup
+	for _, d := range targets {
+		wg.Add(1)
+		go func(d time.Duration) {
+			defer wg.Done()
+			c.AdvanceTo(epoch.Add(d))
+		}(d)
+	}
+	wg.Wait()
+
+	// The furthest target is +10m; summing would overshoot to +28m.
+	if got, want := c.Now(), epoch.Add(10*time.Minute); !got.Equal(want) {
+		t.Errorf("now = %s, want the latest target %s (not the sum)", got, want)
+	}
+}

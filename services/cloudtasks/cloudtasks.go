@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"cloud.google.com/go/cloudtasks/apiv2/cloudtaskspb"
 	"github.com/monirz/cloudrig/core/clock"
@@ -36,12 +37,17 @@ type Service struct {
 	// Sync waits for them, so a test can advance the clock knowing a previous
 	// attempt has finished scheduling its retry.
 	inFlight sync.WaitGroup
+	started  atomic.Uint64 // dispatches ever launched, for drain quiescence
 }
 
 // Sync waits for every due-now dispatch to finish, including arming any retry
 // it scheduled. Timer-driven dispatches run synchronously inside the clock's
 // Advance and need no waiting; only the immediate goroutine path does.
 func (s *Service) Sync() { s.inFlight.Wait() }
+
+// Started counts due-now dispatches ever launched, so a drain can tell whether
+// a pass triggered new work and needs another round.
+func (s *Service) Started() uint64 { return s.started.Load() }
 
 // httpDoer sends a task's request. It is an interface so a test can observe
 // dispatches without a real server.

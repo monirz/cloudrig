@@ -5,16 +5,20 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"slices"
 	"strconv"
+	"time"
 
 	"github.com/monirz/cloudrig/functions"
 )
 
 // config is everything cloudrig start takes.
 type config struct {
-	port    int
-	runner  string
-	dataDir string
+	port       int
+	runner     string
+	dataDir    string
+	clock      string
+	clockStart string
 }
 
 const (
@@ -25,9 +29,15 @@ const (
 // runnerModes are the accepted --runner values; all resolve to "none" today.
 var runnerModes = []string{"auto", "subprocess", "none"}
 
+// clockModes are the accepted --clock values. "real" tracks wall time;
+// "virtual" freezes time and moves it only when a client travels it forward
+// with cloudrig clock advance/goto.
+var clockModes = []string{"real", "virtual"}
+
 const (
 	defaultPort   = 4599
 	defaultRunner = "auto"
+	defaultClock  = "real"
 )
 
 // lookupEnv is os.LookupEnv's shape, injected so precedence is testable
@@ -81,6 +91,20 @@ func parseConfig(args []string, env lookupEnv, out io.Writer) (config, error) {
 	fs.StringVar(&dataDir, "data-dir", dataDir,
 		"persist Cloud Storage under this directory (env CLOUDRIG_DATA_DIR)")
 
+	clk := defaultClock
+	if v, ok := env("CLOUDRIG_CLOCK"); ok {
+		clk = v
+	}
+	fs.StringVar(&clk, "clock", clk,
+		fmt.Sprintf("clock: %v (env CLOUDRIG_CLOCK); virtual enables cloudrig clock", clockModes))
+
+	clockStart := ""
+	if v, ok := env("CLOUDRIG_CLOCK_START"); ok {
+		clockStart = v
+	}
+	fs.StringVar(&clockStart, "clock-start", clockStart,
+		"virtual clock's start time, RFC3339 (env CLOUDRIG_CLOCK_START); default: now")
+
 	if err := fs.Parse(args[1:]); err != nil {
 		return config{}, err
 	}
@@ -88,7 +112,7 @@ func parseConfig(args []string, env lookupEnv, out io.Writer) (config, error) {
 		return config{}, fmt.Errorf("unexpected argument %q", rest[0])
 	}
 
-	c := config{port: port, runner: runner, dataDir: dataDir}
+	c := config{port: port, runner: runner, dataDir: dataDir, clock: clk, clockStart: clockStart}
 	return c, c.validate()
 }
 
@@ -105,10 +129,17 @@ usage:
   cloudrig %s delete <name>
   cloudrig %s run <dir> [--name N] [--runtime R] [--entry-point F] [--port N]
 
+  cloudrig clock                     show the clock (needs --clock virtual)
+  cloudrig clock advance <duration>  travel forward, e.g. 30m
+  cloudrig clock goto <RFC3339>      travel to a time, e.g. 2026-09-12T15:00:00Z
+
 start flags:
   --port N          port to listen on (default %d, env CLOUDRIG_PORT)
   --runner MODE     function runner: %v (default %q, env CLOUDRIG_RUNNER)
   --data-dir DIR    persist Cloud Storage here (default: in memory)
+  --clock MODE      real or virtual (default real, env CLOUDRIG_CLOCK);
+                    virtual freezes time so cloudrig clock can travel it
+  --clock-start T   virtual clock's start, RFC3339 (env CLOUDRIG_CLOCK_START)
 
 fn flags:
   --source DIR      source directory
@@ -142,12 +173,31 @@ func (c config) validate() error {
 	if c.port < 0 || c.port > 65535 {
 		return fmt.Errorf("--port %d is out of range", c.port)
 	}
-	for _, m := range runnerModes {
-		if c.runner == m {
-			return nil
+	if !slices.Contains(runnerModes, c.runner) {
+		return fmt.Errorf("--runner %q is not one of %v", c.runner, runnerModes)
+	}
+	if !slices.Contains(clockModes, c.clock) {
+		return fmt.Errorf("--clock %q is not one of %v", c.clock, clockModes)
+	}
+	if c.clockStart != "" {
+		if c.clock != "virtual" {
+			return errors.New("--clock-start only applies with --clock virtual")
+		}
+		if _, err := c.startTime(); err != nil {
+			return err
 		}
 	}
-	return fmt.Errorf("--runner %q is not one of %v", c.runner, runnerModes)
+	return nil
+}
+
+// startTime is the virtual clock's seed. The zero time with ok=false means
+// "seed from the real now"; a set --clock-start is parsed as RFC3339.
+func (c config) startTime() (time.Time, error) {
+	t, err := time.Parse(time.RFC3339, c.clockStart)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("--clock-start %q: want RFC3339, e.g. 2026-01-01T00:00:00Z", c.clockStart)
+	}
+	return t, nil
 }
 
 func (c config) addr() string { return fmt.Sprintf(":%d", c.port) }

@@ -48,6 +48,12 @@ type Config struct {
 
 	// Services hosts deployed Cloud Run services. Nil means none are served.
 	Services ServiceHost
+
+	// Drain waits for the asynchronous work a clock jump sets off (task and
+	// scheduler deliveries, triggered function invocations). Called after a
+	// virtual-clock advance/goto so the response follows the side effects. Nil
+	// waits for nothing.
+	Drain func()
 }
 
 // ServiceHost resolves a request to a running Cloud Run service. It is the
@@ -91,6 +97,8 @@ type Handler struct {
 	grpc     http.Handler
 	faults   *faults.Set
 	services ServiceHost
+	cc       clockController // non-nil only when the clock is virtual
+	drain    func()
 }
 
 // New builds the front door. Routes register here so the endpoint set is
@@ -119,12 +127,22 @@ func New(cfg Config) *Handler {
 		grpc:     cfg.GRPC,
 		faults:   cfg.Faults,
 		services: cfg.Services,
+		drain:    cfg.Drain,
 	}
 	h.rest.Handle(http.MethodGet, "/_emu/health", h.health)
 	if cfg.Reset != nil {
 		h.reset = cfg.Reset
 		h.rest.Handle(http.MethodPost, "/_emu/reset", h.handleReset)
 	}
+	// The clock endpoints are always routed; advance and goto answer with a
+	// clear FailedPrecondition on a real-clock server rather than a bare 404, so
+	// the caller learns to start with --clock virtual.
+	if cc, ok := cfg.Clock.(clockController); ok {
+		h.cc = cc
+	}
+	h.rest.Handle(http.MethodGet, "/_emu/clock", h.clockStatus)
+	h.rest.Handle(http.MethodPost, "/_emu/clock/advance", h.clockAdvance)
+	h.rest.Handle(http.MethodPost, "/_emu/clock/goto", h.clockGoto)
 	return h
 }
 

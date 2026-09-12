@@ -8,6 +8,7 @@ package events
 import (
 	"context"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -46,10 +47,11 @@ type Match func(Event) bool
 
 // Bus delivers events to subscribers.
 type Bus struct {
-	mu     sync.RWMutex
-	next   uint64
-	subs   map[uint64]subscription
-	inWork sync.WaitGroup
+	mu      sync.RWMutex
+	next    uint64
+	subs    map[uint64]subscription
+	inWork  sync.WaitGroup
+	started atomic.Uint64 // deliveries ever launched, so a drain can detect quiescence
 }
 
 type subscription struct {
@@ -97,6 +99,7 @@ func (b *Bus) Publish(ctx context.Context, e Event) {
 	delivery := context.WithoutCancel(ctx)
 
 	for _, fn := range interested {
+		b.started.Add(1)
 		b.inWork.Add(1)
 		go func(fn Handler) {
 			defer b.inWork.Done()
@@ -110,3 +113,7 @@ func (b *Bus) Publish(ctx context.Context, e Event) {
 // Delivery is asynchronous, so without this a test would have to poll or sleep
 // to see an effect. It is what makes an event-driven assertion deterministic.
 func (b *Bus) Sync() { b.inWork.Wait() }
+
+// Started counts deliveries ever launched. A drain compares it across a Sync to
+// tell whether that pass triggered new work, and so whether to drain again.
+func (b *Bus) Started() uint64 { return b.started.Load() }

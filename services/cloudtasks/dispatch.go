@@ -88,6 +88,7 @@ func (s *Service) schedule(name string, when time.Time) {
 		// the next Advance, but a due task should dispatch now — so it runs on
 		// its own goroutine, which blocks on the lock until the caller (this
 		// method's caller, holding s.mu) releases it. Sync waits on it.
+		s.started.Add(1)
 		s.inFlight.Add(1)
 		go func() {
 			defer s.inFlight.Done()

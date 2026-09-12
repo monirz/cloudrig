@@ -162,7 +162,11 @@ func Start(ctx context.Context, o Options) (*Emulator, error) {
 	gksvc := gke.New(stack.kvStore, clk)
 	lgsvc := cloudlogging.New(clk)
 	runReg := cloudrun.NewRegistry()
-	handler, closeAPIs := newHandler(clk, o, reg, runReg, stack.svc, psvc, smsvc, ctsvc, cssvc, susvc, gksvc, lgsvc, newGRPC(psvc, fsvc, smsvc, ctsvc, cssvc, gksvc, lgsvc), flt)
+	// Drain the async work a clock jump sets off, so a virtual-clock advance
+	// returns only once scheduled deliveries and the functions they trigger
+	// have run.
+	drain := func() { drainAsync(cssvc, bus, ctsvc) }
+	handler, closeAPIs := newHandler(clk, o, reg, runReg, stack.svc, psvc, smsvc, ctsvc, cssvc, susvc, gksvc, lgsvc, newGRPC(psvc, fsvc, smsvc, ctsvc, cssvc, gksvc, lgsvc), flt, drain)
 	srv := &http.Server{
 		Handler:   handler,
 		Protocols: transport.Protocols(), // HTTP/1.1 and h2c on one port
@@ -309,7 +313,8 @@ func serveForTest(t testing.TB, o Options, stack storageStack) *Emulator {
 	lgsvc := cloudlogging.New(o.Clock)
 	runReg := cloudrun.NewRegistry()
 	t.Cleanup(runReg.StopAll)
-	handler, closeAPIs := newHandler(o.Clock, o, reg, runReg, stack.svc, psvc, smsvc, ctsvc, cssvc, susvc, gksvc, lgsvc, newGRPC(psvc, fsvc, smsvc, ctsvc, cssvc, gksvc, lgsvc), flt)
+	drain := func() { drainAsync(cssvc, bus, ctsvc) }
+	handler, closeAPIs := newHandler(o.Clock, o, reg, runReg, stack.svc, psvc, smsvc, ctsvc, cssvc, susvc, gksvc, lgsvc, newGRPC(psvc, fsvc, smsvc, ctsvc, cssvc, gksvc, lgsvc), flt, drain)
 	t.Cleanup(closeAPIs)
 
 	srv := httptest.NewUnstartedServer(handler)
@@ -426,7 +431,7 @@ func routeV1(fallback http.Handler, services ...matcher) http.Handler {
 
 // newHandler builds the request surface and returns what it must tear down:
 // the API objects own temporary directories, and nothing else can reach them.
-func newHandler(clk clock.Clock, o Options, reg *functions.Registry, runReg *cloudrun.Registry, gcs *storage.Service, psvc *pubsub.Service, smsvc *secretmanager.Service, ctsvc *cloudtasks.Service, cssvc *cloudscheduler.Service, susvc *serviceusage.Service, gksvc *gke.Service, lgsvc *cloudlogging.Service, grpcSrv http.Handler, flt *faults.Set) (http.Handler, func()) {
+func newHandler(clk clock.Clock, o Options, reg *functions.Registry, runReg *cloudrun.Registry, gcs *storage.Service, psvc *pubsub.Service, smsvc *secretmanager.Service, ctsvc *cloudtasks.Service, cssvc *cloudscheduler.Service, susvc *serviceusage.Service, gksvc *gke.Service, lgsvc *cloudlogging.Service, grpcSrv http.Handler, flt *faults.Set, drain func()) (http.Handler, func()) {
 	configured := o.Runner
 	if configured == "" {
 		configured = "auto"
@@ -487,6 +492,7 @@ func newHandler(clk clock.Clock, o Options, reg *functions.Registry, runReg *clo
 		Reset: func(ctx context.Context, project string) error {
 			return resetAll(ctx, project, runReg, susvc, lgsvc, gcs)
 		},
+		Drain: drain,
 	})
 
 	return h, func() {
@@ -499,6 +505,26 @@ func newHandler(clk clock.Clock, o Options, reg *functions.Registry, runReg *clo
 // Reset clears emulator state. An empty project clears everything.
 func (e *Emulator) Reset(ctx context.Context, project string) error {
 	return resetAll(ctx, project, e.run, e.svcusage, e.logging, e.storage)
+}
+
+// drainAsync waits for the asynchronous work a virtual-clock jump sets off —
+// scheduler and task HTTP deliveries, and the functions a scheduler-to-Pub/Sub
+// target triggers — so a caller that advances the clock and then checks those
+// side effects sees them. Draining one stage can set off work in another (a due
+// task invokes a function that publishes an event or enqueues another task), so
+// it loops until a full pass starts no new work, comparing each subsystem's
+// count of work ever started. Capped so a workload that perpetually reschedules
+// cannot hang the caller.
+func drainAsync(cs *cloudscheduler.Service, bus *events.Bus, ct *cloudtasks.Service) {
+	for range 100 {
+		before := cs.Started() + bus.Started() + ct.Started()
+		cs.Sync()
+		bus.Sync()
+		ct.Sync()
+		if cs.Started()+bus.Started()+ct.Started() == before {
+			return
+		}
+	}
 }
 
 // resetAll is the one reset path: the /_emu/reset endpoint and Emulator.Reset

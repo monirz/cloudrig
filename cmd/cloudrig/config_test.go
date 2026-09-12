@@ -25,6 +25,7 @@ func TestParseConfig(t *testing.T) {
 		env        map[string]string
 		wantPort   int
 		wantRunner string
+		wantClock  string
 		wantErr    string
 	}{
 		{
@@ -76,6 +77,42 @@ func TestParseConfig(t *testing.T) {
 			name:    "an out-of-range port is rejected",
 			args:    []string{"start", "--port", "70000"},
 			wantErr: "out of range",
+		},
+		{
+			name:       "virtual clock via flag",
+			args:       []string{"start", "--clock", "virtual"},
+			wantPort:   4599,
+			wantRunner: "auto",
+			wantClock:  "virtual",
+		},
+		{
+			name:       "virtual clock with a start seed",
+			args:       []string{"start", "--clock", "virtual", "--clock-start", "2026-01-01T00:00:00Z"},
+			wantPort:   4599,
+			wantRunner: "auto",
+			wantClock:  "virtual",
+		},
+		{
+			name:    "clock-start without virtual is rejected",
+			args:    []string{"start", "--clock-start", "2026-01-01T00:00:00Z"},
+			wantErr: "--clock-start only applies with --clock virtual",
+		},
+		{
+			name:    "a bad clock-start is rejected",
+			args:    []string{"start", "--clock", "virtual", "--clock-start", "not-a-time"},
+			wantErr: "want RFC3339",
+		},
+		{
+			name:       "clock defaults to real",
+			args:       []string{"start"},
+			wantPort:   4599,
+			wantRunner: "auto",
+			wantClock:  "real",
+		},
+		{
+			name:    "an unknown clock is rejected",
+			args:    []string{"start", "--clock", "frozen"},
+			wantErr: `--clock "frozen" is not one of`,
 		},
 		{
 			name:    "an unknown runner is rejected",
@@ -132,6 +169,13 @@ func TestParseConfig(t *testing.T) {
 			}
 			if got.runner != tc.wantRunner {
 				t.Errorf("runner = %q, want %q", got.runner, tc.wantRunner)
+			}
+			wantClock := tc.wantClock
+			if wantClock == "" {
+				wantClock = "real"
+			}
+			if got.clock != wantClock {
+				t.Errorf("clock = %q, want %q", got.clock, wantClock)
 			}
 		})
 	}

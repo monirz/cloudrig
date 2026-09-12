@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/monirz/cloudrig"
+	"github.com/monirz/cloudrig/core/clock"
 	"github.com/monirz/cloudrig/core/tmp"
 )
 
@@ -42,6 +43,9 @@ func run(args []string, env lookupEnv, stdout, stderr *os.File) error {
 	if len(args) > 0 && args[0] == cmdFn {
 		return runFnCommand(args[1:], env, stdout, stderr)
 	}
+	if len(args) > 0 && args[0] == cmdClock {
+		return runClockCommand(args[1:], env, stdout, stderr)
+	}
 
 	cfg, err := parseConfig(args, env, stderr)
 	if err != nil {
@@ -53,13 +57,28 @@ func run(args []string, env lookupEnv, stdout, stderr *os.File) error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	emu, err := cloudrig.Start(ctx, cloudrig.Options{
+	opts := cloudrig.Options{
 		Addr:     cfg.addr(),
 		Version:  version,
 		Runner:   cfg.runner,
 		DataDir:  cfg.dataDir,
 		EventLog: stdout,
-	})
+	}
+	if cfg.clock == "virtual" {
+		// A fake clock that holds still until a client travels it forward. That
+		// is what lets cloudrig clock advance/goto drive scheduled tasks, TTLs
+		// and ack deadlines. --clock-start seeds it for a reproducible run;
+		// otherwise it starts at the real now so timestamps look realistic.
+		opts.Clock = clock.NewFakeNow()
+		if cfg.clockStart != "" {
+			start, err := cfg.startTime() // already validated
+			if err != nil {
+				return err
+			}
+			opts.Clock = clock.NewFake(start)
+		}
+	}
+	emu, err := cloudrig.Start(ctx, opts)
 	if err != nil {
 		return err
 	}
