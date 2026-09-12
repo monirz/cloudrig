@@ -1,70 +1,68 @@
 # cloudrig
 
-A local emulator for Google Cloud. Runs as a binary, or in-process inside a Go
-test. Cloud Storage, Cloud Functions and Pub/Sub run natively — a subprocess
-per function, everything else in-process.
+**A local Google Cloud emulator you can control.** One binary, one port. Run
+Cloud Functions, Storage, Pub/Sub, Firestore and more on your machine — then
+travel through time, inject failures, and snapshot state to test the things
+real GCP makes you wait for.
 
-**Functions really run.** `gcloud functions call` starts your code as a process
-and returns what it printed — it is not a recorded response or a stubbed
-handler. Upload a file and a function fires, in one process, with no Docker and
-no Pub/Sub.
+![License: MIT](https://img.shields.io/badge/license-MIT-blue)
+![Go 1.25+](https://img.shields.io/badge/go-1.25%2B-00ADD8)
+
+Functions **really run**: `gcloud functions call` starts your code as a process
+and returns what it printed, not a recorded response. gcloud, Terraform and the
+Google client libraries work unchanged — pointed at a single port, over gRPC
+and REST.
+
+## Why cloudrig?
+
+- **⏩ Time travel** — freeze the clock and fast-forward days; scheduled jobs,
+  task retries, message deadlines and TTLs all fire instantly and
+  deterministically, instead of after a real wait.
+- **💥 Fault injection** — make any service return errors, latency or timeouts,
+  over REST *and* gRPC, to test how your code behaves when GCP fails.
+- **📸 Fork & snapshot** — branch a running emulator per test case, cheaply.
+- **🧪 Deterministic** — time is injected, so there are no flaky `time.Sleep`s.
+- **🔌 Real APIs** — gcloud, Terraform and the client libraries need no code
+  changes; point them at `localhost:4599`.
+- **📦 One binary, one port** — no Docker and no daemon zoo, or run it
+  in-process inside a Go test.
+
+## Quick start
 
 Requires Go 1.25+.
 
 ```sh
 make build          # -> ./cloudrig
-./cloudrig start    # :4599
+./cloudrig start    # serves everything on :4599
 ```
 
-Everything below assumes the emulator is running and a second terminal with:
+Then, in a second terminal, point tools at it:
 
 ```sh
 export CLOUDRIG_ENDPOINT=http://localhost:4599
 ```
 
----
+Every guide below assumes the emulator is running.
 
-## Guides
+## Contents
 
-Each one is a sequence you can paste, in order, against a running emulator.
+**Getting started** — [Run a function](#run-a-function) · [Use it from gcloud](#use-it-from-gcloud)
 
-| | |
-|---|---|
-| [Run a function](#run-a-function) | Deploy a Node or Go function and call it |
-| [Use it from gcloud](#use-it-from-gcloud) | The same function through real `gcloud` |
-| [Cloud Storage](#cloud-storage) | Buckets and objects, via `gcloud storage` or HTTP |
-| [Terraform](#terraform) | `terraform apply` against the emulator |
-| [Pub/Sub](#pubsub) | Topics, subscriptions, publish and receive |
-| [Upload a file, run a function](#upload-a-file-run-a-function) | A storage trigger, end to end |
-| [Run a function on a Pub/Sub message](#run-a-function-on-a-pubsub-message) | A topic trigger, end to end |
-| [Watch an unacknowledged message come back](#watch-an-unacknowledged-message-come-back) | Ack deadlines and redelivery |
-| [Use in a Go test](#use-in-a-go-test) | In-process, one isolated emulator per test |
-| [Fault injection](#fault-injection) | Break GCP on purpose — errors, latency, timeouts, over REST and gRPC |
-| [Time travel](#time-travel) | Freeze and advance the clock, from a test or the CLI |
-| [Fork state](#fork-state) | Branch an emulator, cheaply, mid-test |
-| [Firestore](#firestore) | Documents and queries, over gRPC |
-| [Secret Manager](#secret-manager) | Secrets, versions, and the latest alias |
-| [Cloud Tasks](#cloud-tasks) | Deferred HTTP work, fired on the clock |
-| [Cloud Scheduler](#cloud-scheduler) | Cron jobs, fired on the clock |
-| [GKE](#gke) | A real Kubernetes cluster, driven by gcloud |
-| [Cloud Run](#cloud-run) | Deploy a container, and call it |
-| [Run a service without Docker](#run-a-service-without-docker) | The same service as a process |
+**Testing superpowers** — [Go tests](#use-in-a-go-test) · [Time travel](#time-travel) · [Fault injection](#fault-injection) · [Fork state](#fork-state)
 
-## Reference
+**Services** — [Cloud Storage](#cloud-storage) · [Pub/Sub](#pubsub) · [Firestore](#firestore) · [Secret Manager](#secret-manager) · [Cloud Tasks](#cloud-tasks) · [Cloud Scheduler](#cloud-scheduler) · [Cloud Run](#cloud-run) · [GKE](#gke) · [Terraform](#terraform)
 
-| | |
-|---|---|
-| [Architecture](ARCHITECTURE.md) | How cloudrig is put together |
-| [Unsupported](UNSUPPORTED.md) | Every gap, in one place |
-| [Commands](#commands) | Every subcommand and flag |
-| [Test](#test) | Running cloudrig's own suite |
-| [What works](#what-works) | Supported surface, and what is missing |
-| [Troubleshooting](#troubleshooting) | When something does not start |
-| [License](#license) | MIT |
+**Recipes** — [Storage trigger](#upload-a-file-run-a-function) · [Pub/Sub trigger](#run-a-function-on-a-pubsub-message) · [Redelivery](#watch-an-unacknowledged-message-come-back)
+
+**Reference** — [Commands](#commands) · [What works](#what-works) · [Testing cloudrig](#test) · [Troubleshooting](#troubleshooting) · [Architecture](ARCHITECTURE.md) · [Unsupported](UNSUPPORTED.md)
 
 ---
 
-## Run a function
+## Getting started
+
+The five-minute path: deploy a function, then drive it with real `gcloud`.
+
+### Run a function
 
 **1. Deploy it.** The Node sample needs its dependencies once,
 `(cd testdata/node-hello && npm i)`:
@@ -99,7 +97,7 @@ Go needs no flags at all when the source is a module:
 
 ---
 
-## Use it from gcloud
+### Use it from gcloud
 
 **1. Point gcloud at the emulator.** `cloudrig-env.sh` exports the four
 endpoint overrides gcloud needs and disables credentials.
@@ -141,362 +139,11 @@ enclosing `go.mod` does not travel with it.
 
 ---
 
-## Cloud Storage
+## Testing superpowers
 
-**1. Point gcloud at the emulator:**
+What cloudrig does that a stubbed emulator cannot — control time, inject failure, fork state.
 
-```sh
-export CLOUDSDK_CORE_PROJECT=my-project
-. ./cloudrig-env.sh
-```
-
-**2. Create a bucket and move objects around:**
-
-```sh
-gcloud storage buckets create gs://my-bucket --project my-project
-gcloud storage cp ./report.csv gs://my-bucket/report.csv
-gcloud storage ls gs://my-bucket
-gcloud storage cat gs://my-bucket/report.csv
-gcloud storage cp gs://my-bucket/report.csv gs://my-bucket/copy.csv
-gcloud storage rm gs://my-bucket/report.csv
-```
-
-**Or do the same over HTTP,** with no gcloud at all:
-
-```sh
-curl -X POST "localhost:4599/storage/v1/b?project=my-project" \
-  -H 'Content-Type: application/json' -d '{"name":"my-bucket"}'
-
-curl -X POST \
-  "localhost:4599/upload/storage/v1/b/my-bucket/o?uploadType=media&name=logs%2Fapp.log" \
-  -H 'Content-Type: text/plain' --data 'hello'
-
-curl "localhost:4599/storage/v1/b/my-bucket/o/logs%2Fapp.log?alt=media"
-# hello
-
-curl "localhost:4599/storage/v1/b/my-bucket/o?delimiter=/"
-# {"kind":"storage#objects","prefixes":["logs/"]}
-
-curl -X POST localhost:4599/_emu/reset
-```
-
-Object names are percent-encoded, so `logs/app.log` is one path segment.
-`generation`, `metageneration` and `size` come back as strings — that is the GCS
-wire format.
-
-From Go, with the real client:
-
-```go
-c, _ := storage.NewClient(ctx,
-    option.WithEndpoint(emu.BaseURL()+"/storage/v1/"),
-    option.WithoutAuthentication(),
-)
-```
-
-Payload bytes never enter the heap: 2 GiB moves for about 1 MiB of allocation.
-
----
-
-## Terraform
-
-Two ready examples live under [`examples/terraform/`](examples/terraform/):
-`services/` (Storage and Pub/Sub — fast) and `gke/` (a real Kubernetes cluster
-— slow). Every command below uses `terraform -chdir=…`, so you run them from
-the repo root without changing directories. The emulator must be running
-(`./cloudrig start`).
-
-**1. Apply the services stack:**
-
-```sh
-terraform -chdir=examples/terraform/services init
-terraform -chdir=examples/terraform/services apply -auto-approve
-```
-
-```
-Apply complete! Resources: 5 added, 0 changed, 0 destroyed.
-
-Outputs:
-object_url = "http://localhost:4599/storage/v1/b/tf-bucket/o/hello.txt?alt=media"
-```
-
-**2. Read back what it made, confirm the plan is clean, then tear it down:**
-
-```sh
-curl "$(terraform -chdir=examples/terraform/services output -raw object_url)"
-terraform -chdir=examples/terraform/services plan          # no changes
-terraform -chdir=examples/terraform/services destroy -auto-approve
-```
-
-Two lines in the provider block point Terraform at the emulator:
-
-```hcl
-provider "google" {
-  access_token            = "cloudrig-local"
-  storage_custom_endpoint = "http://localhost:4599/storage/v1/"
-}
-```
-
-`access_token` skips credentials — real ones make the provider sign a JWT and
-exchange it at `oauth2.googleapis.com`. The emulator never looks at the token.
-Each service you use needs its own `*_custom_endpoint`.
-
-Works: `google_storage_bucket`, `google_storage_bucket_object`,
-`google_storage_bucket_iam_member`, `google_pubsub_topic`,
-`google_pubsub_subscription` — create, update in place, and destroy. IAM
-policies are stored but not enforced.
-
-The provider speaks REST for every resource, so Pub/Sub needs
-`pubsub_custom_endpoint` even though the client libraries reach the same
-service over gRPC.
-
-**3. GKE — provision a real cluster with Terraform.** This one is slower and
-needs a container runtime plus k3d or kind, so it is a separate stack:
-
-```sh
-terraform -chdir=examples/terraform/gke init
-terraform -chdir=examples/terraform/gke apply -auto-approve   # real cluster, ~1 min
-terraform -chdir=examples/terraform/gke plan                  # no changes
-terraform -chdir=examples/terraform/gke destroy -auto-approve # tears the cluster down
-```
-
-`terraform apply` here spins an actual local Kubernetes cluster through the GKE
-admin API. Reach it with the backend's own kubeconfig — see
-[examples/terraform/gke/README.md](examples/terraform/gke/README.md) and the
-[GKE guide](#gke) below.
-
----
-
-## Pub/Sub
-
-gRPC, on the same port as everything else.
-
-**1. Point the client at it** with the same environment variable the Google
-emulator uses. Existing code needs no change at all:
-
-```sh
-export PUBSUB_EMULATOR_HOST=localhost:4599   # host:port, no scheme
-```
-
-**2. Use the client as you would against Google:**
-
-```go
-c, _ := pubsub.NewClient(ctx, "cloudrig-local")
-
-c.TopicAdminClient.CreateTopic(ctx, &pubsubpb.Topic{
-    Name: "projects/cloudrig-local/topics/orders",
-})
-c.SubscriptionAdminClient.CreateSubscription(ctx, &pubsubpb.Subscription{
-    Name:  "projects/cloudrig-local/subscriptions/worker",
-    Topic: "projects/cloudrig-local/topics/orders",
-})
-
-c.Publisher(topic).Publish(ctx, &pubsub.Message{Data: []byte("order-42")})
-
-c.Subscriber(sub).Receive(ctx, func(_ context.Context, m *pubsub.Message) {
-    fmt.Println(string(m.Data))
-    m.Ack()
-})
-```
-
-In a Go test the port is chosen for you, so pass it as options instead of
-setting the variable:
-
-```go
-c, _ := pubsub.NewClient(ctx, "test-project",
-    option.WithEndpoint(emu.Endpoint()),
-    option.WithoutAuthentication(),
-    option.WithGRPCDialOption(grpc.WithTransportCredentials(insecure.NewCredentials())),
-)
-```
-
-Topics, subscriptions, publish, streaming pull, ack and nack, over gRPC — plus
-a JSON API on the same port for Terraform. Each subscription gets its own copy
-of a message. A message that is nacked, or
-whose ack deadline passes, is redelivered. A published message can also run a
-function.
-
-`examples/pubsub` is a runnable client for the two scenarios below.
-
-Not supported: push subscriptions, ordering keys, dead-letter topics, retry
-policies, snapshots, seek, schemas.
-
----
-
-## Upload a file, run a function
-
-**1. Write the handler.** It is an ordinary HTTP handler; the event arrives as
-the body.
-
-`on-upload/go.mod`:
-
-```
-module example.com/onupload
-
-go 1.25
-```
-
-`on-upload/fn.go`:
-
-```go
-package onupload
-
-import (
-	"encoding/json"
-	"fmt"
-	"io"
-	"net/http"
-)
-
-type event struct {
-	Data struct {
-		Bucket string `json:"bucket"`
-		Name   string `json:"name"`
-		Size   string `json:"size"`
-	} `json:"data"`
-	Context struct {
-		EventType string `json:"eventType"`
-	} `json:"context"`
-}
-
-func Handler(w http.ResponseWriter, r *http.Request) {
-	body, _ := io.ReadAll(r.Body)
-
-	var e event
-	if err := json.Unmarshal(body, &e); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-	fmt.Printf("%s: gs://%s/%s (%s bytes)\n",
-		e.Context.EventType, e.Data.Bucket, e.Data.Name, e.Data.Size)
-	w.WriteHeader(http.StatusNoContent)
-}
-```
-
-**2. Deploy it against a bucket:**
-
-```sh
-./cloudrig fn deploy on-upload --source ./on-upload --trigger-bucket uploads
-```
-
-**3. Create the bucket and write an object into it:**
-
-```sh
-curl -X POST "localhost:4599/storage/v1/b?project=demo" \
-  -H 'Content-Type: application/json' -d '{"name":"uploads"}'
-
-curl -X POST \
-  "localhost:4599/upload/storage/v1/b/uploads/o?uploadType=media&name=report.csv" \
-  -H 'Content-Type: text/csv' --data 'a,b,c'
-```
-
-**4. The function ran.** Nothing polled and nothing was stubbed:
-
-```sh
-./cloudrig fn logs on-upload
-# google.storage.object.finalize: gs://uploads/report.csv (5 bytes)
-```
-
-`--trigger-bucket` defaults to `finalize`. Use `--trigger-event` for
-`google.storage.object.delete`, `.archive` or `.metadataUpdate`.
-
----
-
-## Run a function on a Pub/Sub message
-
-Verified end to end; `examples/pubsub` is the publishing client.
-
-**1. A handler.** It reads the gen1 envelope, with the payload base64-encoded
-the way the wire carries it:
-
-```sh
-mkdir -p /tmp/on-message && cd /tmp/on-message
-printf 'module example.com/onmessage\n\ngo 1.25\n' > go.mod
-cat > on-message.go <<'EOF'
-package onmessage
-
-import (
-	"encoding/base64"
-	"encoding/json"
-	"fmt"
-	"net/http"
-)
-
-type event struct {
-	Data struct {
-		Data       string            `json:"data"`
-		Attributes map[string]string `json:"attributes"`
-	} `json:"data"`
-	Context struct {
-		Resource struct{ Name string } `json:"resource"`
-	} `json:"context"`
-}
-
-func Handler(w http.ResponseWriter, r *http.Request) {
-	var e event
-	json.NewDecoder(r.Body).Decode(&e)
-	body, _ := base64.StdEncoding.DecodeString(e.Data.Data)
-	fmt.Printf("GOT %s from %s (%v)\n", body, e.Context.Resource.Name, e.Data.Attributes)
-	w.WriteHeader(http.StatusNoContent)
-}
-EOF
-```
-
-**2. Deploy it against a topic and publish.** The publisher never names
-cloudrig; `PUBSUB_EMULATOR_HOST` is its only configuration:
-
-```sh
-cd -                                        # back to the cloudrig checkout
-export PUBSUB_EMULATOR_HOST=localhost:4599  # host:port, no scheme
-
-./cloudrig fn deploy on-message --source /tmp/on-message \
-    --entry-point Handler --trigger-topic orders
-
-go run ./examples/pubsub -mode send -data "hello-from-pubsub"
-./cloudrig fn logs on-message
-```
-
-```
-trigger: google.pubsub.topic.publish on orders
-published 1 to projects/cloudrig-local/topics/orders
-GOT hello-from-pubsub from projects/cloudrig-local/topics/orders (map[source:pubsub-demo])
-```
-
-The function is compiled and run for real, in a subprocess, and the trigger
-fires on the publish itself rather than through a subscription: it sees every
-message on the topic whether or not anything is subscribed. A `Receive` loop
-still gets its own copy; the two do not consume each other.
-
----
-
-## Watch an unacknowledged message come back
-
-The subscription's ack deadline is ten seconds. `-mode crash` takes a message
-and exits while still holding it, which is what a worker dying mid-handler
-looks like:
-
-```sh
-go run ./examples/pubsub -mode send    -topic dl -data "survives-a-crash"
-go run ./examples/pubsub -mode crash   -topic dl
-go run ./examples/pubsub -mode receive -topic dl -wait 20s
-```
-
-```
-15:36:24  id=2  survives-a-crash  <- taken, now crashing
-15:36:34  id=2  survives-a-crash
-```
-
-Ten seconds apart: the deadline lapsed and the message was redelivered.
-
-It has to be a crash, not a handler that politely returns without acking. The
-Go client waits forever for a message that is neither acked nor nacked, so a
-graceful exit hangs instead of demonstrating anything.
-
-In a Go test the deadline is on the injected clock, so redelivery happens when
-the test advances time rather than after a real ten seconds.
-
----
-
-## Use in a Go test
+### Use in a Go test
 
 No Docker, no daemon, one isolated instance per test:
 
@@ -545,7 +192,53 @@ Shutdown is registered with `t.Cleanup`. State is never persisted under
 
 ---
 
-## Fault injection
+### Time travel
+
+Test time-dependent GCP workloads without waiting. Fast-forward minutes, days or
+months and let scheduled jobs, task retries, message deadlines, TTLs and other
+time-dependent behaviour fire — without waiting for real time to pass.
+
+```sh
+# Start cloudrig with a virtual clock
+cloudrig start --clock virtual
+
+# Travel 7 days into the future
+cloudrig clock advance 7d
+```
+
+Instead of waiting 7 days, cloudrig immediately processes everything that became
+due during those 7 days. Time is injected, not read from the wall clock, so this
+is deterministic — no flaky `time.Sleep` in sight.
+
+**In a Go test** (`MustStart` already runs on a virtual clock):
+
+```go
+emu := cloudrig.MustStart(t)
+// ... create a Cloud Scheduler job due in an hour ...
+emu.FakeClock(t).Advance(time.Hour) // the job fires now, deterministically
+```
+
+**From the CLI**, against a server started with a virtual clock:
+
+```sh
+./cloudrig start --clock virtual                       # time freezes at startup
+# reproducible runs: pin where time starts
+./cloudrig start --clock virtual --clock-start 2026-01-01T00:00:00Z
+
+# in another shell
+cloudrig clock                         # clock: virtual  now: …  pending: 3
+cloudrig clock advance 7d              # fire everything due in the next 7 days
+cloudrig clock goto 2026-12-25T00:00:00Z
+```
+
+Time only moves **forward** — a fired timer cannot un-fire, so travelling to a
+past time is refused. Without `--clock virtual` the server tracks the real clock
+and `cloudrig clock advance` says so rather than pretending. `pending` is how
+many timers are still waiting for the clock to reach them.
+
+---
+
+### Fault injection
 
 Break your local GCP on purpose. Inject latency, errors, timeouts and transient
 failures — over **REST and gRPC** — to test how your app behaves when a service
@@ -607,7 +300,7 @@ on the emulator's clock: under a `FakeClock` the request waits until the test
 advances time, so a slow backend is something to assert on rather than sit
 through.
 
-### Time travel + fault injection
+#### Time travel + fault injection
 
 The combination is the point. Fast-forward 30 days, make Pub/Sub fail half the
 time, and watch whether your retries and dead-letter handling actually hold —
@@ -620,53 +313,7 @@ cloudrig clock advance 30d
 
 ---
 
-## Time travel
-
-Test time-dependent GCP workloads without waiting. Fast-forward minutes, days or
-months and let scheduled jobs, task retries, message deadlines, TTLs and other
-time-dependent behaviour fire — without waiting for real time to pass.
-
-```sh
-# Start cloudrig with a virtual clock
-cloudrig start --clock virtual
-
-# Travel 7 days into the future
-cloudrig clock advance 7d
-```
-
-Instead of waiting 7 days, cloudrig immediately processes everything that became
-due during those 7 days. Time is injected, not read from the wall clock, so this
-is deterministic — no flaky `time.Sleep` in sight.
-
-**In a Go test** (`MustStart` already runs on a virtual clock):
-
-```go
-emu := cloudrig.MustStart(t)
-// ... create a Cloud Scheduler job due in an hour ...
-emu.FakeClock(t).Advance(time.Hour) // the job fires now, deterministically
-```
-
-**From the CLI**, against a server started with a virtual clock:
-
-```sh
-./cloudrig start --clock virtual                       # time freezes at startup
-# reproducible runs: pin where time starts
-./cloudrig start --clock virtual --clock-start 2026-01-01T00:00:00Z
-
-# in another shell
-cloudrig clock                         # clock: virtual  now: …  pending: 3
-cloudrig clock advance 7d              # fire everything due in the next 7 days
-cloudrig clock goto 2026-12-25T00:00:00Z
-```
-
-Time only moves **forward** — a fired timer cannot un-fire, so travelling to a
-past time is refused. Without `--clock virtual` the server tracks the real clock
-and `cloudrig clock advance` says so rather than pretending. `pending` is how
-many timers are still waiting for the clock to reach them.
-
----
-
-## Fork state
+### Fork state
 
 Build a fixture once, then branch it per case:
 
@@ -696,7 +343,123 @@ Only an in-memory emulator can fork; one started with `--data-dir` cannot.
 
 ---
 
-## Firestore
+## Services
+
+Each guide is a sequence you can paste against a running emulator.
+
+### Cloud Storage
+
+**1. Point gcloud at the emulator:**
+
+```sh
+export CLOUDSDK_CORE_PROJECT=my-project
+. ./cloudrig-env.sh
+```
+
+**2. Create a bucket and move objects around:**
+
+```sh
+gcloud storage buckets create gs://my-bucket --project my-project
+gcloud storage cp ./report.csv gs://my-bucket/report.csv
+gcloud storage ls gs://my-bucket
+gcloud storage cat gs://my-bucket/report.csv
+gcloud storage cp gs://my-bucket/report.csv gs://my-bucket/copy.csv
+gcloud storage rm gs://my-bucket/report.csv
+```
+
+**Or do the same over HTTP,** with no gcloud at all:
+
+```sh
+curl -X POST "localhost:4599/storage/v1/b?project=my-project" \
+  -H 'Content-Type: application/json' -d '{"name":"my-bucket"}'
+
+curl -X POST \
+  "localhost:4599/upload/storage/v1/b/my-bucket/o?uploadType=media&name=logs%2Fapp.log" \
+  -H 'Content-Type: text/plain' --data 'hello'
+
+curl "localhost:4599/storage/v1/b/my-bucket/o/logs%2Fapp.log?alt=media"
+# hello
+
+curl "localhost:4599/storage/v1/b/my-bucket/o?delimiter=/"
+# {"kind":"storage#objects","prefixes":["logs/"]}
+
+curl -X POST localhost:4599/_emu/reset
+```
+
+Object names are percent-encoded, so `logs/app.log` is one path segment.
+`generation`, `metageneration` and `size` come back as strings — that is the GCS
+wire format.
+
+From Go, with the real client:
+
+```go
+c, _ := storage.NewClient(ctx,
+    option.WithEndpoint(emu.BaseURL()+"/storage/v1/"),
+    option.WithoutAuthentication(),
+)
+```
+
+Payload bytes never enter the heap: 2 GiB moves for about 1 MiB of allocation.
+
+---
+
+### Pub/Sub
+
+gRPC, on the same port as everything else.
+
+**1. Point the client at it** with the same environment variable the Google
+emulator uses. Existing code needs no change at all:
+
+```sh
+export PUBSUB_EMULATOR_HOST=localhost:4599   # host:port, no scheme
+```
+
+**2. Use the client as you would against Google:**
+
+```go
+c, _ := pubsub.NewClient(ctx, "cloudrig-local")
+
+c.TopicAdminClient.CreateTopic(ctx, &pubsubpb.Topic{
+    Name: "projects/cloudrig-local/topics/orders",
+})
+c.SubscriptionAdminClient.CreateSubscription(ctx, &pubsubpb.Subscription{
+    Name:  "projects/cloudrig-local/subscriptions/worker",
+    Topic: "projects/cloudrig-local/topics/orders",
+})
+
+c.Publisher(topic).Publish(ctx, &pubsub.Message{Data: []byte("order-42")})
+
+c.Subscriber(sub).Receive(ctx, func(_ context.Context, m *pubsub.Message) {
+    fmt.Println(string(m.Data))
+    m.Ack()
+})
+```
+
+In a Go test the port is chosen for you, so pass it as options instead of
+setting the variable:
+
+```go
+c, _ := pubsub.NewClient(ctx, "test-project",
+    option.WithEndpoint(emu.Endpoint()),
+    option.WithoutAuthentication(),
+    option.WithGRPCDialOption(grpc.WithTransportCredentials(insecure.NewCredentials())),
+)
+```
+
+Topics, subscriptions, publish, streaming pull, ack and nack, over gRPC — plus
+a JSON API on the same port for Terraform. Each subscription gets its own copy
+of a message. A message that is nacked, or
+whose ack deadline passes, is redelivered. A published message can also run a
+function.
+
+`examples/pubsub` is a runnable client for the two scenarios below.
+
+Not supported: push subscriptions, ordering keys, dead-letter topics, retry
+policies, snapshots, seek, schemas.
+
+---
+
+### Firestore
 
 gRPC, on the same port. The env var is all the configuration a client needs:
 
@@ -745,7 +508,7 @@ collection-group queries, and aggregations.
 
 ---
 
-## Secret Manager
+### Secret Manager
 
 gRPC, on the same port:
 
@@ -801,7 +564,7 @@ version aliases other than `latest`.
 
 ---
 
-## Cloud Tasks
+### Cloud Tasks
 
 gRPC, on the same port. A task is deferred HTTP work: it names a URL, a body and
 a schedule time, and the queue dispatches it when that time arrives, retrying on
@@ -891,7 +654,7 @@ but not enforced).
 
 ---
 
-## Cloud Scheduler
+### Cloud Scheduler
 
 gRPC, on the same port. A job is a cron expression and a target — an HTTP URL or
 a Pub/Sub topic — that fires on schedule, recurring after each run.
@@ -941,82 +704,9 @@ Job CRUD, pause and resume, `RunJob`/`jobs run` to fire ahead of schedule, and
 Not supported: App Engine targets, OIDC/OAuth token minting, and time zones
 (cron is evaluated in UTC).
 
-## GKE
-
-`gcloud container clusters create` starts a **real** local Kubernetes cluster —
-k3s (via k3d) or kind — not a stub. gcloud manages it; `kubectl` runs real
-workloads on it.
-
-### Install a backend
-
-cloudrig runs the cluster through **k3d** (k3s packaged to run in Docker) or
-**kind**, whichever it finds on `PATH` — it prefers k3d. Both need a container
-runtime (Docker or colima) running underneath. cloudrig does not detect a
-native `k3s` binary; on Linux use k3d, which runs the same k3s inside Docker.
-
-```sh
-# macOS
-brew install k3d                                     # or: brew install kind
-
-# Linux
-curl -s https://raw.githubusercontent.com/k3d-io/k3d/main/install.sh | bash
-```
-
-Check it: `k3d version` (and `docker ps` to confirm the runtime is up).
-
-**1. Create a cluster.** This spins a real cluster, so it takes a minute:
-
-```sh
-export CLOUDSDK_CORE_PROJECT=cloudrig-local
-. ./cloudrig-env.sh
-
-gcloud container clusters create demo --location=us-central1 --num-nodes=1
-gcloud container clusters list --location=us-central1     # STATUS: RUNNING
-```
-
-**2. Point kubectl at it.** Use the backend's own kubeconfig, not the one
-gcloud writes — GKE credentials use a Google auth plugin the local cluster
-cannot satisfy, so gcloud's kubeconfig will not authenticate. The cluster is
-named `cloudrig-demo` (a prefix that keeps it distinct from your own clusters):
-
-```sh
-export KUBECONFIG=$(k3d kubeconfig write cloudrig-demo)   # k3d
-# or, with kind:  kind get kubeconfig --name cloudrig-demo > /tmp/kc && export KUBECONFIG=/tmp/kc
-```
-
-**3. Run a real workload:**
-
-```sh
-kubectl create deployment web --image=nginx
-kubectl wait --for=condition=available deployment/web --timeout=60s
-kubectl get pods                    # web-... Running 1/1
-```
-
-That pod is running on a real Kubernetes cluster.
-
-Reach it with `kubectl port-forward svc/web 8080:80` after
-`kubectl expose deployment web --port=80`. Anything that runs *on* Kubernetes
-works, because it is a real cluster — but cluster add-ons are not pre-installed:
-a default k3d/kind cluster has no ingress controller, so an Ingress resource is
-accepted but not routed until you install one (e.g. ingress-nginx). That is
-standard k3d/kind behaviour, not a cloudrig limit.
-
-**4. Tear it down.** `gcloud delete` removes the real cluster:
-
-```sh
-unset KUBECONFIG
-gcloud container clusters delete demo --location=us-central1
-```
-
-`gcloud container` is the admin API cloudrig emulates (create, list, describe,
-delete, on `localhost:4599`). `kubectl` talks to the cluster itself — a
-different server, reached with the backend's kubeconfig. That split is why
-`gcloud container clusters list` works with auth off while `kubectl` needs the
-cluster's own credentials.
-
 ---
 
-## Cloud Run
+### Cloud Run
 
 `examples/cloudrun` is a runnable service — an HTTP server on `$PORT`, which is
 all Cloud Run asks of your code.
@@ -1087,7 +777,7 @@ gcloud run services delete hello --region=us-central1 --quiet
 
 ---
 
-## Run a service without Docker
+### Run a service without Docker
 
 The same example, deployed as a source directory instead of an image, runs as a
 process — no build, no container:
@@ -1125,7 +815,331 @@ there is no authentication here to enforce.
 
 ---
 
-## Commands
+### GKE
+
+`gcloud container clusters create` starts a **real** local Kubernetes cluster —
+k3s (via k3d) or kind — not a stub. gcloud manages it; `kubectl` runs real
+workloads on it.
+
+#### Install a backend
+
+cloudrig runs the cluster through **k3d** (k3s packaged to run in Docker) or
+**kind**, whichever it finds on `PATH` — it prefers k3d. Both need a container
+runtime (Docker or colima) running underneath. cloudrig does not detect a
+native `k3s` binary; on Linux use k3d, which runs the same k3s inside Docker.
+
+```sh
+# macOS
+brew install k3d                                     # or: brew install kind
+
+# Linux
+curl -s https://raw.githubusercontent.com/k3d-io/k3d/main/install.sh | bash
+```
+
+Check it: `k3d version` (and `docker ps` to confirm the runtime is up).
+
+**1. Create a cluster.** This spins a real cluster, so it takes a minute:
+
+```sh
+export CLOUDSDK_CORE_PROJECT=cloudrig-local
+. ./cloudrig-env.sh
+
+gcloud container clusters create demo --location=us-central1 --num-nodes=1
+gcloud container clusters list --location=us-central1     # STATUS: RUNNING
+```
+
+**2. Point kubectl at it.** Use the backend's own kubeconfig, not the one
+gcloud writes — GKE credentials use a Google auth plugin the local cluster
+cannot satisfy, so gcloud's kubeconfig will not authenticate. The cluster is
+named `cloudrig-demo` (a prefix that keeps it distinct from your own clusters):
+
+```sh
+export KUBECONFIG=$(k3d kubeconfig write cloudrig-demo)   # k3d
+# or, with kind:  kind get kubeconfig --name cloudrig-demo > /tmp/kc && export KUBECONFIG=/tmp/kc
+```
+
+**3. Run a real workload:**
+
+```sh
+kubectl create deployment web --image=nginx
+kubectl wait --for=condition=available deployment/web --timeout=60s
+kubectl get pods                    # web-... Running 1/1
+```
+
+That pod is running on a real Kubernetes cluster.
+
+Reach it with `kubectl port-forward svc/web 8080:80` after
+`kubectl expose deployment web --port=80`. Anything that runs *on* Kubernetes
+works, because it is a real cluster — but cluster add-ons are not pre-installed:
+a default k3d/kind cluster has no ingress controller, so an Ingress resource is
+accepted but not routed until you install one (e.g. ingress-nginx). That is
+standard k3d/kind behaviour, not a cloudrig limit.
+
+**4. Tear it down.** `gcloud delete` removes the real cluster:
+
+```sh
+unset KUBECONFIG
+gcloud container clusters delete demo --location=us-central1
+```
+
+`gcloud container` is the admin API cloudrig emulates (create, list, describe,
+delete, on `localhost:4599`). `kubectl` talks to the cluster itself — a
+different server, reached with the backend's kubeconfig. That split is why
+`gcloud container clusters list` works with auth off while `kubectl` needs the
+cluster's own credentials.
+
+---
+
+### Terraform
+
+Two ready examples live under [`examples/terraform/`](examples/terraform/):
+`services/` (Storage and Pub/Sub — fast) and `gke/` (a real Kubernetes cluster
+— slow). Every command below uses `terraform -chdir=…`, so you run them from
+the repo root without changing directories. The emulator must be running
+(`./cloudrig start`).
+
+**1. Apply the services stack:**
+
+```sh
+terraform -chdir=examples/terraform/services init
+terraform -chdir=examples/terraform/services apply -auto-approve
+```
+
+```
+Apply complete! Resources: 5 added, 0 changed, 0 destroyed.
+
+Outputs:
+object_url = "http://localhost:4599/storage/v1/b/tf-bucket/o/hello.txt?alt=media"
+```
+
+**2. Read back what it made, confirm the plan is clean, then tear it down:**
+
+```sh
+curl "$(terraform -chdir=examples/terraform/services output -raw object_url)"
+terraform -chdir=examples/terraform/services plan          # no changes
+terraform -chdir=examples/terraform/services destroy -auto-approve
+```
+
+Two lines in the provider block point Terraform at the emulator:
+
+```hcl
+provider "google" {
+  access_token            = "cloudrig-local"
+  storage_custom_endpoint = "http://localhost:4599/storage/v1/"
+}
+```
+
+`access_token` skips credentials — real ones make the provider sign a JWT and
+exchange it at `oauth2.googleapis.com`. The emulator never looks at the token.
+Each service you use needs its own `*_custom_endpoint`.
+
+Works: `google_storage_bucket`, `google_storage_bucket_object`,
+`google_storage_bucket_iam_member`, `google_pubsub_topic`,
+`google_pubsub_subscription` — create, update in place, and destroy. IAM
+policies are stored but not enforced.
+
+The provider speaks REST for every resource, so Pub/Sub needs
+`pubsub_custom_endpoint` even though the client libraries reach the same
+service over gRPC.
+
+**3. GKE — provision a real cluster with Terraform.** This one is slower and
+needs a container runtime plus k3d or kind, so it is a separate stack:
+
+```sh
+terraform -chdir=examples/terraform/gke init
+terraform -chdir=examples/terraform/gke apply -auto-approve   # real cluster, ~1 min
+terraform -chdir=examples/terraform/gke plan                  # no changes
+terraform -chdir=examples/terraform/gke destroy -auto-approve # tears the cluster down
+```
+
+`terraform apply` here spins an actual local Kubernetes cluster through the GKE
+admin API. Reach it with the backend's own kubeconfig — see
+[examples/terraform/gke/README.md](examples/terraform/gke/README.md) and the
+[GKE guide](#gke) below.
+
+---
+
+## Recipes
+
+End-to-end flows that wire services together.
+
+### Upload a file, run a function
+
+**1. Write the handler.** It is an ordinary HTTP handler; the event arrives as
+the body.
+
+`on-upload/go.mod`:
+
+```
+module example.com/onupload
+
+go 1.25
+```
+
+`on-upload/fn.go`:
+
+```go
+package onupload
+
+import (
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+)
+
+type event struct {
+	Data struct {
+		Bucket string `json:"bucket"`
+		Name   string `json:"name"`
+		Size   string `json:"size"`
+	} `json:"data"`
+	Context struct {
+		EventType string `json:"eventType"`
+	} `json:"context"`
+}
+
+func Handler(w http.ResponseWriter, r *http.Request) {
+	body, _ := io.ReadAll(r.Body)
+
+	var e event
+	if err := json.Unmarshal(body, &e); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	fmt.Printf("%s: gs://%s/%s (%s bytes)\n",
+		e.Context.EventType, e.Data.Bucket, e.Data.Name, e.Data.Size)
+	w.WriteHeader(http.StatusNoContent)
+}
+```
+
+**2. Deploy it against a bucket:**
+
+```sh
+./cloudrig fn deploy on-upload --source ./on-upload --trigger-bucket uploads
+```
+
+**3. Create the bucket and write an object into it:**
+
+```sh
+curl -X POST "localhost:4599/storage/v1/b?project=demo" \
+  -H 'Content-Type: application/json' -d '{"name":"uploads"}'
+
+curl -X POST \
+  "localhost:4599/upload/storage/v1/b/uploads/o?uploadType=media&name=report.csv" \
+  -H 'Content-Type: text/csv' --data 'a,b,c'
+```
+
+**4. The function ran.** Nothing polled and nothing was stubbed:
+
+```sh
+./cloudrig fn logs on-upload
+# google.storage.object.finalize: gs://uploads/report.csv (5 bytes)
+```
+
+`--trigger-bucket` defaults to `finalize`. Use `--trigger-event` for
+`google.storage.object.delete`, `.archive` or `.metadataUpdate`.
+
+---
+
+### Run a function on a Pub/Sub message
+
+Verified end to end; `examples/pubsub` is the publishing client.
+
+**1. A handler.** It reads the gen1 envelope, with the payload base64-encoded
+the way the wire carries it:
+
+```sh
+mkdir -p /tmp/on-message && cd /tmp/on-message
+printf 'module example.com/onmessage\n\ngo 1.25\n' > go.mod
+cat > on-message.go <<'EOF'
+package onmessage
+
+import (
+	"encoding/base64"
+	"encoding/json"
+	"fmt"
+	"net/http"
+)
+
+type event struct {
+	Data struct {
+		Data       string            `json:"data"`
+		Attributes map[string]string `json:"attributes"`
+	} `json:"data"`
+	Context struct {
+		Resource struct{ Name string } `json:"resource"`
+	} `json:"context"`
+}
+
+func Handler(w http.ResponseWriter, r *http.Request) {
+	var e event
+	json.NewDecoder(r.Body).Decode(&e)
+	body, _ := base64.StdEncoding.DecodeString(e.Data.Data)
+	fmt.Printf("GOT %s from %s (%v)\n", body, e.Context.Resource.Name, e.Data.Attributes)
+	w.WriteHeader(http.StatusNoContent)
+}
+EOF
+```
+
+**2. Deploy it against a topic and publish.** The publisher never names
+cloudrig; `PUBSUB_EMULATOR_HOST` is its only configuration:
+
+```sh
+cd -                                        # back to the cloudrig checkout
+export PUBSUB_EMULATOR_HOST=localhost:4599  # host:port, no scheme
+
+./cloudrig fn deploy on-message --source /tmp/on-message \
+    --entry-point Handler --trigger-topic orders
+
+go run ./examples/pubsub -mode send -data "hello-from-pubsub"
+./cloudrig fn logs on-message
+```
+
+```
+trigger: google.pubsub.topic.publish on orders
+published 1 to projects/cloudrig-local/topics/orders
+GOT hello-from-pubsub from projects/cloudrig-local/topics/orders (map[source:pubsub-demo])
+```
+
+The function is compiled and run for real, in a subprocess, and the trigger
+fires on the publish itself rather than through a subscription: it sees every
+message on the topic whether or not anything is subscribed. A `Receive` loop
+still gets its own copy; the two do not consume each other.
+
+---
+
+### Watch an unacknowledged message come back
+
+The subscription's ack deadline is ten seconds. `-mode crash` takes a message
+and exits while still holding it, which is what a worker dying mid-handler
+looks like:
+
+```sh
+go run ./examples/pubsub -mode send    -topic dl -data "survives-a-crash"
+go run ./examples/pubsub -mode crash   -topic dl
+go run ./examples/pubsub -mode receive -topic dl -wait 20s
+```
+
+```
+15:36:24  id=2  survives-a-crash  <- taken, now crashing
+15:36:34  id=2  survives-a-crash
+```
+
+Ten seconds apart: the deadline lapsed and the message was redelivered.
+
+It has to be a crash, not a handler that politely returns without acking. The
+Go client waits forever for a message that is neither acked nor nacked, so a
+graceful exit hangs instead of demonstrating anything.
+
+In a Go test the deadline is on the injected clock, so redelivery happens when
+the test advances time rather than after a real ten seconds.
+
+---
+
+## Reference
+
+### Commands
 
 ```
 cloudrig start [--port N] [--runner MODE] [--data-dir DIR]
@@ -1152,7 +1166,7 @@ cloudrig fn run <dir>      # starts its own emulator, no daemon
 
 ---
 
-## Test
+### Test
 
 ```sh
 make check              # build, vet, lint, gofmt, race — about 40s
@@ -1170,7 +1184,7 @@ gcloud is not installed.
 
 ---
 
-## What works
+### What works
 
 **Cloud Functions** — Go and Node, HTTP and Cloud Storage triggers, the v1 API
 driven by real gcloud (`deploy`, `call`, `list`, `describe`, `delete`), hot
@@ -1226,7 +1240,7 @@ including what is accepted and ignored.
 
 ---
 
-## Troubleshooting
+### Troubleshooting
 
 A stray `cloudrig start` will silently accept deploys meant for a new one:
 
@@ -1239,6 +1253,6 @@ mismatch — the error names where the function actually is.
 
 ---
 
-## License
+### License
 
 MIT. See [LICENSE](LICENSE).
