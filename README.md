@@ -2,12 +2,26 @@
 
 ### A local Google Cloud environment for realistic, deterministic integration testing.
 
-CloudRig is a local Google Cloud emulator for developing and testing cloud
-applications without touching real GCP. Unlike a box of isolated emulators, its
-services are wired together the way GCP wires them: upload a file to a bucket and
-the function deployed against it fires; a scheduled job publishes to Pub/Sub and
-triggers another. You build and test event-driven apps locally, then control the
-things real GCP makes hard: **time, failure, and state.**
+CloudRig gives you a connected GCP environment on your machine. Your real
+application code and GCP clients interact with realistic local services, while
+tests can deterministically control time, failures, and state.
+
+```text
+                         CloudRig
+                            │
+       ┌────────────────────┼────────────────────┐
+       │                    │                    │
+       ▼                    ▼                    ▼
+   GCP Services         Real Workloads       Test Controls
+       │                    │                    │
+       │                    │              ┌─────┼─────┐
+       │                    │              ▼     ▼     ▼
+ Storage / PubSub       Functions/GKE    Time  Fault  Fork
+ Firestore / Tasks      Cloud Run
+ Scheduler / Secrets
+       │
+       └────────── Connected Event-Driven ──────────┘
+```
 
 ![License: MIT](https://img.shields.io/badge/license-MIT-blue)
 ![Go 1.25+](https://img.shields.io/badge/go-1.25%2B-00ADD8)
@@ -50,23 +64,33 @@ Prefer a local binary instead? `make build` produces `./cloudrig` in the repo.
 
 ## See It in Action
 
-Services are wired together like real GCP. Deploy a function against a bucket,
-drop a file in with `gcloud`, and the function fires, as a real process whose
-stdout is the log line:
+One workflow end to end, not ten snippets. Provision infrastructure, drop in an
+object, and follow it through functions, Pub/Sub, and Cloud Tasks, then
+fast-forward time to trigger a retry, all local and deterministic:
 
-```sh
-cloudrig fn deploy on-upload --source ./examples/on-upload --trigger-bucket uploads
-
-echo "a,b,c" > report.csv
-gcloud storage buckets create gs://uploads
-gcloud storage cp report.csv gs://uploads/
-
-cloudrig fn logs on-upload
-# google.storage.object.finalize: gs://uploads/report.csv (6 bytes)
+```text
+1. Start CloudRig
+        ↓
+2. Provision with Terraform          bucket, topic, subscription, task queue
+        ↓
+3. Upload an object                  gcloud storage cp report.csv gs://intake/
+        ↓
+4. A Storage-triggered function runs
+        ↓
+5. It publishes a Pub/Sub event
+        ↓
+6. A subscriber function processes it
+        ↓
+7. It enqueues a Cloud Task
+        ↓
+8. Fast-forward time                 cloudrig clock advance 1h
+        ↓
+9. The task fires, and retries        deterministically, with no real waiting
 ```
 
-No Docker, no Pub/Sub daemon, no polling.
-→ [Full walkthrough](docs/services.md#upload-a-file-run-a-function)
+Each stage has its own guide in the [service guides](docs/services.md); the
+[Pub/Sub](docs/services.md#run-a-function-on-a-pubsub-message) and
+[Cloud Tasks](docs/services.md#cloud-tasks) pages cover the wiring.
 
 ---
 
