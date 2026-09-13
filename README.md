@@ -70,9 +70,9 @@ clock fires its retries. Run the whole thing with
 [`examples/pipeline/run.sh`](examples/pipeline/run.sh), or step through it:
 
 ```sh
-# Start CloudRig with a virtual clock. The env lets functions reach its services.
-PUBSUB_EMULATOR_HOST=localhost:4599 CLOUDRIG_ENDPOINT=localhost:4599 \
-  SINK_URL=http://localhost:8080/ cloudrig start --clock virtual &
+# Start CloudRig with a virtual clock. It points functions at its own services
+# automatically; SINK_URL is this app's own setting.
+SINK_URL=http://localhost:8080/ cloudrig start --clock virtual &
 . ./cloudrig-env.sh
 
 # Provision a bucket, a Pub/Sub topic, and a task queue.

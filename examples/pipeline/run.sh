@@ -14,10 +14,8 @@ http.server.HTTPServer(("127.0.0.1", 8080), H).serve_forever()
 PY
 SINK=$!
 
-# Start CloudRig with a virtual clock. The env lets deployed functions reach its
-# own Pub/Sub and Cloud Tasks, and tells the worker where the sink is.
-PUBSUB_EMULATOR_HOST=localhost:4599 \
-CLOUDRIG_ENDPOINT=localhost:4599 \
+# Start CloudRig with a virtual clock. It points deployed functions at its own
+# Pub/Sub and Cloud Tasks automatically; SINK_URL is this app's own setting.
 SINK_URL=http://localhost:8080/ \
   cloudrig start --clock virtual &
 CR=$!
