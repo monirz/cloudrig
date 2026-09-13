@@ -59,23 +59,25 @@ the function. → [Full walkthrough](docs/services.md#upload-a-file-run-a-functi
 
 ## Quick Start
 
-Requires Go 1.25+.
+Build CloudRig from source (Go 1.25+):
 
 ```sh
-# install
-go install github.com/monirz/cloudrig/cmd/cloudrig@latest
-# or from source: git clone ... && make build
+git clone https://github.com/monirz/cloudrig && cd cloudrig
+make build          # produces ./cloudrig
+```
 
-# run
-cloudrig start                                # :4599
+Run it, then point your tools at the one endpoint:
 
-# point your tools at it
+```sh
+cloudrig start                                # serves everything on :4599
 export CLOUDRIG_ENDPOINT=http://localhost:4599
 export PUBSUB_EMULATOR_HOST=localhost:4599
 export FIRESTORE_EMULATOR_HOST=localhost:4599
 ```
 
-Prebuilt binaries and a Homebrew tap are planned (see the [Roadmap](ROADMAP.md)).
+After a release is tagged, you can also install it with `go install
+github.com/monirz/cloudrig/cmd/cloudrig@latest`. The [Roadmap](ROADMAP.md) tracks
+prebuilt binaries and a Homebrew tap.
 
 ---
 
@@ -97,6 +99,8 @@ Prebuilt binaries and a Homebrew tap are planned (see the [Roadmap](ROADMAP.md))
 ---
 
 ## Supported Services
+
+CloudRig emulates the following services:
 
 | Service | Status | Notes |
 |---|:--:|---|
@@ -120,7 +124,7 @@ Full compatibility and limitations: [service guides](docs/services.md) ·
 ## Testing
 
 - [Time Travel](docs/time-travel.md): fast-forward the clock; scheduled work fires instantly.
-- [Fault Injection](docs/fault-injection.md): inject errors, latency and timeouts over REST and gRPC.
+- [Fault Injection](docs/fault-injection.md): inject errors, latency, and timeouts over REST and gRPC.
 - [Fork State](docs/fork-state.md): branch a seeded environment per test case.
 - [In-Process Testing](docs/in-process-testing.md): one isolated emulator inside each Go test.
 
@@ -176,7 +180,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for conventions.
 
 ## Roadmap
 
-Planned services, distribution and testing features: [ROADMAP.md](ROADMAP.md).
+Planned services, distribution, and testing features: [ROADMAP.md](ROADMAP.md).
 
 ---
 
