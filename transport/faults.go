@@ -59,11 +59,22 @@ func (h *Handler) addFault(w http.ResponseWriter, r *http.Request) error {
 	if wire.Rate < 0 || wire.Rate > 1 {
 		return gerr.New(gerr.InvalidArgument, "rate must be between 0 and 1")
 	}
+	if wire.Count < 0 {
+		return gerr.New(gerr.InvalidArgument, "count must be zero (unlimited) or positive")
+	}
+	// A fault status must be an error, or the rule answers success with an error
+	// body; zero means the default 503.
+	if wire.Status != 0 && (wire.Status < 400 || wire.Status > 599) {
+		return gerr.Newf(gerr.InvalidArgument, "status %d is not an error status", wire.Status)
+	}
 	var latency time.Duration
 	if wire.Latency != "" {
 		d, err := time.ParseDuration(wire.Latency)
 		if err != nil {
 			return gerr.Newf(gerr.InvalidArgument, "latency %q: %v", wire.Latency, err)
+		}
+		if d < 0 {
+			return gerr.Newf(gerr.InvalidArgument, "latency %q must not be negative", wire.Latency)
 		}
 		latency = d
 	}

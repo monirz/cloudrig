@@ -133,6 +133,37 @@ func TestFaultsSpareTheAdminAPI(t *testing.T) {
 	}
 }
 
+// TestFaultAdminRejectsInvalidValues holds the admin API to loud rejection: a
+// non-error status, a negative count, or negative latency is refused rather
+// than armed into a rule that misbehaves quietly.
+func TestFaultAdminRejectsInvalidValues(t *testing.T) {
+	t.Parallel()
+
+	emu := cloudrig.MustStart(t)
+	post := func(body string) int {
+		resp, err := http.Post(emu.BaseURL()+"/_emu/faults", "application/json", strings.NewReader(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		return resp.StatusCode
+	}
+
+	bad := map[string]string{
+		"success status":   `{"path":"/x","status":200}`,
+		"negative count":   `{"path":"/x","count":-1}`,
+		"negative latency": `{"path":"/x","latency":"-1s"}`,
+	}
+	for name, body := range bad {
+		if got := post(body); got != http.StatusBadRequest {
+			t.Errorf("%s: status = %d, want 400", name, got)
+		}
+	}
+	if got := post(`{"path":"/x","status":503,"latency":"1s"}`); got != http.StatusOK {
+		t.Errorf("a valid rule was rejected: status = %d, want 200", got)
+	}
+}
+
 // TestFaultHitsGRPC is the cross-protocol case: the same fault Set that fails
 // REST also fails a unary gRPC call, mapped to a real gRPC status code (not an
 // HTTP number). This is what makes `cloudrig fault pubsub` reach a real client.
