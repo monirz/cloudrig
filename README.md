@@ -2,14 +2,11 @@
 
 ### A local Google Cloud environment for realistic, deterministic integration testing.
 
-CloudRig is a local GCP emulator for developing and testing cloud applications without connecting to real GCP.
-
-CloudRig doesn't just emulate individual APIs. Its services are wired together like real GCP services: upload a file to a bucket and a function deployed against that bucket can be triggered automatically, all within the same local process.
-
-CloudRig runs Google Cloud services on your machine as a **connected
-environment**, not a box of isolated emulators. Upload a file and the function
-deployed against it fires; a scheduled job publishes to Pub/Sub and triggers
-another function. Build and test event-driven apps locally, then control the
+CloudRig is a local Google Cloud emulator for developing and testing cloud
+applications without touching real GCP. Unlike a box of isolated emulators, its
+services are wired together the way GCP wires them: upload a file to a bucket and
+the function deployed against it fires; a scheduled job publishes to Pub/Sub and
+triggers another. You build and test event-driven apps locally, then control the
 things real GCP makes hard: **time, failure, and state.**
 
 ![License: MIT](https://img.shields.io/badge/license-MIT-blue)
@@ -19,7 +16,7 @@ things real GCP makes hard: **time, failure, and state.**
 
 ---
 
-## Why CloudRig?
+# Why CloudRig?
 
 **Real Cloud Functions.** Run your actual functions locally. Cloud Storage and
 Pub/Sub events trigger them and run real application code:
@@ -95,7 +92,7 @@ export PUBSUB_EMULATOR_HOST=localhost:4599
 
 ---
 
-## Install
+# Install
 
 Requires Go 1.25+.
 
@@ -115,11 +112,49 @@ cloudrig start                                # :4599
 export CLOUDRIG_ENDPOINT=http://localhost:4599
 ```
 
-Prebuilt binaries and a Homebrew tap are planned. → [Getting started](docs/services.md)
+Prebuilt binaries and a Homebrew tap are planned.
 
 ---
 
-## Supported services
+# How to Use
+
+**1. Start CloudRig.**
+
+```sh
+cloudrig start        # serves everything on :4599
+```
+
+**2. Point your tools at it.** No code changes; the client libraries and gcloud
+just need an endpoint:
+
+```sh
+export CLOUDRIG_ENDPOINT=http://localhost:4599    # cloudrig CLI and HTTP calls
+export PUBSUB_EMULATOR_HOST=localhost:4599        # Pub/Sub client libraries
+export FIRESTORE_EMULATOR_HOST=localhost:4599     # Firestore client libraries
+. ./cloudrig-env.sh                               # gcloud and Terraform (from a checkout)
+```
+
+**3. Use any service** as you would in production:
+
+```sh
+gcloud storage buckets create gs://my-bucket
+gcloud storage cp report.csv gs://my-bucket/
+```
+
+**4. Test the hard things.** Inject failures on any server; start with
+`--clock virtual` to also fast-forward time:
+
+```sh
+cloudrig fault storage --latency 2s
+cloudrig clock advance 7d
+```
+
+Full walkthroughs are in the [service guides](docs/services.md) and the
+[CLI reference](docs/cli.md).
+
+---
+
+# Supported services
 
 | Service | Status | Notes |
 |---|:--:|---|
@@ -140,7 +175,7 @@ Full compatibility, supported APIs and limitations:
 
 ---
 
-## Documentation
+# Documentation
 
 **Guides**
 - [Service guides](docs/services.md): Storage, Pub/Sub, Firestore, Secret Manager, Tasks, Scheduler, Cloud Run, GKE, Terraform, and the gcloud flows
@@ -155,7 +190,7 @@ Full compatibility, supported APIs and limitations:
 
 ---
 
-## Development
+# Development
 
 CloudRig is written in Go, with no runtime dependencies for its in-process
 services (Cloud Run and GKE need a container runtime).
@@ -170,6 +205,6 @@ Contributions, bug reports and ideas are welcome.
 
 ---
 
-## License
+# License
 
 MIT. See [LICENSE](LICENSE).
