@@ -8,6 +8,9 @@ go.work.sum
 /pubsub
 examples/cloudrun/server
 
+# GoReleaser output
+/dist
+
 # Working notes and briefs, not part of the published module. UNSUPPORTED.md
 # and the docs/ guides are published on purpose; competitive.md is an internal
 # brief and stays out.
