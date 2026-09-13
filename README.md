@@ -18,7 +18,9 @@ things real GCP makes hard: **time, failure, and state.**
 
 # Why CloudRig?
 
-**Real Cloud Functions.** Run your actual functions locally. Cloud Storage and
+### [Real Cloud Functions](docs/services.md#run-a-function)
+
+Run your actual functions locally. Cloud Storage and
 Pub/Sub events trigger them and run real application code:
 
 ```sh
@@ -32,7 +34,9 @@ cloudrig fn logs on-upload
 No Docker, no daemon, no polling: one process wired the storage write to the
 function.
 
-**Connected, event-driven services.** Services are wired together like a real GCP
+### [Connected, event-driven services](docs/services.md#upload-a-file-run-a-function)
+
+Services are wired together like a real GCP
 environment, so a whole workflow runs locally instead of you stitching separate
 emulators together:
 
@@ -40,7 +44,9 @@ emulators together:
 Storage → Function → Pub/Sub → Function → Cloud Tasks → Function
 ```
 
-**GKE workloads.** Run real Kubernetes workloads (k3d/kind) alongside your local
+### [GKE workloads](docs/services.md#gke)
+
+Run real Kubernetes workloads (k3d/kind) alongside your local
 GCP services and test how they talk to Google Cloud APIs:
 
 ```sh
@@ -48,42 +54,54 @@ gcloud container clusters create demo --location=us-central1
 kubectl create deployment web --image=nginx
 ```
 
-**Terraform / OpenTofu.** Provision your local environment with the same
+### [Terraform / OpenTofu](docs/services.md#terraform)
+
+Provision your local environment with the same
 infrastructure-as-code workflow you use in production:
 
 ```sh
 terraform -chdir=examples/terraform/services apply
 ```
 
-**Time travel.** Fast-forward minutes, days or months without waiting for real
+### [Time travel](docs/time-travel.md)
+
+Fast-forward minutes, days or months without waiting for real
 time. Scheduled jobs, retries, deadlines and TTLs fire deterministically:
 
 ```sh
 cloudrig clock advance 7d
 ```
 
-**Fault injection.** Break your infrastructure on purpose. Inject errors, latency
+### [Fault injection](docs/fault-injection.md)
+
+Break your infrastructure on purpose. Inject errors, latency
 and timeouts, over REST and gRPC, to test retries and resilience:
 
 ```sh
 cloudrig fault pubsub --error 503
 ```
 
-**Fork state.** Seed an environment once, then fork it into isolated states for
+### [Fork state](docs/fork-state.md)
+
+Seed an environment once, then fork it into isolated states for
 different tests or scenarios:
 
 ```go
 emu := base.Fork(t)
 ```
 
-**In-process testing.** Start an isolated CloudRig directly inside your Go tests,
+### [In-process testing](docs/in-process-testing.md)
+
+Start an isolated CloudRig directly inside your Go tests,
 with no separate emulator process or shared infrastructure:
 
 ```go
 emu := cloudrig.MustStart(t)
 ```
 
-**Real GCP clients.** Point the Google Cloud SDKs, gcloud and Terraform at your
+### [Real GCP clients](docs/services.md#use-it-from-gcloud)
+
+Point the Google Cloud SDKs, gcloud and Terraform at your
 local environment with no code changes:
 
 ```sh
