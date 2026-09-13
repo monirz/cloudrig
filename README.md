@@ -13,11 +13,14 @@ event-driven workflows run locally.
 
 ## Quick Start
 
-Build it, start it, and point `gcloud` at your local GCP (Go 1.25+):
+Install CloudRig from a checkout, start it, and point `gcloud` at your local GCP
+(Go 1.25+):
 
 ```sh
-git clone https://github.com/monirz/cloudrig && cd cloudrig && make build
-./cloudrig start &
+git clone https://github.com/monirz/cloudrig && cd cloudrig
+go install ./cmd/cloudrig    # puts cloudrig on your PATH
+
+cloudrig start &
 . ./cloudrig-env.sh          # points gcloud at CloudRig, with no credentials
 ```
 
@@ -38,6 +41,8 @@ export PUBSUB_EMULATOR_HOST=localhost:4599
 export FIRESTORE_EMULATOR_HOST=localhost:4599
 ```
 
+Prefer a local binary instead? `make build` produces `./cloudrig` in the repo.
+
 ---
 
 ## See It in Action
@@ -47,13 +52,13 @@ drop a file in with `gcloud`, and the function fires, as a real process whose
 stdout is the log line:
 
 ```sh
-./cloudrig fn deploy on-upload --source ./examples/on-upload --trigger-bucket uploads
+cloudrig fn deploy on-upload --source ./examples/on-upload --trigger-bucket uploads
 
 echo "a,b,c" > report.csv
 gcloud storage buckets create gs://uploads
 gcloud storage cp report.csv gs://uploads/
 
-./cloudrig fn logs on-upload
+cloudrig fn logs on-upload
 # google.storage.object.finalize: gs://uploads/report.csv (6 bytes)
 ```
 
