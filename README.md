@@ -2,9 +2,12 @@
 
 ### A local Google Cloud environment for realistic, deterministic integration testing.
 
-CloudRig is a local Google Cloud emulator that wires the services together the
-way GCP does, so `gcloud`, Terraform and the client libraries work unchanged and
-event-driven workflows run locally.
+CloudRig is a local Google Cloud emulator for developing and testing cloud
+applications without touching real GCP. Unlike a box of isolated emulators, its
+services are wired together the way GCP wires them: upload a file to a bucket and
+the function deployed against it fires; a scheduled job publishes to Pub/Sub and
+triggers another. You build and test event-driven apps locally, then control the
+things real GCP makes hard: **time, failure, and state.**
 
 ![License: MIT](https://img.shields.io/badge/license-MIT-blue)
 ![Go 1.25+](https://img.shields.io/badge/go-1.25%2B-00ADD8)
