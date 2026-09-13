@@ -98,6 +98,17 @@ Cloud Logging:
 
 gRPC: everything except Pub/Sub.
 
+Fault injection:
+
+- Unary requests only, over REST and unary gRPC. Streaming RPCs (Pub/Sub
+  StreamingPull, Firestore Listen) pass through unfaulted.
+- Request-level faults only: an injected status/error, latency, or a
+  deterministic failure rate. No service-specific fault semantics (partial
+  writes, corrupted payloads, per-message drops).
+- A named service maps to one path prefix. Where a service is reachable over
+  both gRPC and REST, `cloudrig fault <service>` targets the prefix its client
+  library uses; the other surface needs an explicit `--path`.
+
 Firestore:
 
 - `Listen` (real-time updates), query cursors (`StartAt`/`EndAt`),

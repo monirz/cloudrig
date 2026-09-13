@@ -9,11 +9,17 @@ import (
 
 	"strings"
 
+	"cloud.google.com/go/pubsub/v2"
+	"cloud.google.com/go/pubsub/v2/apiv1/pubsubpb"
 	"cloud.google.com/go/storage"
 	"github.com/monirz/cloudrig"
 	"github.com/monirz/cloudrig/core/faults"
 	"google.golang.org/api/googleapi"
 	"google.golang.org/api/option"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/status"
 )
 
 // TestFaultFailsARequest is the base case: a rule turns a call that would have
@@ -124,5 +130,76 @@ func TestFaultsSpareTheAdminAPI(t *testing.T) {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Errorf("health = %d under a match-everything rule, want 200", resp.StatusCode)
+	}
+}
+
+// TestFaultAdminRejectsInvalidValues holds the admin API to loud rejection: a
+// non-error status, a negative count, or negative latency is refused rather
+// than armed into a rule that misbehaves quietly.
+func TestFaultAdminRejectsInvalidValues(t *testing.T) {
+	t.Parallel()
+
+	emu := cloudrig.MustStart(t)
+	post := func(body string) int {
+		resp, err := http.Post(emu.BaseURL()+"/_emu/faults", "application/json", strings.NewReader(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		return resp.StatusCode
+	}
+
+	bad := map[string]string{
+		"success status":   `{"path":"/x","status":200}`,
+		"negative count":   `{"path":"/x","count":-1}`,
+		"negative latency": `{"path":"/x","latency":"-1s"}`,
+	}
+	for name, body := range bad {
+		if got := post(body); got != http.StatusBadRequest {
+			t.Errorf("%s: status = %d, want 400", name, got)
+		}
+	}
+	if got := post(`{"path":"/x","status":503,"latency":"1s"}`); got != http.StatusOK {
+		t.Errorf("a valid rule was rejected: status = %d, want 200", got)
+	}
+}
+
+// TestFaultHitsGRPC is the cross-protocol case: the same fault Set that fails
+// REST also fails a unary gRPC call, mapped to a real gRPC status code (not an
+// HTTP number). This is what makes `cloudrig fault pubsub` reach a real client.
+func TestFaultHitsGRPC(t *testing.T) {
+	t.Parallel()
+
+	emu := cloudrig.MustStart(t)
+	ctx := context.Background()
+
+	c, err := pubsub.NewClient(ctx, "test-project",
+		option.WithEndpoint(emu.Endpoint()),
+		option.WithoutAuthentication(),
+		option.WithGRPCDialOption(grpc.WithTransportCredentials(insecure.NewCredentials())),
+	)
+	if err != nil {
+		t.Fatalf("pubsub.NewClient: %v", err)
+	}
+	t.Cleanup(func() { _ = c.Close() })
+	admin := c.TopicAdminClient
+
+	// Without a fault, the gRPC call succeeds.
+	if _, err := admin.CreateTopic(ctx, &pubsubpb.Topic{Name: "projects/test-project/topics/ok"}); err != nil {
+		t.Fatalf("CreateTopic before fault: %v", err)
+	}
+
+	// A fault on the Pub/Sub gRPC prefix, asked for as HTTP 500.
+	emu.Faults().Add(faults.Rule{Path: "/google.pubsub.v1.*", Status: 500})
+
+	_, err = admin.CreateTopic(ctx, &pubsubpb.Topic{Name: "projects/test-project/topics/faulted"})
+	if got := status.Code(err); got != codes.Internal {
+		t.Errorf("gRPC fault code = %v, want Internal (500 mapped to a gRPC code, not smuggled)", got)
+	}
+
+	// Cleared, the gRPC call works again.
+	emu.Faults().Clear()
+	if _, err := admin.CreateTopic(ctx, &pubsubpb.Topic{Name: "projects/test-project/topics/after"}); err != nil {
+		t.Errorf("CreateTopic after clear: %v", err)
 	}
 }

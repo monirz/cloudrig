@@ -19,6 +19,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -136,10 +137,7 @@ func Start(ctx context.Context, o Options) (*Emulator, error) {
 	bus := events.New()
 	flt := faults.New()
 
-	reg, err := newRegistry(ctx, clk, bus, o)
-	if err != nil {
-		return nil, err
-	}
+	reg := newRegistry(clk, bus, o)
 	stack, err := newStorage(clk, bus, o.DataDir)
 	if err != nil {
 		reg.StopAll()
@@ -151,6 +149,12 @@ func Start(ctx context.Context, o Options) (*Emulator, error) {
 		reg.StopAll()
 		stack.close()
 		return nil, fmt.Errorf("listen on %s: %w", addr, err)
+	}
+
+	if err := deployStartup(ctx, reg, dialable(ln.Addr().String()), o); err != nil {
+		_ = ln.Close()
+		stack.close()
+		return nil, err
 	}
 
 	psvc := pubsub.New(stack.kvStore, clk, bus)
@@ -166,7 +170,7 @@ func Start(ctx context.Context, o Options) (*Emulator, error) {
 	// returns only once scheduled deliveries and the functions they trigger
 	// have run.
 	drain := func() { drainAsync(cssvc, bus, ctsvc) }
-	handler, closeAPIs := newHandler(clk, o, reg, runReg, stack.svc, psvc, smsvc, ctsvc, cssvc, susvc, gksvc, lgsvc, newGRPC(psvc, fsvc, smsvc, ctsvc, cssvc, gksvc, lgsvc), flt, drain)
+	handler, closeAPIs := newHandler(clk, o, reg, runReg, stack.svc, psvc, smsvc, ctsvc, cssvc, susvc, gksvc, lgsvc, newGRPC(clk, flt, psvc, fsvc, smsvc, ctsvc, cssvc, gksvc, lgsvc), flt, drain)
 	srv := &http.Server{
 		Handler:   handler,
 		Protocols: transport.Protocols(), // HTTP/1.1 and h2c on one port
@@ -239,20 +243,47 @@ func newStorage(clk clock.Clock, bus *events.Bus, dataDir string) (storageStack,
 	return storageStack{svc: storage.New(kv, blobs, clk, bus), blobs: blobs, kv: kv, kvStore: kv}, nil
 }
 
-// newRegistry deploys everything configured up front, tearing down whatever
-// came up if a later one fails.
-func newRegistry(ctx context.Context, clk clock.Clock, bus *events.Bus, o Options) (*functions.Registry, error) {
-	reg := functions.NewRegistry(clk, bus, functions.Options{
+// newRegistry constructs the function registry. Startup functions deploy later,
+// through deployStartup, once the listen address they inherit is known.
+func newRegistry(clk clock.Clock, bus *events.Bus, o Options) *functions.Registry {
+	return functions.NewRegistry(clk, bus, functions.Options{
 		Stderr:   o.FunctionLog,
 		EventLog: o.EventLog,
 	})
+}
+
+// deployStartup points functions at the emulator's own endpoints, then deploys
+// the ones configured at construction. It runs after the listen address is
+// known so each subprocess inherits it.
+func deployStartup(ctx context.Context, reg *functions.Registry, addr string, o Options) error {
+	reg.SetEnv(selfEnv(addr))
 	for _, f := range o.Functions {
 		if _, err := reg.Deploy(ctx, f); err != nil {
 			reg.StopAll()
-			return nil, err
+			return err
 		}
 	}
-	return reg, nil
+	return nil
+}
+
+// selfEnv lets a function reach sibling services over a plain `cloudrig start`,
+// with no manual emulator-host wiring. An explicit value in the environment
+// wins, so a function can still be pointed elsewhere.
+func selfEnv(addr string) []string {
+	// The emulator-host variables are scheme-less host:port; CLOUDRIG_ENDPOINT
+	// is a URL everywhere else in the repo, so it keeps its scheme.
+	vals := map[string]string{
+		"PUBSUB_EMULATOR_HOST":    addr,
+		"FIRESTORE_EMULATOR_HOST": addr,
+		"CLOUDRIG_ENDPOINT":       "http://" + addr,
+	}
+	var env []string
+	for _, k := range []string{"PUBSUB_EMULATOR_HOST", "FIRESTORE_EMULATOR_HOST", "CLOUDRIG_ENDPOINT"} {
+		if _, ok := os.LookupEnv(k); !ok {
+			env = append(env, k+"="+vals[k])
+		}
+	}
+	return env
 }
 
 // MustStart runs the emulator in-process for one test, on a random free port
@@ -295,10 +326,7 @@ func serveForTest(t testing.TB, o Options, stack storageStack) *Emulator {
 	flt := faults.New()
 	stack.svc = storage.New(stack.kvStore, stack.blobs, o.Clock, bus)
 
-	reg, err := newRegistry(context.Background(), o.Clock, bus, o)
-	if err != nil {
-		t.Fatalf("%v", err)
-	}
+	reg := newRegistry(o.Clock, bus, o)
 	t.Cleanup(reg.StopAll)
 
 	t.Cleanup(stack.close)
@@ -314,13 +342,17 @@ func serveForTest(t testing.TB, o Options, stack storageStack) *Emulator {
 	runReg := cloudrun.NewRegistry()
 	t.Cleanup(runReg.StopAll)
 	drain := func() { drainAsync(cssvc, bus, ctsvc) }
-	handler, closeAPIs := newHandler(o.Clock, o, reg, runReg, stack.svc, psvc, smsvc, ctsvc, cssvc, susvc, gksvc, lgsvc, newGRPC(psvc, fsvc, smsvc, ctsvc, cssvc, gksvc, lgsvc), flt, drain)
+	handler, closeAPIs := newHandler(o.Clock, o, reg, runReg, stack.svc, psvc, smsvc, ctsvc, cssvc, susvc, gksvc, lgsvc, newGRPC(o.Clock, flt, psvc, fsvc, smsvc, ctsvc, cssvc, gksvc, lgsvc), flt, drain)
 	t.Cleanup(closeAPIs)
 
 	srv := httptest.NewUnstartedServer(handler)
 	srv.Config.Protocols = transport.Protocols()
 	srv.Start()
 	t.Cleanup(srv.Close)
+
+	if err := deployStartup(context.Background(), reg, dialable(srv.Listener.Addr().String()), o); err != nil {
+		t.Fatalf("%v", err)
+	}
 
 	return &Emulator{
 		clk:      o.Clock,
@@ -394,8 +426,10 @@ func publishTo(ps *pubsub.Service) cloudscheduler.PublishFunc {
 //
 // Requests reach it through the transport's h2c dispatch, so gRPC and REST
 // share the one port.
-func newGRPC(ps *pubsub.Service, fs *firestore.Service, sm *secretmanager.Service, ct *cloudtasks.Service, cs *cloudscheduler.Service, gk *gke.Service, lg *cloudlogging.Service) *grpc.Server {
-	srv := grpc.NewServer()
+func newGRPC(clk clock.Clock, flt *faults.Set, ps *pubsub.Service, fs *firestore.Service, sm *secretmanager.Service, ct *cloudtasks.Service, cs *cloudscheduler.Service, gk *gke.Service, lg *cloudlogging.Service) *grpc.Server {
+	// The fault interceptor applies the same rules to unary gRPC calls that the
+	// REST path applies to HTTP, so cloudrig fault reaches gRPC-first services.
+	srv := grpc.NewServer(grpc.UnaryInterceptor(flt.UnaryServerInterceptor(clk)))
 	pubsubpb.RegisterPublisherServer(srv, pubsub.NewPublisher(ps))
 	pubsubpb.RegisterSubscriberServer(srv, pubsub.NewSubscriber(ps))
 	firestorepb.RegisterFirestoreServer(srv, fs)

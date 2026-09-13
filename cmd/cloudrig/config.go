@@ -133,6 +133,10 @@ usage:
   cloudrig clock advance <duration>  travel forward, e.g. 30m
   cloudrig clock goto <RFC3339>      travel to a time, e.g. 2026-09-12T15:00:00Z
 
+  cloudrig fault <service> [--error N | --latency DUR | --timeout] [--failure-rate P]
+  cloudrig fault list                show armed faults
+  cloudrig fault clear               disarm every fault
+
 start flags:
   --port N          port to listen on (default %d, env CLOUDRIG_PORT)
   --runner MODE     function runner: %v (default %q, env CLOUDRIG_RUNNER)

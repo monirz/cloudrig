@@ -143,6 +143,11 @@ func New(cfg Config) *Handler {
 	h.rest.Handle(http.MethodGet, "/_emu/clock", h.clockStatus)
 	h.rest.Handle(http.MethodPost, "/_emu/clock/advance", h.clockAdvance)
 	h.rest.Handle(http.MethodPost, "/_emu/clock/goto", h.clockGoto)
+	if h.faults != nil {
+		h.rest.Handle(http.MethodPost, "/_emu/faults", h.handleFaults)
+		h.rest.Handle(http.MethodGet, "/_emu/faults", h.handleFaults)
+		h.rest.Handle(http.MethodDelete, "/_emu/faults", h.handleFaults)
+	}
 	return h
 }
 
@@ -168,8 +173,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// so a rule can fail a path no service claims as readily as one it does.
 	// The admin API is exempt, or a broad rule would lock out its own switch.
 	if h.faults != nil && !strings.HasPrefix(path, adminPrefix) {
-		if rule, ok := h.faults.Match(r.Method, path); ok {
-			h.inject(w, r, rule)
+		if rule, ok := h.faults.Match(r.Method, path); ok && h.inject(w, r, rule) {
 			return
 		}
 	}
@@ -259,11 +263,18 @@ const adminPrefix = "/_emu/"
 // The latency runs on the injected clock: under a FakeClock the request waits
 // until a test advances time, which is what makes a slow backend something a
 // test can assert on rather than sit through.
-func (h *Handler) inject(w http.ResponseWriter, r *http.Request, rule faults.Rule) {
+// inject applies a matched rule and reports whether it answered the request. A
+// latency-only rule returns false after its delay, so the caller falls through
+// to normal routing — a slow success rather than a failure.
+func (h *Handler) inject(w http.ResponseWriter, r *http.Request, rule faults.Rule) (handled bool) {
 	if rule.Latency > 0 && !h.sleep(r, rule.Latency) {
-		return // the client gave up first
+		return true // the client gave up first; nothing more to answer
+	}
+	if !rule.FailsRequest() {
+		return false
 	}
 	gerr.WriteJSON(w, rule.Err())
+	return true
 }
 
 // sleep waits on the clock, reporting whether it elapsed rather than the

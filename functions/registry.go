@@ -60,6 +60,14 @@ func NewRegistry(clk clock.Clock, bus *events.Bus, opts Options) *Registry {
 	return &Registry{clk: clk, bus: bus, opts: opts, entries: map[string]*entry{}}
 }
 
+// SetEnv sets environment variables injected into every function deployed
+// after this call. Used to point functions at the emulator's own endpoints.
+func (r *Registry) SetEnv(env []string) {
+	r.mu.Lock()
+	r.opts.Env = env
+	r.mu.Unlock()
+}
+
 // Deploy builds and starts f, replacing any function of the same name.
 //
 // The replacement is started before the old one is stopped, so a failed deploy
