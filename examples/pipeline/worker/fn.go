@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"net/http"
+	"net/url"
 	"os"
 
 	cloudtasks "cloud.google.com/go/cloudtasks/apiv2"
@@ -28,9 +29,15 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewDecoder(r.Body).Decode(&e)
 	order, _ := base64.StdEncoding.DecodeString(e.Data.Data)
 
+	// CLOUDRIG_ENDPOINT is a URL; a gRPC client wants a bare host:port.
+	endpoint := os.Getenv("CLOUDRIG_ENDPOINT")
+	if u, err := url.Parse(endpoint); err == nil && u.Host != "" {
+		endpoint = u.Host
+	}
+
 	ctx := context.Background()
 	c, err := cloudtasks.NewClient(ctx,
-		option.WithEndpoint(os.Getenv("CLOUDRIG_ENDPOINT")),
+		option.WithEndpoint(endpoint),
 		option.WithoutAuthentication(),
 		option.WithGRPCDialOption(grpc.WithTransportCredentials(insecure.NewCredentials())),
 	)

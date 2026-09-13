@@ -270,10 +270,17 @@ func deployStartup(ctx context.Context, reg *functions.Registry, addr string, o 
 // with no manual emulator-host wiring. An explicit value in the environment
 // wins, so a function can still be pointed elsewhere.
 func selfEnv(addr string) []string {
+	// The emulator-host variables are scheme-less host:port; CLOUDRIG_ENDPOINT
+	// is a URL everywhere else in the repo, so it keeps its scheme.
+	vals := map[string]string{
+		"PUBSUB_EMULATOR_HOST":    addr,
+		"FIRESTORE_EMULATOR_HOST": addr,
+		"CLOUDRIG_ENDPOINT":       "http://" + addr,
+	}
 	var env []string
 	for _, k := range []string{"PUBSUB_EMULATOR_HOST", "FIRESTORE_EMULATOR_HOST", "CLOUDRIG_ENDPOINT"} {
 		if _, ok := os.LookupEnv(k); !ok {
-			env = append(env, k+"="+addr)
+			env = append(env, k+"="+vals[k])
 		}
 	}
 	return env
