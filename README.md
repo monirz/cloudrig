@@ -2,82 +2,77 @@
 
 ### A local Google Cloud environment for realistic, deterministic integration testing.
 
-CloudRig is a local Google Cloud emulator for developing and testing cloud
-applications without touching real GCP. Unlike a box of isolated emulators, its
-services are wired together the way GCP wires them: upload a file to a bucket and
-the function deployed against it fires; a scheduled job publishes to Pub/Sub and
-triggers another. You build and test event-driven apps locally, then control the
-things real GCP makes hard: **time, failure, and state.**
+CloudRig is a local Google Cloud emulator that wires the services together the
+way GCP does, so `gcloud`, Terraform and the client libraries work unchanged and
+event-driven workflows run locally.
 
 ![License: MIT](https://img.shields.io/badge/license-MIT-blue)
 ![Go 1.25+](https://img.shields.io/badge/go-1.25%2B-00ADD8)
-
-> **Build locally. Test realistically. Break things on purpose.**
-
----
-
-## Why CloudRig?
-
-Most GCP emulators run each service in its own box. CloudRig runs them as one
-connected environment on a single port, so event-driven workflows actually work
-locally, and it hands you the levers real GCP hides:
-
-- **[Connected and event-driven](docs/services.md#upload-a-file-run-a-function).**
-  A storage write triggers a function; a scheduler job publishes to Pub/Sub which
-  triggers another. Whole workflows run locally, in one process.
-- **[Deterministic](docs/in-process-testing.md).** Time is injected, so there are
-  no flaky `time.Sleep`s and a test reproduces exactly.
-- **Built for testing.** [Fast-forward time](docs/time-travel.md),
-  [inject failures](docs/fault-injection.md) and [fork state](docs/fork-state.md).
-- **[Real clients](docs/services.md#use-it-from-gcloud).** `gcloud`, Terraform and
-  the Google client libraries work unchanged, over gRPC and REST.
-
----
-
-## See It in Action
-
-Deploy a function, trigger it by writing a file to a bucket, and read what it
-printed. It runs as a real process, so the log line is its actual stdout:
-
-```sh
-cloudrig start &     # serves everything on :4599
-
-cloudrig fn deploy on-upload --source ./examples/on-upload --trigger-bucket uploads
-
-curl -X POST "localhost:4599/storage/v1/b?project=demo" -d '{"name":"uploads"}'
-curl -X POST "localhost:4599/upload/storage/v1/b/uploads/o?uploadType=media&name=report.csv" \
-  -H 'Content-Type: text/csv' --data 'a,b,c'
-
-cloudrig fn logs on-upload
-# google.storage.object.finalize: gs://uploads/report.csv (5 bytes)
-```
-
-No Docker, no Pub/Sub daemon, no polling: one process wired the storage write to
-the function. → [Full walkthrough](docs/services.md#upload-a-file-run-a-function)
 
 ---
 
 ## Quick Start
 
-Build CloudRig from source (Go 1.25+):
+Build it, start it, and point `gcloud` at your local GCP (Go 1.25+):
 
 ```sh
-git clone https://github.com/monirz/cloudrig && cd cloudrig
-make build          # produces ./cloudrig
+git clone https://github.com/monirz/cloudrig && cd cloudrig && make build
+./cloudrig start &
+. ./cloudrig-env.sh          # points gcloud at CloudRig, with no credentials
 ```
 
-Run it, then point your tools at the one endpoint:
+Now use it exactly like the real thing:
 
 ```sh
-cloudrig start                                # serves everything on :4599
-export CLOUDRIG_ENDPOINT=http://localhost:4599
+gcloud storage buckets create gs://demo
+gcloud storage cp README.md gs://demo/
+gcloud storage ls gs://demo
+# gs://demo/README.md
+```
+
+Point the client libraries at the same port with the standard emulator
+variables:
+
+```sh
 export PUBSUB_EMULATOR_HOST=localhost:4599
 export FIRESTORE_EMULATOR_HOST=localhost:4599
 ```
 
-After a release is tagged, you can also install it with `go install
-github.com/monirz/cloudrig/cmd/cloudrig@latest`. The [Roadmap](ROADMAP.md) tracks
-prebuilt binaries and a Homebrew tap.
+---
+
+## See It in Action
+
+Services are wired together like real GCP. Deploy a function against a bucket,
+drop a file in with `gcloud`, and the function fires, as a real process whose
+stdout is the log line:
+
+```sh
+./cloudrig fn deploy on-upload --source ./examples/on-upload --trigger-bucket uploads
+
+echo "a,b,c" > report.csv
+gcloud storage buckets create gs://uploads
+gcloud storage cp report.csv gs://uploads/
+
+./cloudrig fn logs on-upload
+# google.storage.object.finalize: gs://uploads/report.csv (6 bytes)
+```
+
+No Docker, no Pub/Sub daemon, no polling.
+→ [Full walkthrough](docs/services.md#upload-a-file-run-a-function)
+
+---
+
+## Why CloudRig?
+
+- **Connected and event-driven.** A storage write triggers a function; a
+  scheduler job publishes to Pub/Sub which triggers another. Whole workflows run
+  locally, in one process.
+- **Deterministic.** Time is injected, so a test reproduces exactly, with no
+  flaky `time.Sleep`s.
+- **Built for testing.** [Travel through time](docs/time-travel.md),
+  [inject failures](docs/fault-injection.md), and [fork state](docs/fork-state.md).
+- **Real clients.** `gcloud`, Terraform, and the Google client libraries work
+  unchanged, over gRPC and REST.
 
 ---
 
