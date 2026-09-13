@@ -1,10 +1,10 @@
 module example.com/worker
 
-go 1.26.0
+go 1.25.0
 
 require (
 	cloud.google.com/go/cloudtasks v1.19.0
-	google.golang.org/api v0.297.0
+	google.golang.org/api v0.295.0
 	google.golang.org/grpc v1.83.2
 )
 
