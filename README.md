@@ -64,35 +64,38 @@ Prefer a local binary instead? `make build` produces `./cloudrig` in the repo.
 
 ## See It in Action
 
-One workflow end to end, not ten snippets. Provision infrastructure, drop in an
-object, and follow it through functions, Pub/Sub, and Cloud Tasks, then
-fast-forward time to trigger a retry, all local and deterministic:
+One workflow, end to end: an object landing in a bucket triggers a function that
+publishes to Pub/Sub, a worker enqueues a Cloud Task, and fast-forwarding the
+clock fires its retries. Run the whole thing with
+[`examples/pipeline/run.sh`](examples/pipeline/run.sh), or step through it:
 
-```text
-1. Start CloudRig
-        ↓
-2. Provision with Terraform          bucket, topic, subscription, task queue
-        ↓
-3. Upload an object                  gcloud storage cp report.csv gs://intake/
-        ↓
-4. A Storage-triggered function runs
-        ↓
-5. It publishes a Pub/Sub event
-        ↓
-6. A subscriber function processes it
-        ↓
-7. It enqueues a Cloud Task
-        ↓
-8. Fast-forward time                 cloudrig clock advance 1h
-        ↓
-9. The task fires, and retries        deterministically, with no real waiting
+```sh
+# Start CloudRig with a virtual clock. The env lets functions reach its services.
+PUBSUB_EMULATOR_HOST=localhost:4599 CLOUDRIG_ENDPOINT=localhost:4599 \
+  SINK_URL=http://localhost:8080/ cloudrig start --clock virtual &
+. ./cloudrig-env.sh
+
+# Provision a bucket, a Pub/Sub topic, and a task queue.
+gcloud storage buckets create gs://intake
+curl -X PUT localhost:4599/v1/projects/cloudrig-local/topics/orders -d '{}'
+gcloud tasks queues create pipeline --location=us-central1 --max-attempts=3
+
+# Deploy the pipeline: ingest (storage -> Pub/Sub), worker (Pub/Sub -> Cloud Task).
+cloudrig fn deploy ingest --source ./examples/pipeline/ingest --trigger-bucket intake
+cloudrig fn deploy worker --source ./examples/pipeline/worker --trigger-topic orders
+
+# Drop an object in. It flows through the whole chain and enqueues a task.
+echo '{"id":42}' > order.json
+gcloud storage cp order.json gs://intake/
+
+# Fast-forward time. The task fires and retries, deterministically.
+cloudrig clock advance 1h
+#   sink: task attempt      <- the retries, with no real waiting
+#   sink: task attempt
 ```
 
-Each stage has its own guide in the [service guides](docs/services.md); the
-[Pub/Sub](docs/services.md#run-a-function-on-a-pubsub-message) and
-[Cloud Tasks](docs/services.md#cloud-tasks) pages cover the wiring.
-
----
+Every stage is real: the functions run as processes, Pub/Sub and Cloud Tasks are
+live, and the clock is injected so the retries need no real waiting.
 
 ## Why CloudRig?
 
