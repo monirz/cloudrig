@@ -2,6 +2,10 @@
 
 ### A local Google Cloud environment for realistic, deterministic integration testing.
 
+CloudRig is a local GCP emulator for developing and testing cloud applications without connecting to real GCP.
+
+CloudRig doesn't just emulate individual APIs. Its services are wired together like real GCP services: upload a file to a bucket and a function deployed against that bucket can be triggered automatically, all within the same local process.
+
 CloudRig runs Google Cloud services on your machine as a **connected
 environment**, not a box of isolated emulators. Upload a file and the function
 deployed against it fires; a scheduled job publishes to Pub/Sub and triggers
@@ -17,52 +21,77 @@ things real GCP makes hard: **time, failure, and state.**
 
 ## Why CloudRig?
 
-**⚡ Real Cloud Functions.** Run your actual functions locally. Cloud Storage and
+**Real Cloud Functions.** Run your actual functions locally. Cloud Storage and
 Pub/Sub events trigger them and run real application code:
 
-```bash
-./cloudrig start &     # serves everything on :4599
-
-./cloudrig fn deploy on-upload --source ./examples/on-upload --trigger-bucket uploads
-
-curl -X POST "localhost:4599/storage/v1/b?project=demo" -d '{"name":"uploads"}'
+```sh
+cloudrig fn deploy on-upload --source ./examples/on-upload --trigger-bucket uploads
 curl -X POST "localhost:4599/upload/storage/v1/b/uploads/o?uploadType=media&name=report.csv" \
   -H 'Content-Type: text/csv' --data 'a,b,c'
-
-./cloudrig fn logs on-upload
+cloudrig fn logs on-upload
 # google.storage.object.finalize: gs://uploads/report.csv (5 bytes)
 ```
 
 No Docker, no daemon, no polling: one process wired the storage write to the
 function.
 
-**🔄 Connected, event-driven services.** Services are wired together like a real
-GCP environment. Upload a file to a bucket and the function deployed against it
-fires, in the same local environment. Chain Storage → Functions → Pub/Sub →
-Tasks → Functions and test the whole workflow locally.
+**Connected, event-driven services.** Services are wired together like a real GCP
+environment, so a whole workflow runs locally instead of you stitching separate
+emulators together:
 
-**☸️ GKE workloads.** Run Kubernetes workloads (k3d/kind) alongside your local
-GCP services and test how they interact with Google Cloud APIs.
+```text
+Storage → Function → Pub/Sub → Function → Cloud Tasks → Function
+```
 
-**🏗️ Terraform / OpenTofu.** Provision your local environment using the same
-infrastructure-as-code workflow you use in production.
+**GKE workloads.** Run real Kubernetes workloads (k3d/kind) alongside your local
+GCP services and test how they talk to Google Cloud APIs:
 
-**⏩ Time travel.** Fast-forward minutes, days or months without waiting for real
-time. Test scheduled jobs, task retries, deadlines, TTLs and other
-time-dependent behaviour deterministically.
+```sh
+gcloud container clusters create demo --location=us-central1
+kubectl create deployment web --image=nginx
+```
 
-**💥 Fault injection.** Break your infrastructure on purpose. Inject errors,
-latency, timeouts and transient failures, over REST and gRPC, to test retries,
-resilience and failure handling.
+**Terraform / OpenTofu.** Provision your local environment with the same
+infrastructure-as-code workflow you use in production:
 
-**🌿 Fork state.** Create an environment once, then fork it into isolated states
-for different tests, scenarios or experiments.
+```sh
+terraform -chdir=examples/terraform/services apply
+```
 
-**🧪 In-process testing.** Start an isolated CloudRig environment directly inside
-your Go tests, with no separate emulator process or shared infrastructure.
+**Time travel.** Fast-forward minutes, days or months without waiting for real
+time. Scheduled jobs, retries, deadlines and TTLs fire deterministically:
 
-**🔌 Real GCP clients.** Use the Google Cloud SDKs, gcloud, Terraform and the
-familiar GCP APIs against your local environment.
+```sh
+cloudrig clock advance 7d
+```
+
+**Fault injection.** Break your infrastructure on purpose. Inject errors, latency
+and timeouts, over REST and gRPC, to test retries and resilience:
+
+```sh
+cloudrig fault pubsub --error 503
+```
+
+**Fork state.** Seed an environment once, then fork it into isolated states for
+different tests or scenarios:
+
+```go
+emu := base.Fork(t)
+```
+
+**In-process testing.** Start an isolated CloudRig directly inside your Go tests,
+with no separate emulator process or shared infrastructure:
+
+```go
+emu := cloudrig.MustStart(t)
+```
+
+**Real GCP clients.** Point the Google Cloud SDKs, gcloud and Terraform at your
+local environment with no code changes:
+
+```sh
+export PUBSUB_EMULATOR_HOST=localhost:4599
+```
 
 ---
 
