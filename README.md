@@ -28,18 +28,51 @@ tests can deterministically control time, failures, and state.
 
 ---
 
-## Quick Start
+## Install
 
-Install CloudRig from a checkout, start it, and point `gcloud` at your local GCP
-(Go 1.25+):
+Pick one. All three put a `cloudrig` binary on your PATH.
+
+**Prebuilt binary (no Go needed).** Downloads the release for your OS and CPU,
+on macOS and Linux:
+
+```sh
+VERSION=v0.1.0
+OS=$(uname -s | tr '[:upper:]' '[:lower:]')                 # darwin or linux
+ARCH=$(uname -m); [ "$ARCH" = x86_64 ] && ARCH=amd64; [ "$ARCH" = aarch64 ] && ARCH=arm64
+curl -sSL "https://github.com/monirz/cloudrig/releases/download/$VERSION/cloudrig_${VERSION#v}_${OS}_${ARCH}.tar.gz" | tar -xz cloudrig
+sudo mv cloudrig /usr/local/bin/
+```
+
+On macOS the binary is unsigned, so clear the quarantine flag once:
+`xattr -d com.apple.quarantine /usr/local/bin/cloudrig`.
+
+**With Go (1.25 or newer):**
+
+```sh
+go install github.com/monirz/cloudrig/cmd/cloudrig@latest
+```
+
+**From source:**
 
 ```sh
 git clone https://github.com/monirz/cloudrig && cd cloudrig
-go install ./cmd/cloudrig    # puts cloudrig on your PATH
+make build              # produces ./cloudrig
+```
 
+---
+
+## Quick Start
+
+Start CloudRig and point `gcloud` at your local GCP:
+
+```sh
 cloudrig start &
+curl -sSO https://raw.githubusercontent.com/monirz/cloudrig/main/cloudrig-env.sh
 . ./cloudrig-env.sh          # points gcloud at CloudRig, with no credentials
 ```
+
+If you installed from source, `cloudrig-env.sh` is already in the checkout, so
+skip the `curl` line.
 
 Now use it exactly like the real thing:
 
@@ -57,8 +90,6 @@ variables:
 export PUBSUB_EMULATOR_HOST=localhost:4599
 export FIRESTORE_EMULATOR_HOST=localhost:4599
 ```
-
-Prefer a local binary instead? `make build` produces `./cloudrig` in the repo.
 
 ---
 
