@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/logo.png" alt="CloudRig" width="200">
+</p>
+
 # CloudRig
 
 ### A local Google Cloud environment for realistic, deterministic integration testing.
