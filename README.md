@@ -256,6 +256,16 @@ Contributions, bug reports and ideas are welcome. See
 
 ---
 
+## Support
+
+If CloudRig saves you time, you can buy me a coffee. Recent messages appear
+below, updated automatically.
+
+<!--START_SECTION:buy-me-a-coffee-->
+<!--END_SECTION:buy-me-a-coffe-->
+
+---
+
 ## License
 
 MIT. See [LICENSE](LICENSE).
