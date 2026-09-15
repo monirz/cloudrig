@@ -13,7 +13,6 @@ CloudRig is actively evolving. Rough direction, not commitments.
 
 **Testing**
 - Streaming-RPC fault injection (today faults cover unary gRPC and REST).
-- Snapshot/restore of a running environment from the CLI.
 
 See [UNSUPPORTED.md](UNSUPPORTED.md) for the current gaps, and open an issue to
 propose or upvote anything here.

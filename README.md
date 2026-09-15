@@ -191,6 +191,7 @@ Full compatibility and limitations: [service guides](docs/services.md) ·
 - [Time Travel](docs/time-travel.md): fast-forward the clock; scheduled work fires instantly.
 - [Fault Injection](docs/fault-injection.md): inject errors, latency, and timeouts over REST and gRPC.
 - [Fork State](docs/fork-state.md): branch a seeded environment per test case.
+- [Snapshot and Restore](docs/snapshot.md): save a running emulator's state to a file and load it back.
 - [In-Process Testing](docs/in-process-testing.md): one isolated emulator inside each Go test.
 
 ---
@@ -211,6 +212,7 @@ Full compatibility and limitations: [service guides](docs/services.md) ·
 - [Time Travel](docs/time-travel.md)
 - [Fault Injection](docs/fault-injection.md)
 - [Fork State](docs/fork-state.md)
+- [Snapshot and Restore](docs/snapshot.md)
 - [In-Process Testing](docs/in-process-testing.md)
 - [Configuration](docs/configuration.md)
 - [Authentication](docs/authentication.md)
