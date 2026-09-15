@@ -109,6 +109,17 @@ Fault injection:
   both gRPC and REST, `cloudrig fault <service>` targets the prefix its client
   library uses; the other surface needs an explicit `--path`.
 
+Snapshot/restore:
+
+- Store state only: buckets and objects, Pub/Sub, Firestore, Cloud Tasks and
+  the other kv-backed services. Deployed functions, armed faults and the clock
+  are runtime, not state, and stay behind, as with an in-process fork.
+- In-memory emulators only. A `--data-dir` emulator persists on disk already
+  and is refused rather than snapshotted.
+- Restore replaces the target's store contents wholesale; it is not a merge.
+- The format is a plain tar of metadata and payloads, versioned by a manifest
+  field. It is not promised stable across releases yet.
+
 Firestore:
 
 - `Listen` (real-time updates), query cursors (`StartAt`/`EndAt`),

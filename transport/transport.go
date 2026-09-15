@@ -4,6 +4,7 @@ package transport
 
 import (
 	"context"
+	"io"
 	"net/http"
 	"net/url"
 	"strings"
@@ -54,6 +55,16 @@ type Config struct {
 	// virtual-clock advance/goto so the response follows the side effects. Nil
 	// waits for nothing.
 	Drain func()
+
+	// Snapshot saves and restores emulator state over /_emu/snapshot. Nil omits
+	// the endpoint.
+	Snapshot Snapshotter
+}
+
+// Snapshotter serializes the emulator's state to a writer and loads it back.
+type Snapshotter interface {
+	WriteSnapshot(w io.Writer) error
+	ReadSnapshot(r io.Reader) error
 }
 
 // ServiceHost resolves a request to a running Cloud Run service. It is the
@@ -99,6 +110,7 @@ type Handler struct {
 	services ServiceHost
 	cc       clockController // non-nil only when the clock is virtual
 	drain    func()
+	snap     Snapshotter
 }
 
 // New builds the front door. Routes register here so the endpoint set is
@@ -128,6 +140,7 @@ func New(cfg Config) *Handler {
 		faults:   cfg.Faults,
 		services: cfg.Services,
 		drain:    cfg.Drain,
+		snap:     cfg.Snapshot,
 	}
 	h.rest.Handle(http.MethodGet, "/_emu/health", h.health)
 	if cfg.Reset != nil {
@@ -147,6 +160,10 @@ func New(cfg Config) *Handler {
 		h.rest.Handle(http.MethodPost, "/_emu/faults", h.handleFaults)
 		h.rest.Handle(http.MethodGet, "/_emu/faults", h.handleFaults)
 		h.rest.Handle(http.MethodDelete, "/_emu/faults", h.handleFaults)
+	}
+	if h.snap != nil {
+		h.rest.Handle(http.MethodGet, "/_emu/snapshot", h.handleSnapshot)
+		h.rest.Handle(http.MethodPost, "/_emu/snapshot", h.handleSnapshot)
 	}
 	return h
 }

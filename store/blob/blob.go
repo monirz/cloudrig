@@ -253,3 +253,31 @@ func (s *Store) Fork() (*Store, error) {
 	}
 	return fork, nil
 }
+
+// Each streams every stored blob to fn, in no particular order. The reader is
+// valid only for the duration of the call.
+func (s *Store) Each(fn func(size int64, r io.Reader) error) error {
+	blobs := filepath.Join(s.root, "blobs")
+	err := filepath.WalkDir(blobs, func(path string, d fs.DirEntry, err error) error {
+		switch {
+		case err != nil:
+			return err
+		case d.IsDir():
+			return nil
+		}
+		info, err := d.Info()
+		if err != nil {
+			return err
+		}
+		f, err := os.Open(path)
+		if err != nil {
+			return err
+		}
+		defer f.Close()
+		return fn(info.Size(), f)
+	})
+	if err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("blob: walking %s: %w", s.root, err)
+	}
+	return nil
+}

@@ -33,8 +33,10 @@ import (
 	"github.com/monirz/cloudrig/core/clock"
 	"github.com/monirz/cloudrig/core/events"
 	"github.com/monirz/cloudrig/core/faults"
+	"github.com/monirz/cloudrig/core/gerr"
 	"github.com/monirz/cloudrig/core/tmp"
 	"github.com/monirz/cloudrig/functions"
+	"github.com/monirz/cloudrig/state"
 	"google.golang.org/grpc"
 
 	"github.com/monirz/cloudrig/services/cloudfunctions"
@@ -170,7 +172,8 @@ func Start(ctx context.Context, o Options) (*Emulator, error) {
 	// returns only once scheduled deliveries and the functions they trigger
 	// have run.
 	drain := func() { drainAsync(cssvc, bus, ctsvc) }
-	handler, closeAPIs := newHandler(clk, o, reg, runReg, stack.svc, psvc, smsvc, ctsvc, cssvc, susvc, gksvc, lgsvc, newGRPC(clk, flt, psvc, fsvc, smsvc, ctsvc, cssvc, gksvc, lgsvc), flt, drain)
+	snap := stateSnapshot{kv: stack.kvStore, blobs: stack.blobs}
+	handler, closeAPIs := newHandler(clk, o, reg, runReg, stack.svc, psvc, smsvc, ctsvc, cssvc, susvc, gksvc, lgsvc, newGRPC(clk, flt, psvc, fsvc, smsvc, ctsvc, cssvc, gksvc, lgsvc), flt, snap, drain)
 	srv := &http.Server{
 		Handler:   handler,
 		Protocols: transport.Protocols(), // HTTP/1.1 and h2c on one port
@@ -266,6 +269,30 @@ func deployStartup(ctx context.Context, reg *functions.Registry, addr string, o 
 	return nil
 }
 
+// stateSnapshot serves /_emu/snapshot from the live store and blobs. Snapshot
+// captures store state only, like Fork; a --data-dir store is not in memory and
+// is refused with a clear error.
+type stateSnapshot struct {
+	kv    store.Store
+	blobs *blob.Store
+}
+
+func (s stateSnapshot) WriteSnapshot(w io.Writer) error {
+	mem, ok := s.kv.(*store.Memory)
+	if !ok {
+		return gerr.New(gerr.FailedPrecondition, "snapshot needs an in-memory emulator; a --data-dir store persists on disk already")
+	}
+	return state.Write(w, mem.Snapshot(), s.blobs)
+}
+
+func (s stateSnapshot) ReadSnapshot(r io.Reader) error {
+	mem, ok := s.kv.(*store.Memory)
+	if !ok {
+		return gerr.New(gerr.FailedPrecondition, "restore needs an in-memory emulator")
+	}
+	return state.Read(r, mem, s.blobs)
+}
+
 // selfEnv lets a function reach sibling services over a plain `cloudrig start`,
 // with no manual emulator-host wiring. An explicit value in the environment
 // wins, so a function can still be pointed elsewhere.
@@ -342,7 +369,8 @@ func serveForTest(t testing.TB, o Options, stack storageStack) *Emulator {
 	runReg := cloudrun.NewRegistry()
 	t.Cleanup(runReg.StopAll)
 	drain := func() { drainAsync(cssvc, bus, ctsvc) }
-	handler, closeAPIs := newHandler(o.Clock, o, reg, runReg, stack.svc, psvc, smsvc, ctsvc, cssvc, susvc, gksvc, lgsvc, newGRPC(o.Clock, flt, psvc, fsvc, smsvc, ctsvc, cssvc, gksvc, lgsvc), flt, drain)
+	snap := stateSnapshot{kv: stack.kvStore, blobs: stack.blobs}
+	handler, closeAPIs := newHandler(o.Clock, o, reg, runReg, stack.svc, psvc, smsvc, ctsvc, cssvc, susvc, gksvc, lgsvc, newGRPC(o.Clock, flt, psvc, fsvc, smsvc, ctsvc, cssvc, gksvc, lgsvc), flt, snap, drain)
 	t.Cleanup(closeAPIs)
 
 	srv := httptest.NewUnstartedServer(handler)
@@ -465,7 +493,7 @@ func routeV1(fallback http.Handler, services ...matcher) http.Handler {
 
 // newHandler builds the request surface and returns what it must tear down:
 // the API objects own temporary directories, and nothing else can reach them.
-func newHandler(clk clock.Clock, o Options, reg *functions.Registry, runReg *cloudrun.Registry, gcs *storage.Service, psvc *pubsub.Service, smsvc *secretmanager.Service, ctsvc *cloudtasks.Service, cssvc *cloudscheduler.Service, susvc *serviceusage.Service, gksvc *gke.Service, lgsvc *cloudlogging.Service, grpcSrv http.Handler, flt *faults.Set, drain func()) (http.Handler, func()) {
+func newHandler(clk clock.Clock, o Options, reg *functions.Registry, runReg *cloudrun.Registry, gcs *storage.Service, psvc *pubsub.Service, smsvc *secretmanager.Service, ctsvc *cloudtasks.Service, cssvc *cloudscheduler.Service, susvc *serviceusage.Service, gksvc *gke.Service, lgsvc *cloudlogging.Service, grpcSrv http.Handler, flt *faults.Set, snap transport.Snapshotter, drain func()) (http.Handler, func()) {
 	configured := o.Runner
 	if configured == "" {
 		configured = "auto"
@@ -523,6 +551,7 @@ func newHandler(clk clock.Clock, o Options, reg *functions.Registry, runReg *clo
 		Services:  runReg,
 		GRPC:      grpcSrv,
 		Faults:    flt,
+		Snapshot:  snap,
 		Reset: func(ctx context.Context, project string) error {
 			return resetAll(ctx, project, runReg, susvc, lgsvc, gcs)
 		},

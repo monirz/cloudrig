@@ -164,6 +164,42 @@ func (c client) logs(ctx context.Context, sc scope, name string, follow bool, ou
 	return nil
 }
 
+// snapshotSave streams the emulator's state archive to w.
+func (c client) snapshotSave(ctx context.Context, w io.Writer) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.endpoint+"/_emu/snapshot", nil)
+	if err != nil {
+		return err
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("%s: is the emulator running? (cloudrig start)", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		return fmt.Errorf("%s", envelopeMessage(resp))
+	}
+	_, err = io.Copy(w, resp.Body)
+	return err
+}
+
+// snapshotRestore uploads a state archive read from r.
+func (c client) snapshotRestore(ctx context.Context, r io.Reader) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.endpoint+"/_emu/snapshot", r)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/x-tar")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("%s: is the emulator running? (cloudrig start)", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		return fmt.Errorf("%s", envelopeMessage(resp))
+	}
+	return nil
+}
+
 // scope narrows a request to a project and location.
 type scope struct{ project, location string }
 

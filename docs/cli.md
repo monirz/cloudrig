@@ -13,6 +13,9 @@ cloudrig fn invoke <name> [--data JSON]
 cloudrig fn logs   <name> [-f]
 cloudrig fn list | describe <name> | delete <name>
 cloudrig fn run <dir>      # starts its own emulator, no daemon
+
+cloudrig snapshot <file>   # save running state ("-" for stdout)
+cloudrig restore <file>    # load state back ("-" for stdin)
 ```
 
 - `--runtime` is detected from the source: `package.json` → nodejs20, `go.mod`

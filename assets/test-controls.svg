@@ -1,0 +1,67 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 500" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif" role="img" aria-label="CloudRig test controls acting on one live pipeline">
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#5a6472"/>
+    </marker>
+  </defs>
+
+  <rect x="1" y="1" width="998" height="498" rx="18" fill="#ffffff" stroke="#dfe3ea" stroke-width="1.5"/>
+
+  <text x="32" y="30" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="12" letter-spacing="1.6" fill="#5a6472">THE SYSTEM UNDER TEST</text>
+
+  <!-- pipeline flow -->
+  <g stroke="#5a6472" stroke-width="2" fill="none" marker-end="url(#arrow)">
+    <path d="M180 242 H244"/>
+    <path d="M400 242 H464"/>
+    <path d="M620 242 H684"/>
+  </g>
+
+  <!-- nodes -->
+  <g>
+    <rect x="30" y="210" width="150" height="64" rx="11" fill="#f3f5f8" stroke="#d5dae2" stroke-width="1.5"/>
+    <text x="105" y="240" text-anchor="middle" font-size="19" font-weight="700" fill="#171b24">Your app</text>
+    <text x="105" y="294" text-anchor="middle" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="12.5" fill="#5a6472">uploads a file</text>
+
+    <rect x="250" y="210" width="150" height="64" rx="11" fill="#f3f5f8" stroke="#d5dae2" stroke-width="1.5"/>
+    <text x="325" y="240" text-anchor="middle" font-size="19" font-weight="700" fill="#171b24">Function</text>
+    <text x="325" y="294" text-anchor="middle" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="12.5" fill="#5a6472">runs on the upload</text>
+
+    <rect x="470" y="210" width="150" height="64" rx="11" fill="#f3f5f8" stroke="#d5dae2" stroke-width="1.5"/>
+    <text x="545" y="240" text-anchor="middle" font-size="19" font-weight="700" fill="#171b24">Pub/Sub</text>
+    <text x="545" y="294" text-anchor="middle" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="12.5" fill="#5a6472">fans out the event</text>
+
+    <rect x="690" y="210" width="150" height="64" rx="11" fill="#f3f5f8" stroke="#d5dae2" stroke-width="1.5"/>
+    <text x="765" y="240" text-anchor="middle" font-size="19" font-weight="700" fill="#171b24">Cloud Task</text>
+    <text x="765" y="294" text-anchor="middle" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="12.5" fill="#5a6472">retries on a queue</text>
+  </g>
+
+  <!-- clock on the Cloud Task -->
+  <g stroke="#2f6fe0" stroke-width="2" fill="none">
+    <circle cx="838" cy="196" r="15" fill="#ffffff"/>
+    <path d="M838 196 V186 M838 196 L845 200" stroke-linecap="round"/>
+  </g>
+
+  <!-- FAULT -->
+  <circle cx="435" cy="242" r="13" fill="#d83b47"/>
+  <path d="M437 234 l-6 8 h5 l-3 8 8 -10 h-5 z" fill="#ffffff"/>
+  <line x1="435" y1="160" x2="435" y2="227" stroke="#d83b47" stroke-width="1.6" stroke-dasharray="3 4"/>
+  <path d="M270 44 h276 a12 12 0 0 1 12 12 v72 a12 12 0 0 1 -12 12 h-99 l-12 18 -12 -18 h-153 a12 12 0 0 1 -12 -12 v-72 a12 12 0 0 1 12 -12 z" fill="#ffffff" stroke="#d83b47" stroke-width="1.6"/>
+  <text x="290" y="80" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="14" font-weight="600" letter-spacing="1.2" fill="#d83b47">FAULT INJECTION</text>
+  <text x="290" y="104" font-size="14" fill="#171b24">Fail the Pub/Sub publish 1 in 5.</text>
+  <text x="290" y="124" font-size="14" fill="#171b24">Do your retries really recover?</text>
+
+  <!-- TIME -->
+  <line x1="838" y1="160" x2="838" y2="181" stroke="#2f6fe0" stroke-width="1.6" stroke-dasharray="3 4"/>
+  <path d="M640 44 h286 a12 12 0 0 1 12 12 v72 a12 12 0 0 1 -12 12 h-76 l-12 18 -12 -18 h-176 a12 12 0 0 1 -12 -12 v-72 a12 12 0 0 1 12 -12 z" fill="#ffffff" stroke="#2f6fe0" stroke-width="1.6"/>
+  <text x="660" y="80" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="14" font-weight="600" letter-spacing="1.2" fill="#2f6fe0">TIME TRAVEL</text>
+  <text x="660" y="104" font-size="14" fill="#171b24">Jump the clock an hour, and every</text>
+  <text x="660" y="124" font-size="14" fill="#171b24">retry and timeout fires now.</text>
+
+  <!-- SNAPSHOT -->
+  <path d="M30 322 V332 H840 V322" fill="none" stroke="#1f9d63" stroke-width="1.8"/>
+  <line x1="240" y1="354" x2="240" y2="333" stroke="#1f9d63" stroke-width="1.6" stroke-dasharray="3 4"/>
+  <path d="M30 384 a12 12 0 0 1 12 -12 h186 l12 -18 12 18 h190 a12 12 0 0 1 12 12 v66 a12 12 0 0 1 -12 12 h-400 a12 12 0 0 1 -12 -12 z" fill="#ffffff" stroke="#1f9d63" stroke-width="1.6"/>
+  <text x="50" y="408" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="14" font-weight="600" letter-spacing="1.2" fill="#1f9d63">SNAPSHOT + RESTORE</text>
+  <text x="50" y="432" font-size="14" fill="#171b24">Save this whole world to a file,</text>
+  <text x="50" y="452" font-size="14" fill="#171b24">reload it before every test.</text>
+</svg>
