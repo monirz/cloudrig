@@ -137,6 +137,9 @@ usage:
   cloudrig fault list                show armed faults
   cloudrig fault clear               disarm every fault
 
+  cloudrig snapshot <file>           save a running emulator's state to a file
+  cloudrig restore <file>            load state from a file
+
 start flags:
   --port N          port to listen on (default %d, env CLOUDRIG_PORT)
   --runner MODE     function runner: %v (default %q, env CLOUDRIG_RUNNER)

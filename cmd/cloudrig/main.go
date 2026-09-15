@@ -49,6 +49,12 @@ func run(args []string, env lookupEnv, stdout, stderr *os.File) error {
 	if len(args) > 0 && args[0] == cmdFault {
 		return runFaultCommand(args[1:], env, stdout, stderr)
 	}
+	if len(args) > 0 && args[0] == cmdSnapshot {
+		return runSnapshotCommand(args[1:], env, stdout, stderr)
+	}
+	if len(args) > 0 && args[0] == cmdRestore {
+		return runRestoreCommand(args[1:], env, stdout, stderr)
+	}
 
 	cfg, err := parseConfig(args, env, stderr)
 	if err != nil {
