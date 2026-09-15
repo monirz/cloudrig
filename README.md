@@ -32,6 +32,25 @@ tests can deterministically control time, failures, and state.
 
 ---
 
+## Test controls
+
+Provoke the failures, delays, and starting conditions a test needs, all against
+one live pipeline:
+
+<p align="center">
+  <img src="assets/test-controls.svg" alt="One pipeline (app to function to Pub/Sub to Cloud Task) with three controls acting on it: fault injection fails the Pub/Sub publish, time travel fast-forwards the clock to fire the task retries, and snapshot/restore saves and reloads the whole state." width="820">
+</p>
+
+```sh
+cloudrig fault pubsub --failure-rate 0.2   # make a dependency flake, prove your retries hold
+cloudrig clock advance 1h                  # fire every scheduled job, retry and TTL now
+cloudrig snapshot seed.tar                 # save a seeded world; restore it before each test
+```
+
+More: [fault injection](docs/fault-injection.md) and [time travel](docs/time-travel.md).
+
+---
+
 ## Install
 
 Pick one. All three put a `cloudrig` binary on your PATH.
