@@ -1,0 +1,14 @@
+# Coverage counts product code, not the runnable examples.
+coverage:
+  status:
+    project:
+      default:
+        target: 85%
+        threshold: 1%
+        informational: true # report progress toward the goal, never fail CI
+    patch:
+      default:
+        informational: true
+
+ignore:
+  - "examples/**"
