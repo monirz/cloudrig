@@ -41,10 +41,10 @@ jobs:
           go test ./... -covermode=atomic \
             -coverpkg="$(go list ./... | grep -v /examples | paste -sd, -)" \
             -coverprofile=coverage.out
-      - uses: codecov/codecov-action@5975040f7f7d40edaff8d784b576fd65ae95c073 # v5.5.5
+      - name: Upload coverage reports to Codecov
+        uses: codecov/codecov-action@v5
         with:
-          files: coverage.out
-          fail_ci_if_error: false
+          files: coverage.out # a Go profile is not auto-detected; name it
           token: ${{ secrets.CODECOV_TOKEN }}
 
   vuln:
