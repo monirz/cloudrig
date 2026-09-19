@@ -15,7 +15,7 @@ set -eu
 
 # Pinned, not @latest: CI must run the reviewed scanner, not whatever ships
 # next. Bump this deliberately and let the change go through review.
-GOVULNCHECK=golang.org/x/vuln/cmd/govulncheck@v1.7.0
+GOVULNCHECK=golang.org/x/vuln/cmd/govulncheck@v1.8.0
 
 ALLOW="GO-2026-4887 GO-2026-4883"
 
