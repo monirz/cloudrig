@@ -114,7 +114,7 @@ func start(ctx context.Context, svc Service, source string, o Options) (*Instanc
 		}
 		cleanup()
 	}
-	if err := awaitListen(ctx, addr, child); err != nil {
+	if err := awaitListen(ctx, addr, child, nil); err != nil {
 		tail := logs.Tail(20)
 		stop()
 		if tail != "" {
@@ -179,15 +179,19 @@ func after(d time.Duration) <-chan struct{} {
 }
 
 // awaitListen waits until the service accepts a connection, which is the only
-// readiness signal Cloud Run's contract offers.
-func awaitListen(ctx context.Context, addr string, c *child) error {
+// readiness signal Cloud Run's contract offers. A non-nil probe must also
+// accept the connection before it counts.
+func awaitListen(ctx context.Context, addr string, c *child, probe func(net.Conn) bool) error {
 	deadline := after(StartupTimeout)
 
 	for {
 		conn, err := net.DialTimeout("tcp", addr, 200*time.Millisecond)
 		if err == nil {
+			ready := probe == nil || probe(conn)
 			_ = conn.Close()
-			return nil
+			if ready {
+				return nil
+			}
 		}
 
 		select {
