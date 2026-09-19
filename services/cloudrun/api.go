@@ -43,7 +43,6 @@ func NewAPI(reg *Registry) *API {
 	const global = "/v1/projects/{project}/locations/{location}/services"
 	a.router.Handle(http.MethodGet, global, a.listGlobal)
 	a.router.Handle(http.MethodGet, global+"/{name}", a.getGlobal)
-	a.router.Handle(http.MethodGet, global+"/{name}:getIamPolicy", a.getIamPolicy)
 	a.router.Handle(http.MethodDelete, global+"/{name}", a.deleteGlobal)
 
 	// The IAM verbs gcloud calls on the way to a deploy. The name segment
@@ -215,6 +214,10 @@ func (a *API) listGlobal(w http.ResponseWriter, r *http.Request, p transport.Par
 }
 
 func (a *API) getGlobal(w http.ResponseWriter, r *http.Request, p transport.Params) error {
+	// The router captures {name}:getIamPolicy whole, as it does the POST verbs.
+	if _, verb, ok := strings.Cut(p["name"], ":"); ok && verb == "getIamPolicy" {
+		return a.getIamPolicy(w, r, p)
+	}
 	svc, ok := a.reg.Describe(p["project"], p["location"], p["name"])
 	if !ok {
 		return notFound(p["name"])
