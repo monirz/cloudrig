@@ -4,7 +4,7 @@ Contributions, bug reports and ideas are welcome.
 
 ## Build and test
 
-Requires Go 1.25+.
+Requires Go 1.26+.
 
 ```sh
 git clone https://github.com/monirz/cloudrig && cd cloudrig
