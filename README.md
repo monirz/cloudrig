@@ -31,7 +31,6 @@ tests can deterministically control time, failures, and state.
   <a href="https://github.com/monirz/cloudrig/actions/workflows/ci.yml"><img src="https://github.com/monirz/cloudrig/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="https://codecov.io/gh/monirz/cloudrig"><img src="https://codecov.io/gh/monirz/cloudrig/branch/main/graph/badge.svg" alt="Coverage"></a>
   <a href="https://pkg.go.dev/github.com/monirz/cloudrig"><img src="https://pkg.go.dev/badge/github.com/monirz/cloudrig.svg" alt="Go Reference"></a>
-  <a href="https://goreportcard.com/report/github.com/monirz/cloudrig"><img src="https://goreportcard.com/badge/github.com/monirz/cloudrig" alt="Go Report Card"></a>
   <a href="https://github.com/monirz/cloudrig/releases"><img src="https://img.shields.io/github/v/release/monirz/cloudrig" alt="Release"></a>
   <a href="LICENSE"><img src="https://img.shields.io/github/license/monirz/cloudrig" alt="License"></a>
 </p>
