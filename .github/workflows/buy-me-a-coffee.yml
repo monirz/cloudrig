@@ -6,12 +6,15 @@ on:
     - cron: "0 0 * * *" # daily at 00:00 UTC
 
 permissions:
-  contents: write # the action commits the updated README
+  contents: read
 
 jobs:
   bmac-readme:
     name: Update the Buy Me A Coffee section in the README
     runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write # the action commits the updated README
     steps:
       - uses: akosbalasko/coffee-readme@021a2db498f0682fe902eca059c04cc800825c0a # 1.0.4
         with:
