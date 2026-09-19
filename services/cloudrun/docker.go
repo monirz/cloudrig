@@ -5,16 +5,19 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http/httputil"
 	"net/url"
 	"strconv"
 	"sync"
+	"time"
 
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/client"
 	"github.com/docker/go-connections/nat"
 
+	"github.com/monirz/cloudrig/core/clock"
 	"github.com/monirz/cloudrig/core/logring"
 )
 
@@ -130,7 +133,7 @@ func startContainer(ctx context.Context, svc Service, o Options) (*Instance, err
 	}
 
 	stopped := containerExit(context.WithoutCancel(ctx), cli, created.ID)
-	if err := awaitListen(ctx, addr, stopped); err != nil {
+	if err := awaitListen(ctx, addr, stopped, heldOpen); err != nil {
 		tail := logs.Tail(20)
 		remove()
 		if tail != "" {
@@ -151,6 +154,16 @@ func startContainer(ctx context.Context, svc Service, o Options) (*Instance, err
 		containerID: created.ID,
 		cleanup:     remove,
 	}, nil
+}
+
+// heldOpen reports whether the service itself took the connection. Docker's
+// userland proxy accepts on the host port before the container listens, then
+// closes at once; a real server holds the connection waiting for a request.
+func heldOpen(conn net.Conn) bool {
+	_ = conn.SetReadDeadline(clock.Real().Now().Add(100 * time.Millisecond))
+	_, err := conn.Read(make([]byte, 1))
+	var timeout net.Error
+	return err == nil || errors.As(err, &timeout) && timeout.Timeout()
 }
 
 // containerEnv is what Cloud Run guarantees a container, plus the deploy's own.

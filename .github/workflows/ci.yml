@@ -24,6 +24,29 @@ jobs:
       - name: check
         run: make check
 
+  coverage:
+    # Coverage on one runner, with gcloud installed so the compatibility tests
+    # run for real instead of skipping. -coverpkg counts code any test reaches,
+    # so the conformance suite's coverage of every service is credited.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+          check-latest: true
+      - uses: google-github-actions/setup-gcloud@e427ad8a34f8676edf47cf7d7925499adf3eb74f # v2.2.1
+      - name: coverage
+        run: |
+          go test ./... -covermode=atomic \
+            -coverpkg="$(go list ./... | grep -v /examples | paste -sd, -)" \
+            -coverprofile=coverage.out
+      - name: Upload coverage reports to Codecov
+        uses: codecov/codecov-action@v5
+        with:
+          files: coverage.out # a Go profile is not auto-detected; name it
+          token: ${{ secrets.CODECOV_TOKEN }}
+
   vuln:
     # Its own job: a vulnerability database changes without this repo changing,
     # so a red scan should not read as a broken build. One runner is enough —
