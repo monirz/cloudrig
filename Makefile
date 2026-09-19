@@ -1,51 +1,64 @@
 GO ?= go
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 
-.PHONY: all build test vet lint fmt vuln check clean
+.DEFAULT_GOAL := help
+.PHONY: help all build tests test-unit test-integration coverage vet lint fmt fmt-check tidy vuln check clean
+
+help: ## List targets
+	@grep -hE '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-17s %s\n", $$1, $$2}'
 
 all: check
 
-# Stamps the version from git so `cloudrig start` reports something real.
-build:
+## Build
+
+build: ## Build ./cloudrig with the git version stamped in
 	$(GO) build -ldflags "-X main.version=$(VERSION)" -o cloudrig ./cmd/cloudrig
 
-test:
+## Test
+
+tests: ## Full suite with -race: unit and integration
 	$(GO) test -race ./...
 
-vet:
+test-unit: ## Fast tests only; skips what checks testing.Short()
+	$(GO) test -race -short ./...
+
+# Go cannot select only the tests -short skips, so this is the full suite.
+test-integration: tests ## Docker, gcloud and compile-heavy tests (full suite)
+
+coverage: ## coverage.out over product code, examples excluded
+	$(GO) test ./... -covermode=atomic -coverprofile=coverage.out \
+		-coverpkg="$$($(GO) list ./... | grep -v /examples | paste -sd, -)"
+
+## Quality
+
+vet: ## go vet
 	$(GO) vet ./...
 
-# The timer check is a go test over go/ast rather than a vet analyzer or a
-# golangci-lint config: go vet ships nothing for it, and forbidigo would be a
-# dependency for eighty lines of walk. `make test` runs it too; this target
-# exists so CI and a developer can ask for it by name.
-lint:
+# A go test over go/ast: go vet has no timer check, and forbidigo is not worth a dependency.
+lint: ## Timer lint
 	$(GO) test ./lint/
 
-fmt:
+fmt: ## Apply gofumpt, falling back to gofmt
 	$(GO) run mvdan.cc/gofumpt@latest -l -w . 2>/dev/null || gofmt -l -w .
 
-# Reports only vulnerabilities something here actually reaches, so a finding is
-# a call path rather than a version number in the dependency graph.
-#
-# GOWORK=off because a local go.work shadows the module's toolchain line, and
-# the toolchain decides which standard library is scanned: inside a workspace
-# this reports vulnerabilities the released module does not have.
-vuln:
+tidy: ## go mod tidy
+	$(GO) mod tidy
+
+# GOWORK=off inside the script: a local go.work would shadow the module's toolchain.
+vuln: ## govulncheck, reachable paths only
 	@GO=$(GO) sh scripts/vuln.sh
 
-# check is what CI runs. gofmt is enforced rather than applied, so a formatting
-# fix is a commit the author made, not a diff CI leaves behind.
-# Builds the binary too: a stale ./cloudrig is an easy way to test the wrong
-# code by hand.
-check: vet lint build
-	$(GO) build ./...
+# Verifies, never rewrites: a formatting fix is the author's commit, not CI's diff.
+fmt-check: ## Fail if any file is not gofmt'd
 	@unformatted=$$(gofmt -l .); \
 	if [ -n "$$unformatted" ]; then \
 		echo "not gofmt'd:"; echo "$$unformatted"; exit 1; \
 	fi
-	$(GO) test -race ./...
 
-clean:
-	rm -f cloudrig
+check: vet lint fmt-check build tests ## What CI runs: vet, lint, gofmt, tidy, build, race tests
+	$(GO) mod tidy -diff
+	$(GO) build ./...
+
+clean: ## Remove the binary, coverage output and test cache
+	rm -f cloudrig coverage.out
 	$(GO) clean -testcache

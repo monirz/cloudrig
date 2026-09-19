@@ -5,58 +5,120 @@ on:
     branches: [main]
   pull_request:
 
+# Read-only by default; a job that needs more asks for it.
+permissions:
+  contents: read
+
+# A new push to a PR supersedes the run in flight; main runs every commit.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  GO_VERSION: '1.25'
+
 jobs:
   test:
     # Two runners on purpose: the library entry point must work with no Docker
     # daemon present, and the macOS runner has none.
     strategy:
+      fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
-          go-version: '1.25'
+          persist-credentials: false
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
           check-latest: true
-      # One target, so CI and a developer run the same thing. make check is
-      # build + vet + the timer lint + gofmt + go test -race.
+      # One target, so CI and a developer run the same thing.
       - name: check
         run: make check
 
   coverage:
-    # Coverage on one runner, with gcloud installed so the compatibility tests
-    # run for real instead of skipping. -coverpkg counts code any test reaches,
-    # so the conformance suite's coverage of every service is credited.
+    # gcloud installed so the compatibility tests run instead of skipping.
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
-          go-version: '1.25'
+          persist-credentials: false
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
           check-latest: true
       - uses: google-github-actions/setup-gcloud@e427ad8a34f8676edf47cf7d7925499adf3eb74f # v2.2.1
       - name: coverage
-        run: |
-          go test ./... -covermode=atomic \
-            -coverpkg="$(go list ./... | grep -v /examples | paste -sd, -)" \
-            -coverprofile=coverage.out
+        run: make coverage
       - name: Upload coverage reports to Codecov
-        uses: codecov/codecov-action@v5
+        uses: codecov/codecov-action@0fb7174895f61a3b6b78fc075e0cd60383518dac # v5.5.5
         with:
           files: coverage.out # a Go profile is not auto-detected; name it
           token: ${{ secrets.CODECOV_TOKEN }}
 
-  vuln:
-    # Its own job: a vulnerability database changes without this repo changing,
-    # so a red scan should not read as a broken build. One runner is enough —
-    # the report is about the module and its dependencies, not the platform.
+  lint:
+    # PR-only and new issues only until the existing findings are fixed;
+    # then drop both and lint every push.
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: read # only-new-issues reads the PR diff
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
-          go-version: '1.25'
+          persist-credentials: false
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          check-latest: true
+      - uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
+        with:
+          version: v2.13.2
+          only-new-issues: true
+
+  vuln:
+    # Its own job: the vulnerability database changes without this repo
+    # changing, so a red scan should not read as a broken build.
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
           check-latest: true
       - name: govulncheck
         run: make vuln
+
+  dependency-review:
+    # Blocks a PR that adds a known-vulnerable dependency, before it merges.
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
+
+  zizmor:
+    # Audits the workflows themselves. Fails the job rather than uploading
+    # SARIF, so it needs no extra permissions and works on fork PRs.
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: zizmorcore/zizmor-action@cc914d7f3750a2d13d75c7f184a1060aa0e9d482 # v0.6.4
+        with:
+          version: 1.30.1
+          advanced-security: false

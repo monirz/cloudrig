@@ -1,0 +1,27 @@
+version: "2"
+
+linters:
+  default: standard # errcheck, govet, ineffassign, staticcheck, unused
+  enable:
+    - bodyclose
+    - durationcheck
+    - errorlint
+    - gocritic
+    - misspell
+    - nilerr
+    - noctx
+    - unconvert
+    - wastedassign
+  exclusions:
+    rules:
+      # An unchecked Close or a context-free request is normal in a test.
+      - path: _test\.go
+        linters: [errcheck, noctx]
+
+formatters:
+  enable:
+    - gofumpt
+    - gci
+  settings:
+    gci:
+      sections: [standard, default, prefix(github.com/monirz/cloudrig)]
