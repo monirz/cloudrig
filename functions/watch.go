@@ -99,7 +99,7 @@ func fingerprint(dir string) string {
 			// error keeps the fingerprint different from the run before.
 			b.WriteString(path)
 			b.WriteString("!\n")
-			return nil
+			return nil //nolint:nilerr // the error is the fingerprint here
 		}
 		if d.IsDir() {
 			if path != dir && skipDirs[d.Name()] {
@@ -109,7 +109,7 @@ func fingerprint(dir string) string {
 		}
 		info, err := d.Info()
 		if err != nil {
-			return nil
+			return nil //nolint:nilerr // a file that vanished is a change, not a failure
 		}
 		b.WriteString(path)
 		b.WriteByte(0)

@@ -21,6 +21,11 @@ linters:
       # An unchecked Close or a context-free request is normal in a test.
       - path: _test\.go
         linters: [errcheck, noctx]
+      # GKE's proto deprecates project/zone/cluster ids, but gcloud still
+      # sends them, so the emulator has to read and answer with them.
+      - path: services/gke/
+        linters: [staticcheck]
+        text: "SA1019"
 
 formatters:
   enable:

@@ -91,6 +91,7 @@ func TestBackgroundEventShape(t *testing.T) {
 func TestEventIDIsStable(t *testing.T) {
 	t.Parallel()
 
+	//nolint:staticcheck // SA4000: two separate calls, which is the point
 	if eventID(sample()) != eventID(sample()) {
 		t.Error("the same event produced two ids")
 	}

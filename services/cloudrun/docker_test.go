@@ -24,7 +24,7 @@ import (
 func testImage(t *testing.T) string {
 	t.Helper()
 
-	cli, err := client.New(client.FromEnv, client.WithAPIVersionNegotiation())
+	cli, err := client.New(client.FromEnv)
 	if err != nil {
 		t.Skipf("no Docker client: %v", err)
 	}
@@ -262,7 +262,7 @@ func TestContainerResourceLimits(t *testing.T) {
 		t.Fatalf("Deploy: %v", err)
 	}
 
-	cli, err := client.New(client.FromEnv, client.WithAPIVersionNegotiation())
+	cli, err := client.New(client.FromEnv)
 	if err != nil {
 		t.Fatal(err)
 	}

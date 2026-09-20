@@ -1,6 +1,7 @@
 package faults
 
 import (
+	"errors"
 	"net/http"
 	"testing"
 
@@ -114,7 +115,8 @@ func TestDefaults(t *testing.T) {
 // asError is errors.As, spelled locally to keep the test's imports honest
 // about what it is really asserting.
 func asError(err error, into **gerr.Error) bool {
-	g, ok := err.(*gerr.Error)
+	var g *gerr.Error
+	ok := errors.As(err, &g)
 	if ok {
 		*into = g
 	}

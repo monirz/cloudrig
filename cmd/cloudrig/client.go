@@ -148,7 +148,7 @@ func (c client) logs(ctx context.Context, sc scope, name string, follow bool, ou
 	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return fmt.Errorf("%s: is the emulator running? (cloudrig start)", err)
+		return fmt.Errorf("%w: is the emulator running? (cloudrig start)", err)
 	}
 	defer resp.Body.Close()
 
@@ -172,7 +172,7 @@ func (c client) snapshotSave(ctx context.Context, w io.Writer) error {
 	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return fmt.Errorf("%s: is the emulator running? (cloudrig start)", err)
+		return fmt.Errorf("%w: is the emulator running? (cloudrig start)", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 300 {
@@ -191,7 +191,7 @@ func (c client) snapshotRestore(ctx context.Context, r io.Reader) error {
 	req.Header.Set("Content-Type", "application/x-tar")
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return fmt.Errorf("%s: is the emulator running? (cloudrig start)", err)
+		return fmt.Errorf("%w: is the emulator running? (cloudrig start)", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 300 {
@@ -244,7 +244,7 @@ func (c client) do(ctx context.Context, method, path string, in, out any) error 
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return fmt.Errorf("%s: is the emulator running? (cloudrig start)", err)
+		return fmt.Errorf("%w: is the emulator running? (cloudrig start)", err)
 	}
 	defer resp.Body.Close()
 

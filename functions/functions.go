@@ -10,7 +10,8 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
-	"io/fs"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 )
@@ -118,25 +119,32 @@ func (f *Function) resolve() (launcher, error) {
 // EntryPoints lists the exported func(http.ResponseWriter, *http.Request) in
 // dir, sorted, so a caller can detect or report the candidates.
 func EntryPoints(dir string) ([]string, error) {
-	fset := token.NewFileSet()
-	pkgs, err := parser.ParseDir(fset, dir, nonTestGoFile, 0)
+	entries, err := os.ReadDir(dir)
 	if err != nil {
-		return nil, fmt.Errorf("parsing %s: %w", dir, err)
-	}
-	if len(pkgs) == 0 {
-		return nil, fmt.Errorf("no Go package in %s", dir)
+		return nil, fmt.Errorf("reading %s: %w", dir, err)
 	}
 
+	fset := token.NewFileSet()
 	var found []string
-	for _, pkg := range pkgs {
-		for _, file := range pkg.Files {
-			for _, decl := range file.Decls {
-				fn, ok := decl.(*ast.FuncDecl)
-				if ok && fn.Recv == nil && ast.IsExported(fn.Name.Name) && isHTTPHandler(fn.Type) {
-					found = append(found, fn.Name.Name)
-				}
+	parsed := 0
+	for _, e := range entries {
+		if e.IsDir() || !nonTestGoFile(e.Name()) {
+			continue
+		}
+		file, err := parser.ParseFile(fset, filepath.Join(dir, e.Name()), nil, 0)
+		if err != nil {
+			return nil, fmt.Errorf("parsing %s: %w", dir, err)
+		}
+		parsed++
+		for _, decl := range file.Decls {
+			fn, ok := decl.(*ast.FuncDecl)
+			if ok && fn.Recv == nil && ast.IsExported(fn.Name.Name) && isHTTPHandler(fn.Type) {
+				found = append(found, fn.Name.Name)
 			}
 		}
+	}
+	if parsed == 0 {
+		return nil, fmt.Errorf("no Go package in %s", dir)
 	}
 	sort.Strings(found)
 	return found, nil
@@ -204,6 +212,6 @@ func typeName(e ast.Expr) string {
 
 // nonTestGoFile filters _test.go out of a package parse: an entry point in a
 // test file would not compile into the shim.
-func nonTestGoFile(fi fs.FileInfo) bool {
-	return !strings.HasSuffix(fi.Name(), "_test.go")
+func nonTestGoFile(name string) bool {
+	return strings.HasSuffix(name, ".go") && !strings.HasSuffix(name, "_test.go")
 }

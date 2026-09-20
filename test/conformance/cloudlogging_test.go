@@ -2,6 +2,7 @@ package conformance
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -66,7 +67,7 @@ func list(t *testing.T, c *logging.Client, ctx context.Context, filter string) [
 	var out []*loggingpb.LogEntry
 	for {
 		e, err := it.Next()
-		if err == iterator.Done {
+		if errors.Is(err, iterator.Done) {
 			break
 		}
 		if err != nil {
