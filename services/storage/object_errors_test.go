@@ -24,7 +24,17 @@ type faultyStore struct {
 	failGet    func(key string) error
 	failPut    func(key string) error
 	failDelete func(key string) error
+	failList   func(prefix string) error
 	tamper     func(key string, val []byte) []byte
+}
+
+func (f *faultyStore) List(ctx context.Context, prefix string, limit int, token string) ([]store.KV, string, error) {
+	if f.failList != nil {
+		if err := f.failList(prefix); err != nil {
+			return nil, "", err
+		}
+	}
+	return f.Store.List(ctx, prefix, limit, token)
 }
 
 func (f *faultyStore) Get(ctx context.Context, key string) ([]byte, uint64, error) {
