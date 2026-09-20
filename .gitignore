@@ -33,3 +33,4 @@ terraform.tfstate*
 
 # macOS Finder metadata
 .DS_Store
+.demoframes/

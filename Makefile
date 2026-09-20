@@ -2,7 +2,7 @@ GO ?= go
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 
 .DEFAULT_GOAL := help
-.PHONY: help all build examples tests test-unit test-integration coverage vet lint fmt fmt-check tidy vuln release-check check clean
+.PHONY: help all build demo examples tests test-unit test-integration coverage vet lint fmt fmt-check tidy vuln release-check check clean
 
 help: ## List targets
 	@grep -hE '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-17s %s\n", $$1, $$2}'
@@ -33,6 +33,22 @@ examples: ## Build the nested example and fixture modules
 	@for m in $$(find examples testdata -name go.mod -not -path '*/node_modules/*' -exec dirname {} \;); do \
 		echo "  $$m"; (cd $$m && GOWORK=off $(GO) build ./...) || exit 1; \
 	done
+
+# The tape drives the built binary through PATH, so build first. vhs captures
+# the frames; ffmpeg encodes them, because vhs's own GIF step is broken against
+# current ffmpeg and fails without saying so.
+DEMO_FRAMES := .demoframes
+DEMO_FILTER := fps=14,scale=900:-1:flags=lanczos,split[a][b];\
+[a]palettegen=max_colors=192:stats_mode=diff[p];\
+[b][p]paletteuse=dither=bayer:bayer_scale=4:diff_mode=rectangle
+
+demo: build ## Re-record assets/demo.gif (needs vhs and ffmpeg)
+	@rm -rf $(DEMO_FRAMES)
+	vhs assets/demo.tape
+	ffmpeg -y -loglevel error -framerate 50 -i '$(DEMO_FRAMES)/frame-text-%05d.png' \
+		-filter_complex "$(DEMO_FILTER)" -loop 0 assets/demo.gif
+	@rm -rf $(DEMO_FRAMES)
+	@echo "  assets/demo.gif: $$(du -h assets/demo.gif | cut -f1)"
 
 ## Quality
 
