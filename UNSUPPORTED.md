@@ -143,8 +143,6 @@ Cloud Tasks:
 - OIDC/OAuth token minting on a task's request.
 - Rate limiting: a queue's max_dispatches_per_second and
   max_concurrent_dispatches are stored but not enforced; retry_config is.
-- ListTasks on a queue that does not exist returns an empty list rather than
-  NOT_FOUND; get, delete and the queue verbs do report a missing queue.
 
 
 Cloud Scheduler:

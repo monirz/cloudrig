@@ -271,21 +271,26 @@ func TestRESTMissingQueue(t *testing.T) {
 	t.Parallel()
 	a := newREST(t)
 
-	for _, path := range []string{restQueue, restQueue + "/tasks/t1"} {
+	for _, path := range []string{restQueue, restQueue + "/tasks", restQueue + "/tasks/t1"} {
 		if code, body := do(t, a, http.MethodGet, path, ""); code != http.StatusNotFound {
 			t.Errorf("GET %s = %d, want 404 (%s)", path, code, body)
 		}
 	}
 }
 
-// ListTasks is a prefix scan with no existence check, so an absent queue reads
-// as an empty one. Real Cloud Tasks answers 404; see UNSUPPORTED.md.
-func TestRESTListTasksOnAMissingQueue(t *testing.T) {
+// An empty queue and an absent one are different answers: a prefix scan alone
+// cannot tell them apart, so the queue is looked up first.
+func TestRESTListTasksSeparatesEmptyFromAbsent(t *testing.T) {
 	t.Parallel()
 	a := newREST(t)
+	mustCreateQueue(t, a)
 
 	code, body := do(t, a, http.MethodGet, restQueue+"/tasks", "")
-	if code != http.StatusOK || strings.Contains(body, "tasks") {
-		t.Errorf("list = %d %s, want an empty 200", code, body)
+	if code != http.StatusOK {
+		t.Errorf("an existing empty queue = %d %s, want 200", code, body)
+	}
+	code, body = do(t, a, http.MethodGet, restQueues+"/absent/tasks", "")
+	if code != http.StatusNotFound {
+		t.Errorf("an absent queue = %d %s, want 404", code, body)
 	}
 }

@@ -62,7 +62,13 @@ func (s *Service) GetTask(ctx context.Context, req *cloudtaskspb.GetTaskRequest)
 	return s.getTaskRecord(ctx, req.GetName())
 }
 
+// ListTasks reports a missing queue rather than an empty one: the prefix scan
+// alone cannot tell the two apart, and the real API answers NOT_FOUND.
 func (s *Service) ListTasks(ctx context.Context, req *cloudtaskspb.ListTasksRequest) (*cloudtaskspb.ListTasksResponse, error) {
+	if _, err := s.getQueueRecord(ctx, req.GetParent()); err != nil {
+		return nil, err
+	}
+
 	entries, _, err := s.kv.List(ctx, taskPrefix(req.GetParent()), 0, "")
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "listing tasks: %v", err)
