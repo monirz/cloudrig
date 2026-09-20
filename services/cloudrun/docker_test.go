@@ -282,3 +282,23 @@ func TestContainerResourceLimits(t *testing.T) {
 		t.Errorf("cpu = %d, want 5e8", got)
 	}
 }
+
+// An image the daemon does not have and cannot fetch is named as such, rather
+// than surfacing as a container that never starts.
+func TestDeployReportsAnUnfetchableImage(t *testing.T) {
+	if testing.Short() {
+		t.Skip("talks to a registry")
+	}
+	dockerOrSkip(t)
+	t.Parallel()
+
+	_, err := registry(t).Deploy(context.Background(), cloudrun.Service{
+		Name: "missing", Image: "cloudrig.invalid/no-such-image:nope",
+	}, cloudrun.Options{})
+	if err == nil {
+		t.Fatal("an unfetchable image was accepted")
+	}
+	if !strings.Contains(err.Error(), "could not be pulled") {
+		t.Errorf("err = %v, want it to say the image could not be pulled", err)
+	}
+}
