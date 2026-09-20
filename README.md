@@ -4,7 +4,7 @@
 
 # CloudRig
 
-### A local Google Cloud environment for realistic, deterministic integration testing.
+### Google Cloud, running locally.
 
 <p align="center">
   <a href="https://github.com/monirz/cloudrig/actions/workflows/ci.yml"><img src="https://github.com/monirz/cloudrig/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
@@ -15,8 +15,12 @@
   <a href="LICENSE"><img src="https://img.shields.io/github/license/monirz/cloudrig" alt="License"></a>
 </p>
 
-**Use it locally or in CI.** Run real GCP clients against a deterministic local
-environment — no GCP project or credentials required.
+**Use it locally or in CI.** Run real GCP clients — gcloud, Terraform, kubectl
+and the client libraries — against a deterministic local environment. No GCP
+project, no credentials, no network.
+
+> **On a mission to build the best Google Cloud emulator there is.**
+> If CloudRig saves you time, consider [supporting the work](#support).
 
 ```text
                          CloudRig
@@ -430,6 +434,10 @@ CloudRig emulates the following services:
 
 Full compatibility and limitations: [service guides](docs/services.md) ·
 [what's not supported](UNSUPPORTED.md).
+
+> **Eleven services and counting — on a mission to build the best Google Cloud
+> emulator there is.** If CloudRig saves you time, consider
+> [supporting the work](#support).
 
 ---
 
