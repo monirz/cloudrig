@@ -31,6 +31,21 @@ archives:
 checksum:
   name_template: checksums.txt
 
+# Keyless: cosign takes a short-lived certificate from the workflow's OIDC
+# token, so there is no private key to hold. Signing the checksum file covers
+# every artifact it lists.
+signs:
+  - cmd: cosign
+    certificate: "${artifact}.pem"
+    args:
+      - sign-blob
+      - "--output-certificate=${certificate}"
+      - "--output-signature=${signature}"
+      - "${artifact}"
+      - "--yes"
+    artifacts: checksum
+    output: true
+
 changelog:
   use: github
   sort: asc

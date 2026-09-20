@@ -3,6 +3,7 @@ package storage
 import (
 	"encoding/json"
 	"io"
+	"math"
 	"mime"
 	"mime/multipart"
 	"net/http"
@@ -215,6 +216,11 @@ func (a *API) listObjects(w http.ResponseWriter, r *http.Request, p transport.Pa
 	maxResults, err := optionalInt(q, "maxResults")
 	if err != nil {
 		return err
+	}
+	// Bounded before the conversion: on a 32-bit build int(maxResults) would
+	// wrap, and a wrapped negative reads as "no limit given".
+	if maxResults < 0 || maxResults > math.MaxInt32 {
+		return invalidParam("maxResults", q.Get("maxResults"))
 	}
 	res, err := a.svc.ListObjects(r.Context(), project, ListRequest{
 		Bucket:     p["bucket"],

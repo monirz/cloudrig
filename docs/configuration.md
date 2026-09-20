@@ -5,6 +5,7 @@ twin (an explicit flag wins).
 
 | Flag | Env | Default | Meaning |
 |---|---|---|---|
+| `--host H` | `CLOUDRIG_HOST` | `127.0.0.1` | Address to listen on. Empty means every interface: there is no auth, so only on a network you trust. |
 | `--port N` | `CLOUDRIG_PORT` | `4599` | Port to serve everything on. `0` picks a free one. |
 | `--runner MODE` | `CLOUDRIG_RUNNER` | `auto` | Function runner: `auto`, `subprocess` or `none`. |
 | `--data-dir DIR` | `CLOUDRIG_DATA_DIR` | (memory) | Persist Cloud Storage across restarts. |

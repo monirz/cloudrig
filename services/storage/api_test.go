@@ -96,6 +96,9 @@ func TestAPIWalk(t *testing.T) {
 		{method: "GET", path: "/bkt/nope", want: 404},
 		{method: "GET", path: "/missing/a.txt", want: 404},
 		{method: "GET", path: o + "?maxResults=x", want: 400},
+		// Out of int32 range: int(maxResults) would wrap on a 32-bit build.
+		{method: "GET", path: o + "?maxResults=-1", want: 400},
+		{method: "GET", path: o + "?maxResults=4294967296", want: 400},
 		{method: "GET", path: o + "?maxResults=1", want: 200},
 		{method: "GET", path: o + "?delimiter=/", want: 200},
 		{method: "GET", path: b + "/missing/o", want: 404},

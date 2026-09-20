@@ -70,7 +70,14 @@ func safeJoin(root, name string) (string, error) {
 	if filepath.IsAbs(clean) || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
 		return "", fmt.Errorf("archive entry %q escapes the destination", name)
 	}
-	return filepath.Join(root, clean), nil
+
+	// Checked again after joining: the entry's own shape is not the only way
+	// out, and this is the property that matters — the result is under root.
+	dest := filepath.Join(root, clean)
+	if !strings.HasPrefix(dest, filepath.Clean(root)+string(filepath.Separator)) {
+		return "", fmt.Errorf("archive entry %q escapes the destination", name)
+	}
+	return dest, nil
 }
 
 // installDeps runs npm install when an extracted Node source has none.

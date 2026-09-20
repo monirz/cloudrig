@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net"
 	"slices"
 	"strconv"
 	"time"
@@ -14,6 +15,7 @@ import (
 
 // config is everything cloudrig start takes.
 type config struct {
+	host       string
 	port       int
 	runner     string
 	dataDir    string
@@ -36,6 +38,7 @@ var clockModes = []string{"real", "virtual"}
 
 const (
 	defaultPort   = 4599
+	defaultHost   = "127.0.0.1"
 	defaultRunner = "auto"
 	defaultClock  = "real"
 )
@@ -75,12 +78,18 @@ func parseConfig(args []string, env lookupEnv, out io.Writer) (config, error) {
 		}
 		port = n
 	}
+	host := defaultHost
+	if v, ok := env("CLOUDRIG_HOST"); ok {
+		host = v
+	}
 	runner := defaultRunner
 	if v, ok := env("CLOUDRIG_RUNNER"); ok {
 		runner = v
 	}
 
 	fs.IntVar(&port, "port", port, "port to listen on (env CLOUDRIG_PORT)")
+	fs.StringVar(&host, "host", host,
+		"address to listen on; empty means every interface (env CLOUDRIG_HOST)")
 	fs.StringVar(&runner, "runner", runner,
 		fmt.Sprintf("function runner: %v (env CLOUDRIG_RUNNER)", runnerModes))
 
@@ -112,7 +121,7 @@ func parseConfig(args []string, env lookupEnv, out io.Writer) (config, error) {
 		return config{}, fmt.Errorf("unexpected argument %q", rest[0])
 	}
 
-	c := config{port: port, runner: runner, dataDir: dataDir, clock: clk, clockStart: clockStart}
+	c := config{host: host, port: port, runner: runner, dataDir: dataDir, clock: clk, clockStart: clockStart}
 	return c, c.validate()
 }
 
@@ -120,7 +129,7 @@ func usage(out io.Writer) {
 	fmt.Fprintf(out, `cloudrig - a local emulator for Google Cloud APIs
 
 usage:
-  cloudrig %s [--port N] [--runner %v]
+  cloudrig %s [--host H] [--port N] [--runner %v]
 
   cloudrig %s deploy <name> --source DIR [--runtime R] [--entry-point F]
                             [--watch] [--trigger-bucket B] [--trigger-topic T]
@@ -141,6 +150,8 @@ usage:
   cloudrig restore <file>            load state from a file
 
 start flags:
+  --host H          address to listen on (default %q, env CLOUDRIG_HOST);
+                    empty listens on every interface — no auth, so trust the network
   --port N          port to listen on (default %d, env CLOUDRIG_PORT)
   --runner MODE     function runner: %v (default %q, env CLOUDRIG_RUNNER)
   --data-dir DIR    persist Cloud Storage here (default: in memory)
@@ -163,7 +174,7 @@ fn run starts its own and needs no daemon.
 Every flag has a CLOUDRIG_ environment twin; an explicit flag wins.
 `, cmdStart, runnerModes,
 		cmdFn, cmdFn, cmdFn, cmdFn, cmdFn,
-		defaultPort, runnerModes, defaultRunner,
+		defaultHost, defaultPort, runnerModes, defaultRunner,
 		functions.KnownRuntimes(), defaultEndpoint)
 }
 
@@ -207,4 +218,4 @@ func (c config) startTime() (time.Time, error) {
 	return t, nil
 }
 
-func (c config) addr() string { return fmt.Sprintf(":%d", c.port) }
+func (c config) addr() string { return net.JoinHostPort(c.host, strconv.Itoa(c.port)) }
