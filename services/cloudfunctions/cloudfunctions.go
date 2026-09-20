@@ -17,10 +17,9 @@ import (
 
 	"github.com/monirz/cloudrig/core/clock"
 	"github.com/monirz/cloudrig/core/gerr"
+	"github.com/monirz/cloudrig/core/tmp"
 	"github.com/monirz/cloudrig/functions"
 	"github.com/monirz/cloudrig/transport"
-
-	"github.com/monirz/cloudrig/core/tmp"
 )
 
 // Prefixes are the path prefixes this service claims.

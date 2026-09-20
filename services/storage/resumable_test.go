@@ -12,14 +12,22 @@ func TestParseContentRange(t *testing.T) {
 		query             bool
 		wantErr           bool
 	}{
-		{name: "a chunk with the total known", header: "bytes 0-262143/1048576",
-			start: 0, end: 262143, total: 1048576},
-		{name: "a chunk with the total unknown", header: "bytes 262144-524287/*",
-			start: 262144, end: 524287, total: -1},
-		{name: "a status query", header: "bytes */1048576",
-			start: 0, end: -1, total: 1048576, query: true},
-		{name: "a query with no total", header: "bytes */*",
-			start: 0, end: -1, total: -1, query: true},
+		{
+			name: "a chunk with the total known", header: "bytes 0-262143/1048576",
+			start: 0, end: 262143, total: 1048576,
+		},
+		{
+			name: "a chunk with the total unknown", header: "bytes 262144-524287/*",
+			start: 262144, end: 524287, total: -1,
+		},
+		{
+			name: "a status query", header: "bytes */1048576",
+			start: 0, end: -1, total: 1048576, query: true,
+		},
+		{
+			name: "a query with no total", header: "bytes */*",
+			start: 0, end: -1, total: -1, query: true,
+		},
 		{name: "a single byte", header: "bytes 0-0/1", start: 0, end: 0, total: 1},
 		// No header at all means the whole object in one request.
 		{name: "absent", header: "", start: 0, end: -1, total: -1},
@@ -69,8 +77,10 @@ func TestMultipartBoundary(t *testing.T) {
 	}{
 		{"the Go client, unquoted", `multipart/related; boundary=abc123`, "abc123"},
 		{"double quoted", `multipart/related; boundary="abc123"`, "abc123"},
-		{"gcloud, single quoted with equals", `multipart/related; boundary='===============5970272403554411136=='`,
-			"===============5970272403554411136=="},
+		{
+			"gcloud, single quoted with equals", `multipart/related; boundary='===============5970272403554411136=='`,
+			"===============5970272403554411136==",
+		},
 		{"a further parameter", `multipart/related; boundary='abc'; charset=utf-8`, "abc"},
 		{"spaces around the value", `multipart/related; boundary= abc `, "abc"},
 	}

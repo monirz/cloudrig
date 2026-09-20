@@ -62,16 +62,24 @@ func TestAPIWalk(t *testing.T) {
 		{method: "POST", path: up + "?uploadType=bogus&name=x", want: 400},
 		{method: "POST", path: up + "?ifGenerationMatch=x&name=x", want: 400},
 		{method: "POST", path: "/upload/storage/v1/b/missing/o?name=x", want: 404},
-		{method: "POST", path: up + "?uploadType=multipart",
-			header: map[string]string{"Content-Type": "multipart/related"}, want: 400},
+		{
+			method: "POST", path: up + "?uploadType=multipart",
+			header: map[string]string{"Content-Type": "multipart/related"}, want: 400,
+		},
 		{method: "POST", path: up + "?uploadType=multipart", header: multipart("''"), want: 400},
 		{method: "POST", path: up + "?uploadType=multipart", header: multipart("xyz"), want: 400},
-		{method: "POST", path: up + "?uploadType=multipart", header: multipart("xyz"),
-			body: "--xyz\r\n\r\n{\r\n--xyz--\r\n", want: 400},
-		{method: "POST", path: up + "?uploadType=multipart", header: multipart("xyz"),
-			body: "--xyz\r\n\r\n{}\r\n--xyz--\r\n", want: 400},
-		{method: "POST", path: up + "?uploadType=multipart", header: multipart("xyz"),
-			body: goodPart, want: 200},
+		{
+			method: "POST", path: up + "?uploadType=multipart", header: multipart("xyz"),
+			body: "--xyz\r\n\r\n{\r\n--xyz--\r\n", want: 400,
+		},
+		{
+			method: "POST", path: up + "?uploadType=multipart", header: multipart("xyz"),
+			body: "--xyz\r\n\r\n{}\r\n--xyz--\r\n", want: 400,
+		},
+		{
+			method: "POST", path: up + "?uploadType=multipart", header: multipart("xyz"),
+			body: goodPart, want: 200,
+		},
 
 		// Reads.
 		{method: "GET", path: o + "/a.txt", want: 200},
@@ -109,18 +117,24 @@ func TestAPIWalk(t *testing.T) {
 		{method: "POST", path: o + "/a.txt/copyTo/b/missing/o/c.txt", body: `{}`, want: 404},
 		{method: "POST", path: o + "/a.txt/rewriteTo/b/missing/o/c.txt", body: `{}`, want: 404},
 		{method: "POST", path: b + "/missing/o/a.txt/copyTo/b/bkt/o/c.txt", body: `{}`, want: 404},
-		{method: "POST", path: o + "/d.txt/compose",
-			body: `{"sourceObjects":[{"name":"a.txt"},{"name":"c.txt"}]}`, want: 200},
-		{method: "POST", path: o + "/d.txt/compose",
-			body: `{"sourceObjects":[{"name":"a.txt","generation":999999}]}`, want: 404},
+		{
+			method: "POST", path: o + "/d.txt/compose",
+			body: `{"sourceObjects":[{"name":"a.txt"},{"name":"c.txt"}]}`, want: 200,
+		},
+		{
+			method: "POST", path: o + "/d.txt/compose",
+			body: `{"sourceObjects":[{"name":"a.txt","generation":999999}]}`, want: 404,
+		},
 		{method: "POST", path: o + "/d.txt/compose", body: `{`, want: 400},
 		{method: "POST", path: o + "/d.txt/compose?ifSourceGenerationMatch=1", body: `{}`, want: 501},
 		{method: "POST", path: b + "/missing/o/d.txt/compose", body: `{}`, want: 404},
 
 		// IAM.
 		{method: "GET", path: b + "/bkt/iam", want: 200},
-		{method: "PUT", path: b + "/bkt/iam",
-			body: `{"bindings":[{"role":"roles/storage.objectViewer","members":["allUsers"]}]}`, want: 200},
+		{
+			method: "PUT", path: b + "/bkt/iam",
+			body: `{"bindings":[{"role":"roles/storage.objectViewer","members":["allUsers"]}]}`, want: 200,
+		},
 		{method: "GET", path: b + "/bkt/iam", want: 200},
 		{method: "PUT", path: b + "/bkt/iam", body: `{`, want: 400},
 		{method: "GET", path: o + "/a.txt/iam", want: 200},

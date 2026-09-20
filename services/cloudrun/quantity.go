@@ -20,8 +20,14 @@ func memoryBytes(quantity string) (int64, error) {
 		suffix string
 		factor int64
 	}{
-		{"Ki", 1 << 10}, {"Mi", 1 << 20}, {"Gi", 1 << 30}, {"Ti", 1 << 40},
-		{"K", 1e3}, {"M", 1e6}, {"G", 1e9}, {"T", 1e12},
+		{"Ki", 1 << 10},
+		{"Mi", 1 << 20},
+		{"Gi", 1 << 30},
+		{"Ti", 1 << 40},
+		{"K", 1e3},
+		{"M", 1e6},
+		{"G", 1e9},
+		{"T", 1e12},
 	}
 	for _, s := range suffixes {
 		if digits, ok := strings.CutSuffix(quantity, s.suffix); ok {

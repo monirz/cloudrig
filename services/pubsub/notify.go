@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 
 	"cloud.google.com/go/pubsub/v2/apiv1/pubsubpb"
+
 	"github.com/monirz/cloudrig/core/events"
 )
 

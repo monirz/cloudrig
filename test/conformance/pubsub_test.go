@@ -9,14 +9,15 @@ import (
 
 	"cloud.google.com/go/pubsub/v2"
 	"cloud.google.com/go/pubsub/v2/apiv1/pubsubpb"
-	"github.com/monirz/cloudrig"
-	"github.com/monirz/cloudrig/functions"
-	pubsub2 "github.com/monirz/cloudrig/services/pubsub"
 	"google.golang.org/api/option"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
+
+	"github.com/monirz/cloudrig"
+	"github.com/monirz/cloudrig/functions"
+	pubsub2 "github.com/monirz/cloudrig/services/pubsub"
 )
 
 // pubsubClient points the real client at an in-process emulator over gRPC.

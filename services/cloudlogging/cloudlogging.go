@@ -14,10 +14,11 @@ import (
 	"sync"
 
 	"cloud.google.com/go/logging/apiv2/loggingpb"
-	"github.com/monirz/cloudrig/core/clock"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/types/known/emptypb"
 	"google.golang.org/protobuf/types/known/timestamppb"
+
+	"github.com/monirz/cloudrig/core/clock"
 )
 
 // Service holds log entries in memory.

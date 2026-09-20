@@ -13,11 +13,12 @@ import (
 	"time"
 
 	"cloud.google.com/go/firestore/apiv1/firestorepb"
-	"github.com/monirz/cloudrig/core/clock"
-	"github.com/monirz/cloudrig/store"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/encoding/protojson"
+
+	"github.com/monirz/cloudrig/core/clock"
+	"github.com/monirz/cloudrig/store"
 )
 
 // Service holds documents.

@@ -12,9 +12,8 @@ import (
 	"sync"
 
 	"github.com/monirz/cloudrig/core/gerr"
-	"github.com/monirz/cloudrig/transport"
-
 	"github.com/monirz/cloudrig/core/tmp"
+	"github.com/monirz/cloudrig/transport"
 )
 
 // A resumable upload arrives in chunks against a session the client opens

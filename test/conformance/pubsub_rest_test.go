@@ -10,10 +10,11 @@ import (
 
 	"cloud.google.com/go/pubsub/v2"
 	"cloud.google.com/go/pubsub/v2/apiv1/pubsubpb"
-	"github.com/monirz/cloudrig"
 	"google.golang.org/api/option"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
+
+	"github.com/monirz/cloudrig"
 )
 
 // do sends a request to the emulator's JSON API and decodes the reply. This is
