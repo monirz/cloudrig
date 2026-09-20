@@ -22,6 +22,10 @@ project, no credentials, no network.
 > **On a mission to build the best Google Cloud emulator there is.**
 > If CloudRig saves you time, consider [supporting the work](#support).
 
+<p align="center">
+  <img src="assets/demo.gif" alt="Starting CloudRig, deploying a function with the cloudrig CLI and calling it, then driving the same emulator with unmodified gcloud: functions list, a bucket created, a file uploaded and listed." width="900">
+</p>
+
 ```text
                          CloudRig
                             │
