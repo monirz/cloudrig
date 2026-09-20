@@ -8,9 +8,10 @@ import (
 	"time"
 
 	"cloud.google.com/go/cloudtasks/apiv2/cloudtaskspb"
-	"github.com/monirz/cloudrig/core/clock"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/types/known/timestamppb"
+
+	"github.com/monirz/cloudrig/core/clock"
 )
 
 // Protos are stored as protojson, not encoding/json: a Task's target is a

@@ -5,9 +5,10 @@ import (
 	"testing"
 
 	"cloud.google.com/go/pubsub/v2/apiv1/pubsubpb"
+	"google.golang.org/protobuf/types/known/fieldmaskpb"
+
 	"github.com/monirz/cloudrig/core/clock"
 	"github.com/monirz/cloudrig/store"
-	"google.golang.org/protobuf/types/known/fieldmaskpb"
 )
 
 // TestAdminRPCs covers the topic and subscription admin surface the streaming

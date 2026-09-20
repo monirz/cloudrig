@@ -171,10 +171,14 @@ func TestEnvelope(t *testing.T) {
 			want: gerr.Envelope{Error: gerr.EnvelopeError{
 				Code: 400, Message: "bad request", Status: "INVALID_ARGUMENT",
 				Errors: []gerr.EnvelopeEntry{
-					{Message: "must be positive", Domain: "global", Reason: "invalid",
-						Location: "maxResults", LocationType: "parameter"},
-					{Message: "must be valid UTF-8", Domain: "global", Reason: "invalid",
-						Location: "prefix", LocationType: "parameter"},
+					{
+						Message: "must be positive", Domain: "global", Reason: "invalid",
+						Location: "maxResults", LocationType: "parameter",
+					},
+					{
+						Message: "must be valid UTF-8", Domain: "global", Reason: "invalid",
+						Location: "prefix", LocationType: "parameter",
+					},
 				},
 			}},
 		},
@@ -188,8 +192,10 @@ func TestEnvelope(t *testing.T) {
 			want: gerr.Envelope{Error: gerr.EnvelopeError{
 				Code: 412, Message: "generation mismatch", Status: "FAILED_PRECONDITION",
 				Errors: []gerr.EnvelopeEntry{
-					{Message: "expected 5", Domain: "global",
-						Reason: "generationMismatch", Location: "b/bkt/o/x"},
+					{
+						Message: "expected 5", Domain: "global",
+						Reason: "generationMismatch", Location: "b/bkt/o/x",
+					},
 				},
 			}},
 		},

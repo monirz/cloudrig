@@ -80,7 +80,7 @@ func safeJoin(root, name string) (string, error) {
 // run. Go needs no equivalent — go build fetches its own modules.
 func installDeps(dir string, log func(string, ...any)) error {
 	if _, err := os.Stat(filepath.Join(dir, "package.json")); err != nil {
-		return nil
+		return nil //nolint:nilerr // no package.json means nothing to install
 	}
 	if _, err := os.Stat(filepath.Join(dir, "node_modules")); err == nil {
 		return nil

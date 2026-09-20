@@ -7,9 +7,10 @@ import (
 	"strings"
 	"testing"
 
+	"google.golang.org/grpc/codes"
+
 	"github.com/monirz/cloudrig/core/clock"
 	"github.com/monirz/cloudrig/store"
-	"google.golang.org/grpc/codes"
 )
 
 // TestRESTWalk drives the JSON surface gcloud uses, in order, over one secret

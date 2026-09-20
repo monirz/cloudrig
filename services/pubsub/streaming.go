@@ -1,6 +1,7 @@
 package pubsub
 
 import (
+	"errors"
 	"io"
 	"time"
 
@@ -65,7 +66,7 @@ func (b *Subscriber) StreamingPull(stream pubsubpb.Subscriber_StreamingPullServe
 			// Something arrived; go round and take it.
 		case err := <-recvErr:
 			// The client closing its half is an ordinary end of stream.
-			if err == io.EOF {
+			if errors.Is(err, io.EOF) {
 				return nil
 			}
 			return err

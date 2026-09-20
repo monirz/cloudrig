@@ -69,6 +69,9 @@ func (r *Registry) handleDeploy(w http.ResponseWriter, req *http.Request) error 
 			WithReason("parseError")
 	}
 
+	// Listed field by field, not converted: a new request field should not
+	// reach Function until someone decides it should.
+	//nolint:staticcheck // S1016
 	desc, err := r.Deploy(req.Context(), Function{
 		Project:    body.Project,
 		Location:   body.Location,

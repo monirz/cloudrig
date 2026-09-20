@@ -2,12 +2,12 @@ package conformance
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
 	logging "cloud.google.com/go/logging/apiv2"
 	"cloud.google.com/go/logging/apiv2/loggingpb"
-	"github.com/monirz/cloudrig"
 	"google.golang.org/api/iterator"
 	"google.golang.org/api/option"
 	"google.golang.org/genproto/googleapis/api/monitoredres"
@@ -17,6 +17,8 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
+
+	"github.com/monirz/cloudrig"
 )
 
 func logClient(t *testing.T) (*logging.Client, *cloudrig.Emulator, context.Context) {
@@ -65,7 +67,7 @@ func list(t *testing.T, c *logging.Client, ctx context.Context, filter string) [
 	var out []*loggingpb.LogEntry
 	for {
 		e, err := it.Next()
-		if err == iterator.Done {
+		if errors.Is(err, iterator.Done) {
 			break
 		}
 		if err != nil {

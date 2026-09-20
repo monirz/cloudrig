@@ -5,21 +5,21 @@ import (
 	"errors"
 	"io"
 	"net/http"
-	"testing"
-
 	"strings"
+	"testing"
 
 	"cloud.google.com/go/pubsub/v2"
 	"cloud.google.com/go/pubsub/v2/apiv1/pubsubpb"
 	"cloud.google.com/go/storage"
-	"github.com/monirz/cloudrig"
-	"github.com/monirz/cloudrig/core/faults"
 	"google.golang.org/api/googleapi"
 	"google.golang.org/api/option"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
+
+	"github.com/monirz/cloudrig"
+	"github.com/monirz/cloudrig/core/faults"
 )
 
 // TestFaultFailsARequest is the base case: a rule turns a call that would have

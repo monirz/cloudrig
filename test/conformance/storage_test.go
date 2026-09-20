@@ -16,11 +16,12 @@ import (
 	"time"
 
 	"cloud.google.com/go/storage"
+	"google.golang.org/api/googleapi"
+	"google.golang.org/api/option"
+
 	"github.com/monirz/cloudrig"
 	"github.com/monirz/cloudrig/functions"
 	storage2 "github.com/monirz/cloudrig/services/storage"
-	"google.golang.org/api/googleapi"
-	"google.golang.org/api/option"
 )
 
 // bases records each test's emulator address, so a test that builds a URL by

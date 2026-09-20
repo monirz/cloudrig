@@ -4,6 +4,7 @@ go.work
 go.work.sum
 
 # Build output
+/bin
 /cloudrig
 /pubsub
 examples/cloudrun/server
@@ -29,3 +30,6 @@ testdata/**/node_modules/
 .terraform/
 .terraform.lock.hcl
 terraform.tfstate*
+
+# macOS Finder metadata
+.DS_Store

@@ -73,7 +73,7 @@ func (s *Service) ComposeObject(ctx context.Context, project string, sources []S
 	open := make([]*os.File, 0, len(sources))
 	defer func() {
 		for _, f := range open {
-			f.Close()
+			_ = f.Close()
 		}
 	}()
 

@@ -15,12 +15,13 @@ import (
 	"cloud.google.com/go/pubsub/v2/apiv1/pubsubpb"
 	scheduler "cloud.google.com/go/scheduler/apiv1"
 	"cloud.google.com/go/scheduler/apiv1/schedulerpb"
-	"github.com/monirz/cloudrig"
 	"google.golang.org/api/option"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
+
+	"github.com/monirz/cloudrig"
 )
 
 func csClient(t *testing.T) (*scheduler.CloudSchedulerClient, *cloudrig.Emulator, context.Context) {

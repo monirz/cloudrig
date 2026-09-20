@@ -2,6 +2,7 @@ package firestore
 
 import (
 	"context"
+	"errors"
 
 	"cloud.google.com/go/firestore/apiv1/firestorepb"
 	spb "google.golang.org/genproto/googleapis/rpc/status"
@@ -9,6 +10,8 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
+
+	"github.com/monirz/cloudrig/store"
 )
 
 // Commit applies a batch of writes. Every write the Go client makes — Set,
@@ -131,8 +134,9 @@ func (s *Service) apply(ctx context.Context, w *firestorepb.Write, doc *firestor
 
 	if doc == nil {
 		// Deleting an absent document is not an error, as in real Firestore.
-		if err := s.kv.Delete(ctx, docKey(name), 0); err != nil {
-			return nil
+		if err := s.kv.Delete(ctx, docKey(name), 0); err != nil &&
+			!errors.Is(err, store.ErrNotFound) {
+			return err
 		}
 		return nil
 	}

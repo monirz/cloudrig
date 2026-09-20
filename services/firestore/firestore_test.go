@@ -6,10 +6,11 @@ import (
 	"time"
 
 	"cloud.google.com/go/firestore/apiv1/firestorepb"
-	"github.com/monirz/cloudrig/core/clock"
-	"github.com/monirz/cloudrig/store"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+
+	"github.com/monirz/cloudrig/core/clock"
+	"github.com/monirz/cloudrig/store"
 )
 
 const base = "projects/p/databases/(default)/documents"

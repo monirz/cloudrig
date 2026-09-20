@@ -92,7 +92,7 @@ func (s *Store) Put(ctx context.Context, r io.Reader) (Ref, error) {
 	}
 	staged := tmp.Name()
 	defer func() {
-		tmp.Close()
+		_ = tmp.Close()
 		_ = os.Remove(staged) // a no-op once the file has been renamed away
 	}()
 

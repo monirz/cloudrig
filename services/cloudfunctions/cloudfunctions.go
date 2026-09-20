@@ -17,10 +17,9 @@ import (
 
 	"github.com/monirz/cloudrig/core/clock"
 	"github.com/monirz/cloudrig/core/gerr"
+	"github.com/monirz/cloudrig/core/tmp"
 	"github.com/monirz/cloudrig/functions"
 	"github.com/monirz/cloudrig/transport"
-
-	"github.com/monirz/cloudrig/core/tmp"
 )
 
 // Prefixes are the path prefixes this service claims.
@@ -185,22 +184,6 @@ func (s *Service) postFunction(w http.ResponseWriter, r *http.Request, p transpo
 	default:
 		return gerr.NewUnimplemented("cloudfunctions.projects.locations.functions." + verb)
 	}
-}
-
-// createFunction and patchFunction are loud rather than silently wrong: real
-// gcloud uploads a source zip, which the emulator cannot yet accept.
-func (s *Service) createFunction(w http.ResponseWriter, r *http.Request, p transport.Params) error {
-	return deployUnimplemented("cloudfunctions.projects.locations.functions.create")
-}
-
-func (s *Service) patchFunction(w http.ResponseWriter, r *http.Request, p transport.Params) error {
-	return deployUnimplemented("cloudfunctions.projects.locations.functions.patch")
-}
-
-func deployUnimplemented(op string) error {
-	err := gerr.NewUnimplemented(op)
-	err.Message += "; deploy with: cloudrig fn deploy NAME --source DIR"
-	return err
 }
 
 func (s *Service) deleteFunction(w http.ResponseWriter, r *http.Request, p transport.Params) error {

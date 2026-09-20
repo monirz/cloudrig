@@ -7,12 +7,13 @@ import (
 	"time"
 
 	"cloud.google.com/go/firestore"
-	"github.com/monirz/cloudrig"
 	"google.golang.org/api/option"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
+
+	"github.com/monirz/cloudrig"
 )
 
 // fsClient points the real Firestore client at an in-process emulator.
@@ -326,10 +327,14 @@ func TestFirestoreQueryFilters(t *testing.T) {
 		{"at most", col.Where("age", "<=", 41), []string{"ada", "alan"}},
 		{"in", col.Where("name", "in", []string{"ada", "grace"}), []string{"ada", "grace"}},
 		{"array contains", col.Where("tags", "array-contains", "maths"), []string{"ada", "alan"}},
-		{"array contains any", col.Where("tags", "array-contains-any", []string{"orbits", "logic"}),
-			[]string{"alan", "katherine"}},
-		{"two filters", col.Where("role", "==", "eng").Where("age", ">", 36),
-			[]string{"alan", "katherine"}},
+		{
+			"array contains any", col.Where("tags", "array-contains-any", []string{"orbits", "logic"}),
+			[]string{"alan", "katherine"},
+		},
+		{
+			"two filters", col.Where("role", "==", "eng").Where("age", ">", 36),
+			[]string{"alan", "katherine"},
+		},
 		{"a field nothing has", col.Where("missing", "==", 1), nil},
 	}
 

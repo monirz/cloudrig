@@ -7,8 +7,9 @@ import (
 	"testing"
 
 	"cloud.google.com/go/storage"
-	"github.com/monirz/cloudrig"
 	"google.golang.org/api/option"
+
+	"github.com/monirz/cloudrig"
 )
 
 // gcs points the real client at one emulator.

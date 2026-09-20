@@ -10,13 +10,14 @@ import (
 	"sync"
 
 	"cloud.google.com/go/container/apiv1/containerpb"
-	"github.com/monirz/cloudrig/core/clock"
-	"github.com/monirz/cloudrig/store"
 	statuspb "google.golang.org/genproto/googleapis/rpc/status"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
+
+	"github.com/monirz/cloudrig/core/clock"
+	"github.com/monirz/cloudrig/store"
 )
 
 // Service is the GKE cluster admin API over a real local-cluster runner.
@@ -68,6 +69,7 @@ var (
 func clusterKey(project, location, name string) string {
 	return "gke/c/" + project + "/" + location + "/" + name
 }
+
 func clusterPrefix(project, location string) string {
 	return "gke/c/" + project + "/" + location + "/"
 }

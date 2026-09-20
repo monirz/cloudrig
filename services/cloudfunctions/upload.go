@@ -10,9 +10,8 @@ import (
 	"sync"
 
 	"github.com/monirz/cloudrig/core/gerr"
-	"github.com/monirz/cloudrig/transport"
-
 	"github.com/monirz/cloudrig/core/tmp"
+	"github.com/monirz/cloudrig/transport"
 )
 
 // UploadPath is where generateUploadUrl points a client.

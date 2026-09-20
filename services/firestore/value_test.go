@@ -3,22 +3,25 @@ package firestore
 import (
 	"math"
 	"testing"
+	"time"
 
 	"cloud.google.com/go/firestore/apiv1/firestorepb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	"google.golang.org/protobuf/types/known/wrapperspb"
-	"time"
 )
 
 func str(s string) *firestorepb.Value {
 	return &firestorepb.Value{ValueType: &firestorepb.Value_StringValue{StringValue: s}}
 }
+
 func num(i int64) *firestorepb.Value {
 	return &firestorepb.Value{ValueType: &firestorepb.Value_IntegerValue{IntegerValue: i}}
 }
+
 func dbl(f float64) *firestorepb.Value {
 	return &firestorepb.Value{ValueType: &firestorepb.Value_DoubleValue{DoubleValue: f}}
 }
+
 func boolean(b bool) *firestorepb.Value {
 	return &firestorepb.Value{ValueType: &firestorepb.Value_BooleanValue{BooleanValue: b}}
 }
@@ -42,7 +45,8 @@ func TestCompareAcrossTypes(t *testing.T) {
 		dbl(1.5),
 		num(2),
 		{ValueType: &firestorepb.Value_TimestampValue{
-			TimestampValue: timestamppb.New(time.Unix(0, 0))}},
+			TimestampValue: timestamppb.New(time.Unix(0, 0)),
+		}},
 		str("a"),
 		str("b"),
 	}

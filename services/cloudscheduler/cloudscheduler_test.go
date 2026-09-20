@@ -2,17 +2,18 @@ package cloudscheduler
 
 import (
 	"context"
-	"google.golang.org/protobuf/types/known/durationpb"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
 
 	"cloud.google.com/go/scheduler/apiv1/schedulerpb"
-	"github.com/monirz/cloudrig/core/clock"
-	"github.com/monirz/cloudrig/store"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/durationpb"
+
+	"github.com/monirz/cloudrig/core/clock"
+	"github.com/monirz/cloudrig/store"
 )
 
 var epoch = time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)

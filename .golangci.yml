@@ -12,11 +12,30 @@ linters:
     - noctx
     - unconvert
     - wastedassign
+  settings:
+    errcheck:
+      exclude-functions: [fmt.Fprint, fmt.Fprintf, fmt.Fprintln]
+    misspell:
+      ignore-rules: [hardlinked] # a hard link, not the typographic hardline
+
   exclusions:
     rules:
       # An unchecked Close or a context-free request is normal in a test.
       - path: _test\.go
         linters: [errcheck, noctx]
+      # A deferred Close is cleanup; a Close on a write path is checked below.
+      - linters: [errcheck]
+        source: '^\s*defer .*\.(Close|Remove)\('
+      # Deliberate: a child process outlives the request that started it, so
+      # exec.CommandContext would kill it, and a listener's context ends at
+      # Listen. noctx still covers HTTP calls made without a context.
+      - linters: [noctx]
+        text: "(os/exec.Command|net.Listen|net.DialTimeout) must not be called"
+      # GKE's proto deprecates project/zone/cluster ids, but gcloud still
+      # sends them, so the emulator has to read and answer with them.
+      - path: services/gke/
+        linters: [staticcheck]
+        text: "SA1019"
 
 formatters:
   enable:

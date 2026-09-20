@@ -61,14 +61,8 @@ jobs:
           token: ${{ secrets.CODECOV_TOKEN }}
 
   lint:
-    # PR-only and new issues only until the existing findings are fixed;
-    # then drop both and lint every push.
-    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    permissions:
-      contents: read
-      pull-requests: read # only-new-issues reads the PR diff
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -79,8 +73,7 @@ jobs:
           check-latest: true
       - uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
         with:
-          version: v2.13.2
-          only-new-issues: true
+          version: v2.13.2 # same as GOLANGCI_VERSION in the Makefile
 
   vuln:
     # Its own job: the vulnerability database changes without this repo

@@ -12,9 +12,8 @@ import (
 	"sync"
 
 	"github.com/monirz/cloudrig/core/gerr"
-	"github.com/monirz/cloudrig/transport"
-
 	"github.com/monirz/cloudrig/core/tmp"
+	"github.com/monirz/cloudrig/transport"
 )
 
 // A resumable upload arrives in chunks against a session the client opens
@@ -87,7 +86,7 @@ func (s *sessions) close(id string) {
 		sess.mu.Lock()
 		if sess.file != nil {
 			name := sess.file.Name()
-			sess.file.Close()
+			_ = sess.file.Close()
 			_ = os.Remove(name)
 			sess.file = nil
 		}

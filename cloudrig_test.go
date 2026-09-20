@@ -163,14 +163,17 @@ func TestShutdownStopsServing(t *testing.T) {
 		t.Fatal(err)
 	}
 	url := emu.BaseURL() + "/_emu/health"
-	if _, err := http.Get(url); err != nil {
+	resp, err := http.Get(url)
+	if err != nil {
 		t.Fatalf("health before shutdown: %v", err)
 	}
+	resp.Body.Close()
 
 	if err := emu.Shutdown(context.Background()); err != nil {
 		t.Fatalf("Shutdown: %v", err)
 	}
-	if _, err := http.Get(url); err == nil {
+	if resp, err := http.Get(url); err == nil {
+		resp.Body.Close()
 		t.Error("still serving after Shutdown")
 	}
 }
@@ -182,13 +185,16 @@ func TestCleanupClosesTheInstance(t *testing.T) {
 	t.Run("inner", func(t *testing.T) {
 		emu := cloudrig.MustStart(t)
 		url = emu.BaseURL() + "/_emu/health"
-		if _, err := http.Get(url); err != nil {
+		resp, err := http.Get(url)
+		if err != nil {
 			t.Fatalf("health inside the test: %v", err)
 		}
+		resp.Body.Close()
 	})
 
 	// Its t.Cleanup has run; a leak here would be one listener per test.
-	if _, err := http.Get(url); err == nil {
+	if resp, err := http.Get(url); err == nil {
+		resp.Body.Close()
 		t.Error("instance still serving after its test finished")
 	}
 }
@@ -291,9 +297,11 @@ func TestFunctionsAreIsolatedPerInstance(t *testing.T) {
 					Name: "hello", Source: "./examples/hello", EntryPoint: "HelloHTTP",
 				}},
 			})
-			if _, err := http.Get(emu.FunctionURL("hello")); err != nil {
+			resp, err := http.Get(emu.FunctionURL("hello"))
+			if err != nil {
 				t.Fatal(err)
 			}
+			resp.Body.Close()
 			urls <- emu.BaseURL()
 		})
 	}

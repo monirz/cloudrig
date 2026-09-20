@@ -14,10 +14,10 @@ import (
 	"sync"
 
 	"cloud.google.com/go/logging/apiv2/loggingpb"
-	"github.com/monirz/cloudrig/core/clock"
-	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/types/known/emptypb"
 	"google.golang.org/protobuf/types/known/timestamppb"
+
+	"github.com/monirz/cloudrig/core/clock"
 )
 
 // Service holds log entries in memory.
@@ -39,8 +39,6 @@ type Service struct {
 // MaxEntries is how many entries are kept. Enough to assert on a test's output,
 // small enough that a loop logging forever cannot exhaust memory.
 const MaxEntries = 10000
-
-var marshal = protojson.MarshalOptions{}
 
 // New wires a service.
 func New(clk clock.Clock) *Service {

@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"context"
 	"fmt"
-	"github.com/monirz/cloudrig/core/logring"
 	"io"
 	"net/http"
 	"net/http/httputil"
@@ -12,6 +11,8 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
+
+	"github.com/monirz/cloudrig/core/logring"
 )
 
 // Instance is a running function: a child process plus the proxy to it.

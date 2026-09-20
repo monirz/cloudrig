@@ -38,10 +38,7 @@ var daemon dockerClient
 // connect opens the daemon connection, or reports why it cannot.
 func connect() (*client.Client, error) {
 	daemon.once.Do(func() {
-		daemon.cli, daemon.err = client.NewClientWithOpts(
-			client.FromEnv,
-			client.WithAPIVersionNegotiation(),
-		)
+		daemon.cli, daemon.err = client.New(client.FromEnv)
 	})
 	if daemon.err != nil {
 		return nil, fmt.Errorf("connecting to Docker: %w", daemon.err)
