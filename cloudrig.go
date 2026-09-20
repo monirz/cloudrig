@@ -441,9 +441,11 @@ func serveForTest(t testing.TB, o Options, stack storageStack) *Emulator {
 // content-addressed and immutable — the same bytes under the same name. So a
 // fork of a hundred gigabytes of objects costs the size of the metadata.
 //
-// What is copied is state, not processes: deployed functions, armed faults and
-// the clock do not travel. The fork gets its own port, its own event bus and
-// its own fault set, and starts with no functions deployed.
+// What travels is the same deterministic state a snapshot carries: store
+// contents, armed faults and a virtual clock's reading. Each is copied, not
+// shared, so the two emulators drift apart from a common starting point.
+// Deployed functions are environment rather than state: the fork gets its own
+// port and event bus, and starts with none deployed.
 func (e *Emulator) Fork(t testing.TB) *Emulator {
 	t.Helper()
 
@@ -455,13 +457,24 @@ func (e *Emulator) Fork(t testing.TB) *Emulator {
 	copied := store.NewMemory()
 	copied.Restore(mem.Snapshot())
 
+	// A fork of the clock, not the same clock: time travel in one emulator
+	// must not move the other's now.
+	opts := e.opts
+	if fake, ok := e.clk.(*clock.FakeClock); ok {
+		opts.Clock = clock.NewFake(fake.Now())
+	}
+
 	// Hardlinked, not shared: the parent releases a blob when its last
 	// reference goes, and a fork still pointing at it must not lose the bytes.
 	blobs, err := e.blobs.Fork()
 	if err != nil {
 		t.Fatalf("cloudrig: forking blobs: %v", err)
 	}
-	return serveForTest(t, e.opts, storageStack{kvStore: copied, blobs: blobs})
+	forked := serveForTest(t, opts, storageStack{kvStore: copied, blobs: blobs})
+	for _, rule := range e.faults.Snapshot() {
+		forked.faults.Add(rule)
+	}
+	return forked
 }
 
 // publishTo adapts the Pub/Sub publisher for Cloud Scheduler's Pub/Sub-target
