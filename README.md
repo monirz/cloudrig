@@ -235,7 +235,7 @@ export FIRESTORE_EMULATOR_HOST=localhost:4599
 
 From here: [provision it with Terraform](#provision-with-terraform),
 [run a workload on GKE](#run-a-workload-on-gke), or watch
-[a whole pipeline run](#see-it-in-action-events-time-travel-and-retries).
+[a whole pipeline run](#see-it-in-action-events-time-travel-faults-and-state).
 
 ---
 
@@ -323,12 +323,14 @@ Full walkthrough, including kind and the auth split: [GKE guide](docs/services.m
 
 ---
 
-## See It in Action: Events, Time Travel and Retries
+## See It in Action: Events, Time Travel, Faults and State
 
-One workflow, end to end: an object landing in a bucket triggers a function that
-publishes to Pub/Sub, a worker enqueues a Cloud Task, and fast-forwarding the
-clock fires its retries. Run the whole thing with
-[`examples/pipeline/run.sh`](examples/pipeline/run.sh), or step through it:
+One workflow with all three controls on it: an object landing in a bucket
+triggers a function that publishes to Pub/Sub, a worker enqueues a Cloud Task,
+and fast-forwarding the clock fires its retries — with Pub/Sub made to flake
+underneath, and the seeded world saved and reloaded around the whole run. Run
+it with [`examples/pipeline/run.sh`](examples/pipeline/run.sh), or step
+through it:
 
 ```sh
 # Start CloudRig with a virtual clock. It points functions at its own services
@@ -345,18 +347,36 @@ gcloud tasks queues create pipeline --location=us-central1 --max-attempts=3
 cloudrig fn deploy ingest --source ./examples/pipeline/ingest --trigger-bucket intake
 cloudrig fn deploy worker --source ./examples/pipeline/worker --trigger-topic orders
 
+# Save the seeded world. Every case below can start from exactly here.
+cloudrig snapshot seed.tar
+# saved snapshot to seed.tar
+
+# Make Pub/Sub flake on half its requests, so the retry path is the path taken.
+cloudrig fault pubsub --error 503 --failure-rate 0.5
+# armed: pubsub → error 503, 50% of requests  (/google.pubsub.v1.)
+
 # Drop an object in. It flows through the whole chain and enqueues a task.
 echo '{"id":42}' > order.json
 gcloud storage cp order.json gs://intake/
+#   sink: task attempt
 
 # Fast-forward time. The task fires and retries, deterministically.
 cloudrig clock advance 1h
 #   sink: task attempt      <- the retries, with no real waiting
 #   sink: task attempt
+# clock: virtual  now: 2026-09-20T13:26:34Z  pending: 0
+
+# Disarm the fault and roll the world back for the next case.
+cloudrig fault clear
+cloudrig restore seed.tar
+# cleared all faults
+# restored
 ```
 
 Every stage is real: the functions run as processes, Pub/Sub and Cloud Tasks are
-live, and the clock is injected so the retries need no real waiting.
+live, the clock is injected so the retries need no real waiting, and the
+snapshot carries the store, the armed faults and the clock reading together —
+so the next case starts from the same world, not a similar one.
 
 ---
 
