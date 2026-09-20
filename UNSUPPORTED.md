@@ -111,9 +111,9 @@ Fault injection:
 
 Snapshot/restore:
 
-- Store state only: buckets and objects, Pub/Sub, Firestore, Cloud Tasks and
-  the other kv-backed services. Deployed functions, armed faults and the clock
-  are runtime, not state, and stay behind, as with an in-process fork.
+- Store state, armed faults and a virtual clock's reading. Deployed functions
+  are environment rather than state and stay behind: a restore never rebuilds
+  or restarts one. An in-process fork carries the same three.
 - In-memory emulators only. A `--data-dir` emulator persists on disk already
   and is refused rather than snapshotted.
 - Restore replaces the target's store contents wholesale; it is not a merge.

@@ -343,3 +343,25 @@ func TestConcurrentAdvanceToConverges(t *testing.T) {
 		t.Errorf("now = %s, want the latest target %s (not the sum)", got, want)
 	}
 }
+
+// TestSetNowTravelsBackwards is the restore case: a snapshot taken earlier
+// must be able to put the clock back where it was.
+func TestSetNowTravelsBackwards(t *testing.T) {
+	t.Parallel()
+
+	start := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	c := clock.NewFake(start)
+	c.Advance(2 * time.Hour)
+
+	c.SetNow(start)
+	if got := c.Now(); !got.Equal(start) {
+		t.Errorf("Now = %s, want %s", got, start)
+	}
+
+	fired := false
+	c.AfterFunc(time.Hour, func() { fired = true })
+	c.SetNow(start.Add(24 * time.Hour))
+	if fired {
+		t.Error("SetNow fired a pending timer; it must only move the clock")
+	}
+}

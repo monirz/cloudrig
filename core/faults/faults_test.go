@@ -122,3 +122,31 @@ func asError(err error, into **gerr.Error) bool {
 	}
 	return ok
 }
+
+// TestSnapshotCarriesRemainingCount is what a restored emulator depends on: a
+// rule that has already fired twice of three must fail once more, not three
+// times again.
+func TestSnapshotCarriesRemainingCount(t *testing.T) {
+	t.Parallel()
+
+	s := New()
+	s.Add(Rule{Path: "/v1/*", Count: 3})
+	s.Add(Rule{Path: "/other/*"}) // unlimited
+
+	for range 2 {
+		if _, ok := s.Match(http.MethodGet, "/v1/thing"); !ok {
+			t.Fatal("rule did not claim the request")
+		}
+	}
+
+	got := s.Snapshot()
+	if len(got) != 2 {
+		t.Fatalf("snapshot has %d rules, want 2", len(got))
+	}
+	if got[0].Count != 1 {
+		t.Errorf("remaining count = %d, want 1", got[0].Count)
+	}
+	if got[1].Count != 0 {
+		t.Errorf("unlimited rule came back with Count %d, want 0", got[1].Count)
+	}
+}

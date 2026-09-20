@@ -4,12 +4,16 @@ import (
 	"context"
 	"errors"
 	"io"
+	"net/http"
 	"testing"
+	"time"
 
 	"cloud.google.com/go/storage"
 	"google.golang.org/api/option"
 
 	"github.com/monirz/cloudrig"
+	"github.com/monirz/cloudrig/core/clock"
+	"github.com/monirz/cloudrig/core/faults"
 )
 
 // gcs points the real client at one emulator.
@@ -145,5 +149,43 @@ func TestForkSharesPayloads(t *testing.T) {
 
 	if got := read(t, fc, fctx, "big", "payload"); got != body {
 		t.Errorf("the fork saw the parent's overwrite: %q", got)
+	}
+}
+
+// TestForkCarriesFaultsAndClock holds fork to the same deterministic state a
+// snapshot carries, and to copying it rather than sharing: travelling in one
+// emulator must not move the other's clock.
+func TestForkCarriesFaultsAndClock(t *testing.T) {
+	t.Parallel()
+
+	at := time.Date(2026, 7, 8, 9, 10, 11, 0, time.UTC)
+	parent := cloudrig.MustStart(t, cloudrig.Options{Clock: clock.NewFake(at)})
+	parent.Faults().Add(faults.Rule{Path: "/storage/v1/*", Status: 503})
+
+	forked := parent.Fork(t)
+
+	if got := forked.Clock().Now(); !got.Equal(at) {
+		t.Errorf("fork's clock = %s, want the parent's %s", got, at)
+	}
+	if n := forked.Faults().Len(); n != 1 {
+		t.Fatalf("fork has %d faults armed, want the parent's 1", n)
+	}
+	resp, err := http.Get(forked.BaseURL() + "/storage/v1/b/anything")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		t.Errorf("fork's inherited fault answered %d, want 503", resp.StatusCode)
+	}
+
+	// Copied, not shared, in both directions.
+	forked.FakeClock(t).Advance(time.Hour)
+	if got := parent.Clock().Now(); !got.Equal(at) {
+		t.Errorf("advancing the fork moved the parent's clock to %s, want %s", got, at)
+	}
+	parent.Faults().Clear()
+	if n := forked.Faults().Len(); n != 1 {
+		t.Errorf("clearing the parent's faults left the fork with %d, want 1", n)
 	}
 }

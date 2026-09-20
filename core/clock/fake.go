@@ -75,6 +75,14 @@ func (c *FakeClock) AdvanceTo(target time.Time) (reachable bool) {
 	return true
 }
 
+// SetNow moves the clock to t, forwards or back, without firing anything. It
+// is for restoring a snapshotted time; use Advance to travel within a test.
+func (c *FakeClock) SetNow(t time.Time) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.now = t
+}
+
 // runTo fires every callback due at or before target, then sets now to target.
 // The caller holds c.mu; it is dropped around each callback, which may call
 // back into the clock. Reentrant entry from a callback panics.

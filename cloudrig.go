@@ -172,7 +172,7 @@ func Start(ctx context.Context, o Options) (*Emulator, error) {
 	// returns only once scheduled deliveries and the functions they trigger
 	// have run.
 	drain := func() { drainAsync(cssvc, bus, ctsvc) }
-	snap := stateSnapshot{kv: stack.kvStore, blobs: stack.blobs}
+	snap := stateSnapshot{kv: stack.kvStore, blobs: stack.blobs, faults: flt, clk: clk}
 	handler, closeAPIs := newHandler(clk, o, reg, runReg, stack.svc, psvc, smsvc, ctsvc, cssvc, susvc, gksvc, lgsvc, newGRPC(clk, flt, psvc, fsvc, smsvc, ctsvc, cssvc, gksvc, lgsvc), flt, snap, drain)
 	srv := &http.Server{
 		Handler:   handler,
@@ -273,8 +273,10 @@ func deployStartup(ctx context.Context, reg *functions.Registry, addr string, o 
 // captures store state only, like Fork; a --data-dir store is not in memory and
 // is refused with a clear error.
 type stateSnapshot struct {
-	kv    store.Store
-	blobs *blob.Store
+	kv     store.Store
+	blobs  *blob.Store
+	faults *faults.Set
+	clk    clock.Clock
 }
 
 func (s stateSnapshot) WriteSnapshot(w io.Writer) error {
@@ -282,7 +284,10 @@ func (s stateSnapshot) WriteSnapshot(w io.Writer) error {
 	if !ok {
 		return gerr.New(gerr.FailedPrecondition, "snapshot needs an in-memory emulator; a --data-dir store persists on disk already")
 	}
-	return state.Write(w, mem.Snapshot(), s.blobs)
+	return state.Write(w, mem.Snapshot(), s.blobs, state.Runtime{
+		Faults: s.faults.Snapshot(),
+		Clock:  clockState(s.clk),
+	})
 }
 
 func (s stateSnapshot) ReadSnapshot(r io.Reader) error {
@@ -290,7 +295,29 @@ func (s stateSnapshot) ReadSnapshot(r io.Reader) error {
 	if !ok {
 		return gerr.New(gerr.FailedPrecondition, "restore needs an in-memory emulator")
 	}
-	return state.Read(r, mem, s.blobs)
+	rt, err := state.Read(r, mem, s.blobs)
+	if err != nil {
+		return err
+	}
+
+	s.faults.Clear()
+	for _, rule := range rt.Faults {
+		s.faults.Add(rule)
+	}
+	if fake, ok := s.clk.(*clock.FakeClock); ok && rt.Clock != nil {
+		fake.SetNow(rt.Clock.Now)
+	}
+	return nil
+}
+
+// clockState reports a virtual clock's reading. A real clock has none to carry:
+// the restoring emulator's wall clock is already the right answer.
+func clockState(clk clock.Clock) *state.ClockState {
+	fake, ok := clk.(*clock.FakeClock)
+	if !ok {
+		return nil
+	}
+	return &state.ClockState{Now: fake.Now()}
 }
 
 // selfEnv lets a function reach sibling services over a plain `cloudrig start`,
@@ -369,7 +396,7 @@ func serveForTest(t testing.TB, o Options, stack storageStack) *Emulator {
 	runReg := cloudrun.NewRegistry()
 	t.Cleanup(runReg.StopAll)
 	drain := func() { drainAsync(cssvc, bus, ctsvc) }
-	snap := stateSnapshot{kv: stack.kvStore, blobs: stack.blobs}
+	snap := stateSnapshot{kv: stack.kvStore, blobs: stack.blobs, faults: flt, clk: o.Clock}
 	handler, closeAPIs := newHandler(o.Clock, o, reg, runReg, stack.svc, psvc, smsvc, ctsvc, cssvc, susvc, gksvc, lgsvc, newGRPC(o.Clock, flt, psvc, fsvc, smsvc, ctsvc, cssvc, gksvc, lgsvc), flt, snap, drain)
 	t.Cleanup(closeAPIs)
 
@@ -414,9 +441,11 @@ func serveForTest(t testing.TB, o Options, stack storageStack) *Emulator {
 // content-addressed and immutable — the same bytes under the same name. So a
 // fork of a hundred gigabytes of objects costs the size of the metadata.
 //
-// What is copied is state, not processes: deployed functions, armed faults and
-// the clock do not travel. The fork gets its own port, its own event bus and
-// its own fault set, and starts with no functions deployed.
+// What travels is the same deterministic state a snapshot carries: store
+// contents, armed faults and a virtual clock's reading. Each is copied, not
+// shared, so the two emulators drift apart from a common starting point.
+// Deployed functions are environment rather than state: the fork gets its own
+// port and event bus, and starts with none deployed.
 func (e *Emulator) Fork(t testing.TB) *Emulator {
 	t.Helper()
 
@@ -428,13 +457,24 @@ func (e *Emulator) Fork(t testing.TB) *Emulator {
 	copied := store.NewMemory()
 	copied.Restore(mem.Snapshot())
 
+	// A fork of the clock, not the same clock: time travel in one emulator
+	// must not move the other's now.
+	opts := e.opts
+	if fake, ok := e.clk.(*clock.FakeClock); ok {
+		opts.Clock = clock.NewFake(fake.Now())
+	}
+
 	// Hardlinked, not shared: the parent releases a blob when its last
 	// reference goes, and a fork still pointing at it must not lose the bytes.
 	blobs, err := e.blobs.Fork()
 	if err != nil {
 		t.Fatalf("cloudrig: forking blobs: %v", err)
 	}
-	return serveForTest(t, e.opts, storageStack{kvStore: copied, blobs: blobs})
+	forked := serveForTest(t, opts, storageStack{kvStore: copied, blobs: blobs})
+	for _, rule := range e.faults.Snapshot() {
+		forked.faults.Add(rule)
+	}
+	return forked
 }
 
 // publishTo adapts the Pub/Sub publisher for Cloud Scheduler's Pub/Sub-target

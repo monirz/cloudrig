@@ -19,9 +19,15 @@ captures store state: buckets and objects, Pub/Sub, Firestore, Cloud Tasks,
 Secret Manager and the rest. Payloads are content-addressed, so restoring a
 blob lands it at the address its metadata already references.
 
-What travels is state, not processes: deployed functions, armed faults and the
-clock stay behind, as with an in-process [fork](fork-state.md). Restoring
-replaces the target's store contents with the file's.
+A snapshot also carries the deterministic testing state around the store:
+armed faults, and a virtual clock's reading. A restored emulator fails the
+same way and reads the same time as the one it came from. A real clock carries
+nothing — the restoring emulator's wall clock is already the right answer.
+
+Deployed functions stay behind: they are environment, not state, so restoring
+never rebuilds or restarts a process. An in-process [fork](fork-state.md) carries the
+same three. Restoring replaces the target's store contents with the
+file's.
 
 Seed an environment once, snapshot it, and each run or test case restores from
 the same file for an identical starting point:
