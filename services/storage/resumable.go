@@ -271,7 +271,8 @@ func parseContentRange(header string) (start, end, total int64, query bool, err 
 	total = -1
 	if totalPart != "*" {
 		total, err = strconv.ParseInt(totalPart, 10, 64)
-		if err != nil {
+		// A negative total would pass for the "not yet declared" sentinel.
+		if err != nil || total < 0 {
 			return 0, 0, 0, false, badRange(header)
 		}
 	}
@@ -284,10 +285,10 @@ func parseContentRange(header string) (start, end, total int64, query bool, err 
 	if !ok {
 		return 0, 0, 0, false, badRange(header)
 	}
-	if start, err = strconv.ParseInt(startPart, 10, 64); err != nil {
+	if start, err = strconv.ParseInt(startPart, 10, 64); err != nil || start < 0 {
 		return 0, 0, 0, false, badRange(header)
 	}
-	if end, err = strconv.ParseInt(endPart, 10, 64); err != nil {
+	if end, err = strconv.ParseInt(endPart, 10, 64); err != nil || end < 0 {
 		return 0, 0, 0, false, badRange(header)
 	}
 	return start, end, total, false, nil

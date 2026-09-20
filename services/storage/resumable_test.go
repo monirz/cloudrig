@@ -112,3 +112,29 @@ func TestMultipartBoundary(t *testing.T) {
 		})
 	}
 }
+
+// FuzzParseContentRange holds the header parser to its contract: a client
+// sends this string, so no input may panic, and a header accepted as valid
+// must describe a range the caller can act on.
+func FuzzParseContentRange(f *testing.F) {
+	for _, seed := range []string{
+		"", "bytes 0-262143/1048576", "bytes 0-262143/*", "bytes */1048576",
+		"bytes -1-0/0", "bytes 9223372036854775807-0/1", "bytes /", "bytes x-y/z",
+	} {
+		f.Add(seed)
+	}
+
+	f.Fuzz(func(t *testing.T, header string) {
+		start, end, total, query, err := parseContentRange(header)
+		if err != nil {
+			return
+		}
+		if start < 0 || end < -1 || total < -1 {
+			t.Errorf("parseContentRange(%q) = %d-%d/%d: accepted a negative bound",
+				header, start, end, total)
+		}
+		if query && end != -1 {
+			t.Errorf("parseContentRange(%q): a query carries no end, got %d", header, end)
+		}
+	})
+}
