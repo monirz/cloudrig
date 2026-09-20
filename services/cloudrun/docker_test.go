@@ -12,8 +12,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/docker/docker/api/types/build"
-	"github.com/docker/docker/client"
+	"github.com/moby/moby/client"
 
 	"github.com/monirz/cloudrig/services/cloudrun"
 )
@@ -32,7 +31,7 @@ func testImage(t *testing.T) string {
 	t.Cleanup(func() { _ = cli.Close() })
 
 	ctx := context.Background()
-	info, err := cli.Info(ctx)
+	info, err := cli.Info(ctx, client.InfoOptions{})
 	if err != nil {
 		t.Skipf("Docker is not reachable: %v", err)
 	}
@@ -44,7 +43,7 @@ func testImage(t *testing.T) string {
 	build := exec.Command("go", "build", "-o", binary, ".")
 	build.Dir = "../../testdata/run-hello"
 	build.Env = append(os.Environ(),
-		"CGO_ENABLED=0", "GOOS=linux", "GOARCH="+goArch(info.Architecture), "GOWORK=off")
+		"CGO_ENABLED=0", "GOOS=linux", "GOARCH="+goArch(info.Info.Architecture), "GOWORK=off")
 	if out, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("building the test service: %v\n%s", err, out)
 	}
@@ -102,7 +101,7 @@ func buildImage(ctx context.Context, cli *client.Client, binary, tag string) err
 		return err
 	}
 
-	resp, err := cli.ImageBuild(ctx, &context_, build.ImageBuildOptions{
+	resp, err := cli.ImageBuild(ctx, &context_, client.ImageBuildOptions{
 		Tags: []string{tag}, Remove: true,
 	})
 	if err != nil {
@@ -270,15 +269,16 @@ func TestContainerResourceLimits(t *testing.T) {
 	defer cli.Close()
 
 	inst, _ := r.Instance("", "", "limited")
-	inspected, err := cli.ContainerInspect(context.Background(), inst.ContainerID())
+	inspected, err := cli.ContainerInspect(context.Background(), inst.ContainerID(),
+		client.ContainerInspectOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	if got := inspected.HostConfig.Memory; got != 512<<20 {
+	if got := inspected.Container.HostConfig.Memory; got != 512<<20 {
 		t.Errorf("memory = %d, want %d — the limit never reached the container", got, 512<<20)
 	}
-	if got := inspected.HostConfig.NanoCPUs; got != 5e8 {
+	if got := inspected.Container.HostConfig.NanoCPUs; got != 5e8 {
 		t.Errorf("cpu = %d, want 5e8", got)
 	}
 }
