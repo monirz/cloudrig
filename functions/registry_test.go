@@ -420,9 +420,11 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 	// Drive the function; its output must arrive on the open stream.
 	fnSrv := httptest.NewServer(inst)
 	t.Cleanup(fnSrv.Close)
-	if _, err := http.Get(fnSrv.URL + "/?n=first"); err != nil {
+	drive, err := http.Get(fnSrv.URL + "/?n=first")
+	if err != nil {
 		t.Fatal(err)
 	}
+	drive.Body.Close()
 
 	lines := bufio.NewScanner(resp.Body)
 	deadline := make(chan struct{})

@@ -115,7 +115,7 @@ func (p *Persistent) Flush() error {
 	defer os.Remove(staged)
 
 	if _, err := tmp.Write(encoded); err != nil {
-		tmp.Close()
+		_ = tmp.Close()
 		return fmt.Errorf("store: writing the snapshot: %w", err)
 	}
 	if err := tmp.Close(); err != nil {

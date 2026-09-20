@@ -86,7 +86,7 @@ func (s *sessions) close(id string) {
 		sess.mu.Lock()
 		if sess.file != nil {
 			name := sess.file.Name()
-			sess.file.Close()
+			_ = sess.file.Close()
 			_ = os.Remove(name)
 			sess.file = nil
 		}

@@ -110,7 +110,7 @@ func start(ctx context.Context, svc Service, source string, o Options) (*Instanc
 	stop := func() {
 		if cmd.Process != nil {
 			_ = cmd.Process.Kill()
-			child.wait()
+			_ = child.wait()
 		}
 		cleanup()
 	}

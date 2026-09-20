@@ -558,12 +558,12 @@ func splitMultipart(r *http.Request) (objectRequest, io.ReadCloser, error) {
 	}
 	var meta objectRequest
 	if err := json.NewDecoder(metaPart).Decode(&meta); err != nil {
-		metaPart.Close()
+		_ = metaPart.Close()
 		return objectRequest{}, nil, gerr.Wrap(err, gerr.InvalidArgument, "malformed object metadata").
 			WithHTTPStatus(http.StatusBadRequest).
 			WithReason("invalid")
 	}
-	metaPart.Close()
+	_ = metaPart.Close()
 
 	mediaPart, err := mr.NextPart()
 	if err != nil {
