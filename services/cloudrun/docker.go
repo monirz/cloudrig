@@ -7,15 +7,15 @@ import (
 	"io"
 	"net"
 	"net/http/httputil"
+	"net/netip"
 	"net/url"
 	"strconv"
 	"sync"
 	"time"
 
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/image"
-	"github.com/docker/docker/client"
-	"github.com/docker/go-connections/nat"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/network"
+	"github.com/moby/moby/client"
 
 	"github.com/monirz/cloudrig/core/clock"
 	"github.com/monirz/cloudrig/core/logring"
@@ -56,7 +56,7 @@ func DockerAvailable(ctx context.Context) bool {
 	if err != nil {
 		return false
 	}
-	_, err = cli.Ping(ctx)
+	_, err = cli.Ping(ctx, client.PingOptions{})
 	return err == nil
 }
 
@@ -66,7 +66,7 @@ func startContainer(ctx context.Context, svc Service, o Options) (*Instance, err
 	if err != nil {
 		return nil, err
 	}
-	if _, err := cli.Ping(ctx); err != nil {
+	if _, err := cli.Ping(ctx, client.PingOptions{}); err != nil {
 		return nil, fmt.Errorf("service %s: Docker is not reachable: %w", svc.Name, err)
 	}
 
@@ -87,12 +87,14 @@ func startContainer(ctx context.Context, svc Service, o Options) (*Instance, err
 		return nil, fmt.Errorf("service %s: %w", svc.Name, err)
 	}
 
-	port := nat.Port(strconv.Itoa(ContainerPort) + "/tcp")
-	created, err := cli.ContainerCreate(ctx,
-		&container.Config{
+	port, _ := network.PortFrom(ContainerPort, network.TCP)
+	// bindIP returns a literal address, so parsing it cannot fail.
+	bind := netip.MustParseAddr(bindIP(cli.DaemonHost()))
+	created, err := cli.ContainerCreate(ctx, client.ContainerCreateOptions{
+		Config: &container.Config{
 			Image:        svc.Image,
 			Env:          containerEnv(svc, o),
-			ExposedPorts: nat.PortSet{port: struct{}{}},
+			ExposedPorts: network.PortSet{port: struct{}{}},
 			Labels: map[string]string{
 				"cloudrig.service":  svc.Name,
 				"cloudrig.project":  svc.Project,
@@ -100,25 +102,25 @@ func startContainer(ctx context.Context, svc Service, o Options) (*Instance, err
 				"cloudrig.revision": svc.Revision(),
 			},
 		},
-		&container.HostConfig{
+		HostConfig: &container.HostConfig{
 			// Published to a port the host picks, so parallel tests and
 			// several services never collide.
-			PortBindings: nat.PortMap{port: []nat.PortBinding{
-				{HostIP: bindIP(cli.DaemonHost()), HostPort: "0"},
+			PortBindings: network.PortMap{port: []network.PortBinding{
+				{HostIP: bind, HostPort: "0"},
 			}},
 			AutoRemove: false,
 			Resources:  container.Resources{Memory: memory, NanoCPUs: cpus},
 		},
-		nil, nil, "")
+	})
 	if err != nil {
 		return nil, fmt.Errorf("creating a container for %s: %w", svc.Name, err)
 	}
 
 	remove := func() {
-		_ = cli.ContainerRemove(context.WithoutCancel(ctx), created.ID,
-			container.RemoveOptions{Force: true})
+		_, _ = cli.ContainerRemove(context.WithoutCancel(ctx), created.ID,
+			client.ContainerRemoveOptions{Force: true})
 	}
-	if err := cli.ContainerStart(ctx, created.ID, container.StartOptions{}); err != nil {
+	if _, err := cli.ContainerStart(ctx, created.ID, client.ContainerStartOptions{}); err != nil {
 		remove()
 		return nil, fmt.Errorf("starting %s: %w", svc.Name, err)
 	}
@@ -186,7 +188,7 @@ func ensureImage(ctx context.Context, cli *client.Client, ref string) error {
 		return nil
 	}
 
-	body, err := cli.ImagePull(ctx, ref, image.PullOptions{})
+	body, err := cli.ImagePull(ctx, ref, client.ImagePullOptions{})
 	if err != nil {
 		return fmt.Errorf("image %s is not present and could not be pulled: %w", ref, err)
 	}
@@ -200,19 +202,23 @@ func ensureImage(ctx context.Context, cli *client.Client, ref string) error {
 }
 
 // publishedAddr reads the host port the daemon assigned.
-func publishedAddr(ctx context.Context, cli *client.Client, id string, port nat.Port) (string, error) {
-	inspected, err := cli.ContainerInspect(ctx, id)
+func publishedAddr(ctx context.Context, cli *client.Client, id string, port network.Port) (string, error) {
+	inspected, err := cli.ContainerInspect(ctx, id, client.ContainerInspectOptions{})
 	if err != nil {
 		return "", fmt.Errorf("inspecting the container: %w", err)
 	}
 
-	bindings := inspected.NetworkSettings.Ports[port]
+	bindings := inspected.Container.NetworkSettings.Ports[port]
 	if len(bindings) == 0 {
 		return "", fmt.Errorf("the container published no host port for %s", port)
 	}
+	bound := ""
+	if ip := bindings[0].HostIP; ip.IsValid() {
+		bound = ip.String()
+	}
 	// Reached at the daemon's host, which is this machine only when the
 	// daemon is.
-	return hostPort(dialHost(cli.DaemonHost(), bindings[0].HostIP), bindings[0].HostPort), nil
+	return hostPort(dialHost(cli.DaemonHost(), bound), bindings[0].HostPort), nil
 }
 
 // containerExit closes the returned channel when the container stops, so the
@@ -222,11 +228,12 @@ func containerExit(ctx context.Context, cli *client.Client, id string) *child {
 
 	go func() {
 		defer close(c.done)
-		wait, errs := cli.ContainerWait(ctx, id, container.WaitConditionNotRunning)
+		res := cli.ContainerWait(ctx, id,
+			client.ContainerWaitOptions{Condition: container.WaitConditionNotRunning})
 		select {
-		case status := <-wait:
+		case status := <-res.Result:
 			c.err = fmt.Errorf("the container exited with status %d", status.StatusCode)
-		case err := <-errs:
+		case err := <-res.Error:
 			if err != nil && !errors.Is(err, context.Canceled) {
 				c.err = err
 			}
@@ -238,7 +245,7 @@ func containerExit(ctx context.Context, cli *client.Client, id string) *child {
 // streamLogs copies the container's output into the log ring, so `cloudrig run
 // logs` and a failed startup both have something to show.
 func streamLogs(ctx context.Context, cli *client.Client, id string, logs io.Writer, also io.Writer) {
-	body, err := cli.ContainerLogs(ctx, id, container.LogsOptions{
+	body, err := cli.ContainerLogs(ctx, id, client.ContainerLogsOptions{
 		ShowStdout: true, ShowStderr: true, Follow: true,
 	})
 	if err != nil {
