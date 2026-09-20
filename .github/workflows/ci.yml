@@ -52,6 +52,12 @@ jobs:
           go-version: ${{ env.GO_VERSION }}
           check-latest: true
       - uses: google-github-actions/setup-gcloud@e427ad8a34f8676edf47cf7d7925499adf3eb74f # v2.2.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '20' # the runtime the node-hello fixture declares
+      # Without the framework installed the Node launcher tests skip themselves.
+      - name: node fixture
+        run: npm ci --prefix testdata/node-hello
       - name: coverage
         run: make coverage
       - name: Upload coverage reports to Codecov
