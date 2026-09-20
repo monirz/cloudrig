@@ -201,6 +201,22 @@ func (s *Set) Match(method, path string) (Rule, bool) {
 	return Rule{}, false
 }
 
+// Snapshot returns the armed rules with Count set to what each has left, so a
+// restored Set fails as often as this one still would. The rate gate's
+// progress is not carried: a restored rule starts its pattern again.
+func (s *Set) Snapshot() []Rule {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]Rule, len(s.rules))
+	for i, l := range s.rules {
+		out[i] = l.rule
+		if l.left > 0 {
+			out[i].Count = l.left
+		}
+	}
+	return out
+}
+
 // Rules returns a snapshot of the armed rules, for a status view. Order is arm
 // order, which is match order.
 func (s *Set) Rules() []Rule {
