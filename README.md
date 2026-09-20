@@ -235,7 +235,7 @@ export FIRESTORE_EMULATOR_HOST=localhost:4599
 
 From here: [provision it with Terraform](#provision-with-terraform),
 [run a workload on GKE](#run-a-workload-on-gke), or watch
-[a whole pipeline run](#see-it-in-action).
+[a whole pipeline run](#see-it-in-action-events-time-travel-and-retries).
 
 ---
 
@@ -323,7 +323,7 @@ Full walkthrough, including kind and the auth split: [GKE guide](docs/services.m
 
 ---
 
-## See It in Action
+## See It in Action: Events, Time Travel and Retries
 
 One workflow, end to end: an object landing in a bucket triggers a function that
 publishes to Pub/Sub, a worker enqueues a Cloud Task, and fast-forwarding the
