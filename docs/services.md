@@ -810,12 +810,26 @@ gcloud container clusters list --location=us-central1     # STATUS: RUNNING
 
 **2. Point kubectl at it.** Use the backend's own kubeconfig, not the one
 gcloud writes — GKE credentials use a Google auth plugin the local cluster
-cannot satisfy, so gcloud's kubeconfig will not authenticate. The cluster is
-named `cloudrig-demo` (a prefix that keeps it distinct from your own clusters):
+cannot satisfy, so gcloud's kubeconfig will not authenticate.
+
+The backend cluster is named `cloudrig-<label>-<hash>`: the `cloudrig-` prefix
+keeps it distinct from your own clusters, and the hash of project, location and
+cluster name keeps two projects from claiming one backend cluster. It is
+derived rather than typed, so look it up instead of guessing:
 
 ```sh
-export KUBECONFIG=$(k3d kubeconfig write cloudrig-demo)   # k3d
-# or, with kind:  kind get kubeconfig --name cloudrig-demo > /tmp/kc && export KUBECONFIG=/tmp/kc
+k3d cluster list
+# NAME                         SERVERS   AGENTS   LOADBALANCER
+# cloudrig-demo-61ba3e33fe1a   1/1       0/0      true
+
+export KUBECONFIG=$(k3d kubeconfig write "$(k3d cluster list | awk '/^cloudrig-demo/{print $1}')")
+```
+
+With kind, the same lookup over `kind get clusters`:
+
+```sh
+kind get kubeconfig --name "$(kind get clusters | grep '^cloudrig-demo')" > /tmp/kc
+export KUBECONFIG=/tmp/kc
 ```
 
 **3. Run a real workload:**

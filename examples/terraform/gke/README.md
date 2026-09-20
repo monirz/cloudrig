@@ -23,8 +23,11 @@ gcloud and Terraform manage the cluster; `kubectl` runs workloads on it. Reach
 it with the backend's own kubeconfig — the credentials gcloud writes use a GCP
 auth plugin the local cluster cannot satisfy:
 
+The backend cluster name is derived — `cloudrig-` plus a label and a hash of
+project, location and cluster name — so look it up rather than typing it:
+
 ```sh
-export KUBECONFIG=$(k3d kubeconfig write cloudrig-tf-demo)
+export KUBECONFIG=$(k3d kubeconfig write "$(k3d cluster list | awk '/^cloudrig-tf-demo/{print $1}')")
 kubectl get nodes
 kubectl create deployment web --image=nginx
 kubectl get pods
