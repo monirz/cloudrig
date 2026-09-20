@@ -34,12 +34,22 @@ coverage: ## coverage.out over product code, examples excluded
 vet: ## go vet
 	$(GO) vet ./...
 
-# A go test over go/ast: go vet has no timer check, and forbidigo is not worth a dependency.
-lint: ## Timer lint
+GOLANGCI_VERSION ?= v2.13.2
+# The official binary, not go run: upstream does not support go-installed builds.
+GOLANGCI := bin/golangci-lint-$(GOLANGCI_VERSION)
+
+$(GOLANGCI):
+	@mkdir -p bin
+	curl -sSfL https://golangci-lint.run/install.sh | sh -s -- -b bin $(GOLANGCI_VERSION)
+	@mv bin/golangci-lint $@
+
+# The timer check is a go test over go/ast: go vet has no such analyzer.
+lint: $(GOLANGCI) ## golangci-lint and the timer lint
+	$(GOLANGCI) run
 	$(GO) test ./lint/
 
-fmt: ## Apply gofumpt, falling back to gofmt
-	$(GO) run mvdan.cc/gofumpt@latest -l -w . 2>/dev/null || gofmt -l -w .
+fmt: $(GOLANGCI) ## Apply gofumpt and import grouping
+	$(GOLANGCI) fmt
 
 tidy: ## go mod tidy
 	$(GO) mod tidy
@@ -49,13 +59,10 @@ vuln: ## govulncheck, reachable paths only
 	@GO=$(GO) sh scripts/vuln.sh
 
 # Verifies, never rewrites: a formatting fix is the author's commit, not CI's diff.
-fmt-check: ## Fail if any file is not gofmt'd
-	@unformatted=$$(gofmt -l .); \
-	if [ -n "$$unformatted" ]; then \
-		echo "not gofmt'd:"; echo "$$unformatted"; exit 1; \
-	fi
+fmt-check: $(GOLANGCI) ## Fail on unformatted files or ungrouped imports
+	$(GOLANGCI) fmt --diff
 
-check: vet lint fmt-check build tests ## What CI runs: vet, lint, gofmt, tidy, build, race tests
+check: vet lint fmt-check build tests ## What CI runs: vet, lint, format, tidy, build, race tests
 	$(GO) mod tidy -diff
 	$(GO) build ./...
 
