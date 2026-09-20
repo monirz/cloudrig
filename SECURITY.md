@@ -35,10 +35,12 @@ Include:
 
 CloudRig is a local emulator for development and testing. It has no
 authentication, and it doesn't enforce Google Cloud IAM. `cloudrig start`
-listens on every network interface, so run it only on a network you trust.
+listens on `127.0.0.1` only; `--host` widens that, which exposes an
+unauthenticated emulator to whoever can reach it.
 
 In scope:
 
+- reaching a CloudRig that listens on its default loopback address
 - escape from the containers or subprocesses that CloudRig runs, such as Cloud
   Functions, Cloud Run or GKE workloads
 - file access outside CloudRig's data directory

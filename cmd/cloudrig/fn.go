@@ -7,9 +7,11 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"text/tabwriter"
@@ -399,7 +401,7 @@ func runFn(args []string, env lookupEnv, stdout, stderr *os.File) error {
 
 	fmt.Fprintf(stdout, "starting %s from %s\n", cfg.name, cfg.source)
 	emu, err := cloudrig.Start(ctx, cloudrig.Options{
-		Addr:    fmt.Sprintf(":%d", cfg.port),
+		Addr:    net.JoinHostPort(defaultHost, strconv.Itoa(cfg.port)),
 		Version: version,
 		Runner:  "subprocess",
 		Functions: []functions.Function{{

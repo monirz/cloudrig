@@ -3,7 +3,7 @@
 ## Commands
 
 ```
-cloudrig start [--port N] [--runner MODE] [--data-dir DIR]
+cloudrig start [--host H] [--port N] [--runner MODE] [--data-dir DIR]
 
 cloudrig fn deploy <name> --source DIR [--runtime R] [--entry-point F]
                           [--project P] [--region L] [--watch]
