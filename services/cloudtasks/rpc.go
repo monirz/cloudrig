@@ -3,15 +3,12 @@ package cloudtasks
 import (
 	"context"
 	"sort"
-	"strings"
 
 	"cloud.google.com/go/cloudtasks/apiv2/cloudtaskspb"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/emptypb"
 	"google.golang.org/protobuf/types/known/timestamppb"
-
-	"github.com/monirz/cloudrig/store"
 )
 
 func (s *Service) CreateQueue(ctx context.Context, req *cloudtaskspb.CreateQueueRequest) (*cloudtaskspb.Queue, error) {
@@ -171,10 +168,3 @@ func versionOrZero(ctx context.Context, s *Service, key string) uint64 {
 	}
 	return v
 }
-
-// trimQueueSuffix is a small helper for listing task parents.
-func trimQueueSuffix(name string) string {
-	return strings.TrimSuffix(name, "/")
-}
-
-var _ = store.ErrNotFound

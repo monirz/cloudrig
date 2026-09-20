@@ -12,6 +12,10 @@ linters:
     - noctx
     - unconvert
     - wastedassign
+  settings:
+    misspell:
+      ignore-rules: [hardlinked] # a hard link, not the typographic hardline
+
   exclusions:
     rules:
       # An unchecked Close or a context-free request is normal in a test.

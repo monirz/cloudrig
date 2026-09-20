@@ -9,6 +9,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"log"
@@ -22,6 +23,12 @@ import (
 )
 
 func main() {
+	if err := run(); err != nil {
+		log.Fatal(err)
+	}
+}
+
+func run() error {
 	mode := flag.String("mode", "send", "send, receive or crash")
 	// The emulator's default, so the demo and `cloudrig fn` agree without
 	// either being told.
@@ -32,13 +39,13 @@ func main() {
 	flag.Parse()
 
 	if os.Getenv("PUBSUB_EMULATOR_HOST") == "" {
-		log.Fatal("set PUBSUB_EMULATOR_HOST=localhost:4599")
+		return errors.New("set PUBSUB_EMULATOR_HOST=localhost:4599")
 	}
 
 	ctx := context.Background()
 	c, err := pubsub.NewClient(ctx, *project)
 	if err != nil {
-		log.Fatalf("client: %v", err)
+		return fmt.Errorf("client: %w", err)
 	}
 	defer c.Close()
 
@@ -48,13 +55,13 @@ func main() {
 
 	switch *mode {
 	case "send":
-		send(ctx, c, topic, *body)
+		return send(ctx, c, topic, *body)
 	case "receive":
-		receive(ctx, c, sub, *wait)
+		return receive(ctx, c, sub, *wait)
 	case "crash":
-		crash(ctx, c, sub)
+		return crash(ctx, c, sub)
 	default:
-		log.Fatalf("unknown mode %q", *mode)
+		return fmt.Errorf("unknown mode %q", *mode)
 	}
 }
 
@@ -79,19 +86,20 @@ func report(what string, err error) {
 	}
 }
 
-func send(ctx context.Context, c *pubsub.Client, topic, body string) {
+func send(ctx context.Context, c *pubsub.Client, topic, body string) error {
 	id, err := c.Publisher(topic).Publish(ctx, &pubsub.Message{
 		Data:       []byte(body),
 		Attributes: map[string]string{"source": "pubsub-demo"},
 	}).Get(ctx)
 	if err != nil {
-		log.Fatalf("publish: %v", err)
+		return fmt.Errorf("publish: %w", err)
 	}
 	fmt.Printf("published %s to %s\n", id, topic)
+	return nil
 }
 
 // receive prints and acknowledges every message.
-func receive(ctx context.Context, c *pubsub.Client, sub string, wait time.Duration) {
+func receive(ctx context.Context, c *pubsub.Client, sub string, wait time.Duration) error {
 	ctx, cancel := context.WithTimeout(ctx, wait)
 	defer cancel()
 
@@ -101,8 +109,9 @@ func receive(ctx context.Context, c *pubsub.Client, sub string, wait time.Durati
 		m.Ack()
 	})
 	if err != nil && ctx.Err() == nil {
-		log.Fatalf("receive: %v", err)
+		return fmt.Errorf("receive: %w", err)
 	}
+	return nil
 }
 
 // crash takes one message and dies still holding it, which is what an ack
@@ -111,7 +120,7 @@ func receive(ctx context.Context, c *pubsub.Client, sub string, wait time.Durati
 // It exits hard rather than returning. A handler that neither acks nor nacks
 // makes the client wait for it forever, so a graceful exit would never get
 // here — and a worker that fails politely is not the case being tested.
-func crash(ctx context.Context, c *pubsub.Client, sub string) {
+func crash(ctx context.Context, c *pubsub.Client, sub string) error {
 	fmt.Printf("receiving from %s, then dying without an ack\n", sub)
 	err := c.Subscriber(sub).Receive(ctx, func(_ context.Context, m *pubsub.Message) {
 		fmt.Printf("%s  id=%s  %s  <- taken, now crashing\n",
@@ -119,6 +128,7 @@ func crash(ctx context.Context, c *pubsub.Client, sub string) {
 		os.Exit(7)
 	})
 	if err != nil {
-		log.Fatalf("receive: %v", err)
+		return fmt.Errorf("receive: %w", err)
 	}
+	return nil
 }

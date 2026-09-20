@@ -186,22 +186,6 @@ func (s *Service) postFunction(w http.ResponseWriter, r *http.Request, p transpo
 	}
 }
 
-// createFunction and patchFunction are loud rather than silently wrong: real
-// gcloud uploads a source zip, which the emulator cannot yet accept.
-func (s *Service) createFunction(w http.ResponseWriter, r *http.Request, p transport.Params) error {
-	return deployUnimplemented("cloudfunctions.projects.locations.functions.create")
-}
-
-func (s *Service) patchFunction(w http.ResponseWriter, r *http.Request, p transport.Params) error {
-	return deployUnimplemented("cloudfunctions.projects.locations.functions.patch")
-}
-
-func deployUnimplemented(op string) error {
-	err := gerr.NewUnimplemented(op)
-	err.Message += "; deploy with: cloudrig fn deploy NAME --source DIR"
-	return err
-}
-
 func (s *Service) deleteFunction(w http.ResponseWriter, r *http.Request, p transport.Params) error {
 	name, _ := splitVerb(p["name"])
 	if err := s.reg.Delete(p["project"], p["location"], name); err != nil {

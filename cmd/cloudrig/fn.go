@@ -125,7 +125,6 @@ func runFnCommand(args []string, env lookupEnv, stdout, stderr *os.File) error {
 
 // deployFlags is the shape shared by every client subcommand.
 type deployFlags struct {
-	name          string
 	source        string
 	runtime       string
 	entryPoint    string

@@ -8,6 +8,7 @@ package firestore
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"sync"
 	"time"
@@ -84,8 +85,11 @@ var (
 // get reads one document, and reports whether it was there.
 func (s *Service) get(ctx context.Context, name string) (*firestorepb.Document, uint64, bool, error) {
 	raw, version, err := s.kv.Get(ctx, docKey(name))
-	if err != nil {
+	if errors.Is(err, store.ErrNotFound) {
 		return nil, 0, false, nil
+	}
+	if err != nil {
+		return nil, 0, false, status.Errorf(codes.Internal, "reading document: %v", err)
 	}
 	var doc firestorepb.Document
 	if err := unmarshal.Unmarshal(raw, &doc); err != nil {
