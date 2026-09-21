@@ -13,15 +13,16 @@
   <a href="https://pkg.go.dev/github.com/monirz/cloudrig"><img src="https://pkg.go.dev/badge/github.com/monirz/cloudrig.svg" alt="Go Reference"></a>
   <a href="https://github.com/monirz/cloudrig/releases"><img src="https://img.shields.io/github/v/release/monirz/cloudrig" alt="Release"></a>
   <a href="LICENSE"><img src="https://img.shields.io/github/license/monirz/cloudrig" alt="License"></a>
-  <a href="https://buymeacoffee.com/monirzbd"><img src="https://img.shields.io/badge/buy%20me%20a%20coffee-support-FFDD00?logo=buymeacoffee&logoColor=black" alt="Buy Me A Coffee"></a>
 </p>
 
 **Use it locally or in CI.** Run real GCP clients — gcloud, Terraform, kubectl
 and the client libraries — against a deterministic local environment. No GCP
 project, no credentials, no network.
 
-> **On a mission to build the best Google Cloud emulator there is.**
-> If CloudRig saves you time, consider [supporting the work](https://buymeacoffee.com/monirzbd).
+**On a mission to build the best Google Cloud emulator there is.** If CloudRig
+saves you time, consider supporting the work.
+
+<a href="https://buymeacoffee.com/monirzbd"><img src="https://img.shields.io/badge/buy%20me%20a%20coffee-support-FFDD00?logo=buymeacoffee&logoColor=black" alt="Buy Me A Coffee"></a>
 
 <p align="center">
   <img src="assets/demo.gif" alt="Starting CloudRig, deploying a function with the cloudrig CLI and calling it, then driving the same emulator with unmodified gcloud: functions list, a bucket created, a file uploaded and listed." width="900">
@@ -440,9 +441,10 @@ CloudRig emulates the following services:
 Full compatibility and limitations: [service guides](docs/services.md) ·
 [what's not supported](UNSUPPORTED.md).
 
-> **Eleven services and counting — on a mission to build the best Google Cloud
-> emulator there is.** If CloudRig saves you time, consider
-> [supporting the work](https://buymeacoffee.com/monirzbd).
+**Eleven services and counting — on a mission to build the best Google Cloud
+emulator there is.** If CloudRig saves you time, consider supporting the work.
+
+<a href="https://buymeacoffee.com/monirzbd"><img src="https://img.shields.io/badge/buy%20me%20a%20coffee-support-FFDD00?logo=buymeacoffee&logoColor=black" alt="Buy Me A Coffee"></a>
 
 ---
 
