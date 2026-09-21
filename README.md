@@ -22,7 +22,7 @@ project, no credentials, no network.
 **On a mission to build the best Google Cloud emulator there is.** If CloudRig
 saves you time, consider supporting the work.
 
-<a href="https://buymeacoffee.com/monirzbd"><img src="https://img.shields.io/badge/buy%20me%20a%20coffee-support-FFDD00?logo=buymeacoffee&logoColor=black" alt="Buy Me A Coffee"></a>
+<a href="https://buymeacoffee.com/monirzbd"><img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me A Coffee" height="48"></a>
 
 <p align="center">
   <img src="assets/demo.gif" alt="Starting CloudRig, deploying a function with the cloudrig CLI and calling it, then driving the same emulator with unmodified gcloud: functions list, a bucket created, a file uploaded and listed." width="900">
@@ -440,11 +440,6 @@ CloudRig emulates the following services:
 
 Full compatibility and limitations: [service guides](docs/services.md) ·
 [what's not supported](UNSUPPORTED.md).
-
-**Eleven services and counting — on a mission to build the best Google Cloud
-emulator there is.** If CloudRig saves you time, consider supporting the work.
-
-<a href="https://buymeacoffee.com/monirzbd"><img src="https://img.shields.io/badge/buy%20me%20a%20coffee-support-FFDD00?logo=buymeacoffee&logoColor=black" alt="Buy Me A Coffee"></a>
 
 ---
 
