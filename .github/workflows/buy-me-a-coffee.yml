@@ -13,6 +13,10 @@ jobs:
     name: Update the Buy Me A Coffee section in the README
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    # With no supporters the API answers {"error":"No supporters"} rather than
+    # an empty list, and the action reads .data unconditionally and crashes.
+    # Harmless until the first supporter arrives, so it must not go red daily.
+    continue-on-error: true
     permissions:
       contents: write # the action commits the updated README
     steps:
