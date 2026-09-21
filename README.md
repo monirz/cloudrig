@@ -20,7 +20,7 @@ and the client libraries — against a deterministic local environment. No GCP
 project, no credentials, no network.
 
 > **On a mission to build the best Google Cloud emulator there is.**
-> If CloudRig saves you time, consider [supporting the work](#support).
+> If CloudRig saves you time, consider [supporting the work](https://buymeacoffee.com/monirzbd).
 
 <p align="center">
   <img src="assets/demo.gif" alt="Starting CloudRig, deploying a function with the cloudrig CLI and calling it, then driving the same emulator with unmodified gcloud: functions list, a bucket created, a file uploaded and listed." width="900">
@@ -441,7 +441,7 @@ Full compatibility and limitations: [service guides](docs/services.md) ·
 
 > **Eleven services and counting — on a mission to build the best Google Cloud
 > emulator there is.** If CloudRig saves you time, consider
-> [supporting the work](#support).
+> [supporting the work](https://buymeacoffee.com/monirzbd).
 
 ---
 
@@ -519,7 +519,8 @@ Contributions, bug reports and ideas are welcome. See
 
 ## Support
 
-If CloudRig saves you time, you can buy me a coffee. Recent messages appear
+If CloudRig saves you time, you can
+[buy me a coffee](https://buymeacoffee.com/monirzbd). Recent messages appear
 below, updated automatically.
 
 <!--START_SECTION:buy-me-a-coffee-->
