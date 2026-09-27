@@ -47,8 +47,12 @@ func Process(w http.ResponseWriter, r *http.Request) {
 		fail(w, "read object", err)
 		return
 	}
-	body, _ := io.ReadAll(rd)
+	body, err := io.ReadAll(rd)
 	rd.Close()
+	if err != nil {
+		fail(w, "read object", err)
+		return
+	}
 	text := string(body)
 	lines, words := strings.Count(text, "\n"), len(strings.Fields(text))
 	log.Printf("read %d bytes: %d lines, %d words", len(body), lines, words)
