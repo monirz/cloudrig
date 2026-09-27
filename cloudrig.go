@@ -167,6 +167,7 @@ func Start(ctx context.Context, o Options) (*Emulator, error) {
 	susvc := serviceusage.New(stack.kvStore)
 	gksvc := gke.New(stack.kvStore, clk)
 	lgsvc := cloudlogging.New(clk)
+	reg.SetLogSink(functionLog(lgsvc))
 	runReg := cloudrun.NewRegistry()
 	// Drain the async work a clock jump sets off, so a virtual-clock advance
 	// returns only once scheduled deliveries and the functions they trigger
@@ -244,6 +245,14 @@ func newStorage(clk clock.Clock, bus *events.Bus, dataDir string) (storageStack,
 		return storageStack{}, fmt.Errorf("cloudrig: %w", err)
 	}
 	return storageStack{svc: storage.New(kv, blobs, clk, bus), blobs: blobs, kv: kv, kvStore: kv}, nil
+}
+
+// functionLog sends each function's output to Cloud Logging, where gcloud
+// functions logs read finds it.
+func functionLog(lg *cloudlogging.Service) func(functions.Function) io.Writer {
+	return func(f functions.Function) io.Writer {
+		return lg.FunctionLog(f.Project, f.Location, f.Name)
+	}
 }
 
 // newRegistry constructs the function registry. Startup functions deploy later,
@@ -394,6 +403,7 @@ func serveForTest(t testing.TB, o Options, stack storageStack) *Emulator {
 	susvc := serviceusage.New(stack.kvStore)
 	gksvc := gke.New(stack.kvStore, o.Clock)
 	lgsvc := cloudlogging.New(o.Clock)
+	reg.SetLogSink(functionLog(lgsvc))
 	runReg := cloudrun.NewRegistry()
 	t.Cleanup(runReg.StopAll)
 	drain := func() { drainAsync(cssvc, bus, ctsvc) }
