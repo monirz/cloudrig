@@ -70,16 +70,16 @@ func tokenize(s string) ([]token, error) {
 	var toks []token
 	for i := 0; i < len(s); {
 		c := s[i]
-		switch {
-		case c == ' ' || c == '\t' || c == '\n':
+		switch c {
+		case ' ', '\t', '\n':
 			i++
-		case c == '(':
+		case '(':
 			toks = append(toks, token{tokLParen, "("})
 			i++
-		case c == ')':
+		case ')':
 			toks = append(toks, token{tokRParen, ")"})
 			i++
-		case c == '"':
+		case '"':
 			str, n, err := quoted(s[i:])
 			if err != nil {
 				return nil, err
