@@ -3,6 +3,7 @@ package cloudlogging
 import (
 	"context"
 	"io"
+	"strings"
 	"testing"
 
 	"cloud.google.com/go/logging/apiv2/loggingpb"
@@ -34,5 +35,29 @@ func TestFunctionLogIsWhatGcloudReads(t *testing.T) {
 	}
 	if len(got) != 2 || got[0] != "first" || got[1] != "second" {
 		t.Errorf("entries = %q, want [first second]", got)
+	}
+}
+
+// TestFunctionLogBoundsAnUnendedLine: output that never writes a newline is
+// emitted in capped pieces, not held in memory without end.
+func TestFunctionLogBoundsAnUnendedLine(t *testing.T) {
+	t.Parallel()
+	var got []string
+	w := &lineWriter{emit: func(line string) { got = append(got, line) }}
+
+	chunk := strings.Repeat("x", 64<<10)
+	for range 10 { // 640 KiB, no newline
+		io.WriteString(w, chunk)
+	}
+	if len(got) != 2 || len(got[0]) != MaxLineBytes || len(got[1]) != MaxLineBytes {
+		t.Fatalf("emitted %d pieces, want 2 of %d bytes", len(got), MaxLineBytes)
+	}
+	if len(w.buf) != 640<<10-2*MaxLineBytes {
+		t.Errorf("held %d bytes, want the %d-byte remainder", len(w.buf), 640<<10-2*MaxLineBytes)
+	}
+
+	io.WriteString(w, "\n")
+	if len(got) != 3 || len(w.buf) != 0 {
+		t.Errorf("the newline did not flush the remainder: %d pieces, %d held", len(got), len(w.buf))
 	}
 }

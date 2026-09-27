@@ -30,6 +30,11 @@ func (s *Service) FunctionLog(project, region, name string) io.Writer {
 	}}
 }
 
+// MaxLineBytes caps a line held while waiting for its newline: Cloud Logging's
+// entry size limit. Output that never ends a line, like \r progress bars, is
+// emitted in pieces this size rather than buffered without end.
+const MaxLineBytes = 256 << 10
+
 // lineWriter calls emit once per complete line. stdout and stderr write from
 // different goroutines, and a write can end mid-line.
 type lineWriter struct {
@@ -51,6 +56,15 @@ func (w *lineWriter) Write(p []byte) (int, error) {
 			w.emit(line)
 		}
 		w.buf = w.buf[i+1:]
+	}
+	for len(w.buf) >= MaxLineBytes {
+		w.emit(string(w.buf[:MaxLineBytes]))
+		w.buf = w.buf[MaxLineBytes:]
+	}
+	// Drop the backing array once drained, so one burst of output is not held
+	// for the life of the function.
+	if len(w.buf) == 0 {
+		w.buf = nil
 	}
 	return len(p), nil
 }
