@@ -241,7 +241,10 @@ variables:
 ```sh
 export PUBSUB_EMULATOR_HOST=localhost:4599
 export FIRESTORE_EMULATOR_HOST=localhost:4599
+export STORAGE_EMULATOR_HOST=http://localhost:4599
 ```
+
+Deployed functions get these automatically.
 
 From here: [provision it with Terraform](#provision-with-terraform),
 [run a workload on GKE](#run-a-workload-on-gke), or watch

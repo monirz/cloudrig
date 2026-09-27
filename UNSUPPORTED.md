@@ -11,9 +11,7 @@ worth more than a surface that looks complete.
 
 Cloud Functions v1:
 
-- `functions.create`, `functions.patch`, `functions.generateUploadUrl` — real
-  gcloud uploads a source zip, which the emulator cannot accept yet. The error
-  points at `cloudrig fn deploy NAME --source DIR`, which works.
+- Any verb on a function other than `:call`, such as `setIamPolicy`.
 
 Cloud Storage:
 
@@ -41,8 +39,9 @@ Cloud Storage:
 
 Event triggers:
 
-- Cloud Storage events only. Pub/Sub, Firestore and Eventarc triggers need
-  those services first.
+- Cloud Storage and Pub/Sub events only (`--trigger-bucket`,
+  `--trigger-topic`). Firestore and Eventarc triggers are not delivered, and a
+  gcloud deploy naming one is refused rather than stored.
 - The first-generation envelope only. CloudEvents arrives with gen2, which
   needs an identity-token issuer.
 - Delivery is at-least-once within one process and not durable: an event
@@ -64,9 +63,9 @@ Pub/Sub:
   redelivery of its own. Real GCF creates a push subscription, so a function
   that is down there misses nothing; here it does.
 
-Pub/Sub REST: only what Terraform drives — create, get, list, patch and delete
-for topics and subscriptions. No publish, pull or acknowledge over JSON; use
-gRPC for those.
+Pub/Sub REST: create, get, list, patch and delete for topics and
+subscriptions, plus `:publish`, `:pull`, `:acknowledge` and
+`:modifyAckDeadline` — what Terraform and gcloud drive. Other verbs return 501.
 
 Service Usage: state is tracked, but no dependency graph — enabling a service
 does not auto-enable the services it depends on, and quota/billing gating does
@@ -90,10 +89,14 @@ Cloud Logging:
 
 - Entries live in memory, bounded to the most recent 10000, and are not
   persisted by --data-dir; a long-running or chatty service loses old ones.
-- The filter language is a subset: logName, severity comparisons,
-  resource.type, labels.<k>, insertId and trace, joined by AND. Anything else
-  is a loud error rather than a silent match-all. No OR, no timestamp ranges,
-  no functions.
+- The filter language is a subset: logName, resource.type,
+  resource.labels.<k>, labels.<k>, insertId, trace and textPayload with `=`,
+  `!=` and `:`; severity and timestamp with every comparison; joined by AND,
+  OR, NOT and parentheses. Anything else is a loud error rather than a silent
+  match-all. No jsonPayload fields, no global text search, no functions.
+- Function output lands as `cloud_function` entries for gcloud functions logs
+  read, but stdout and stderr arrive merged, so every line is INFO; real GCF
+  logs stderr as ERROR. No execution id.
 - No TailLogEntries (streaming), no log-based metrics, no sinks or exclusions.
 
 gRPC: everything except Pub/Sub.
@@ -122,6 +125,8 @@ Snapshot/restore:
 
 Firestore:
 
+- The admin API (`gcloud firestore databases`, indexes, import/export) is not
+  served. The data API is gRPC only, which is what the client libraries use.
 - `Listen` (real-time updates), query cursors (`StartAt`/`EndAt`),
   collection-group queries, and aggregation queries.
 - A transaction is serialised by the commit lock, not multi-version
@@ -173,6 +178,8 @@ Cloud Run:
 - **`pageSize` and `pageToken`** on every list — all results are returned in one
   page. An emulator holds few enough functions that paging would only be
   ceremony.
+- **Managed folders** — listed as empty, so gcloud storage rm -r works; they
+  cannot be created.
 - **Bucket `location` and `storageClass`** — stored and echoed back, but nothing
   behaves differently for them.
 - **`projection`, `fields`, `userProject`** on storage requests.
