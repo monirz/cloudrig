@@ -256,3 +256,49 @@ func TestNeighbouringServiceStubs(t *testing.T) {
 		}
 	})
 }
+
+// TestDeployKeepsTheEventTrigger: gcloud deploy --trigger-bucket sends an
+// eventTrigger, which must become the function's trigger, not be dropped.
+func TestDeployKeepsTheEventTrigger(t *testing.T) {
+	t.Parallel()
+	srv := serve(t)
+	source := map[string]string{"go.mod": "module example.com/fn\n\ngo 1.25\n", "fn.go": goSource}
+
+	post := func(name string, trigger map[string]string) *http.Response {
+		t.Helper()
+		body, _ := json.Marshal(map[string]any{
+			"name":            "projects/p/locations/us-central1/functions/" + name,
+			"runtime":         "go",
+			"entryPoint":      "Handler",
+			"sourceUploadUrl": upload(t, srv.URL, zipOf(t, source)),
+			"eventTrigger":    trigger,
+		})
+		resp, err := http.Post(srv.URL+"/v1/projects/p/locations/us-central1/functions",
+			"application/json", bytes.NewReader(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return resp
+	}
+
+	resp := post("on-upload", map[string]string{
+		"eventType": "google.storage.object.finalize", "resource": "projects/_/buckets/intake",
+	})
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("deploy: status %d", resp.StatusCode)
+	}
+	var fn struct {
+		EventTrigger struct{ EventType, Resource string } `json:"eventTrigger"`
+	}
+	getJSON(t, srv.URL+"/v1/projects/p/locations/us-central1/functions/on-upload", &fn)
+	if fn.EventTrigger.EventType != "google.storage.object.finalize" || fn.EventTrigger.Resource != "projects/_/buckets/intake" {
+		t.Errorf("eventTrigger = %+v", fn.EventTrigger)
+	}
+
+	resp = post("on-audit", map[string]string{"eventType": "google.cloud.audit.log.v1.written"})
+	defer resp.Body.Close()
+	if body, _ := readAll(resp); resp.StatusCode != http.StatusBadRequest || !strings.Contains(body, "not delivered") {
+		t.Errorf("unsupported event type: status %d: %s", resp.StatusCode, body)
+	}
+}
