@@ -140,6 +140,10 @@ func Start(ctx context.Context, o Options) (*Emulator, error) {
 	flt := faults.New()
 
 	reg := newRegistry(clk, bus, o)
+	// Before any deploy, startup functions included: a function takes its log
+	// sink when it starts.
+	lgsvc := cloudlogging.New(clk)
+	reg.SetLogSink(functionLog(lgsvc))
 	stack, err := newStorage(clk, bus, o.DataDir)
 	if err != nil {
 		reg.StopAll()
@@ -166,8 +170,6 @@ func Start(ctx context.Context, o Options) (*Emulator, error) {
 	cssvc := cloudscheduler.New(stack.kvStore, clk, publishTo(psvc))
 	susvc := serviceusage.New(stack.kvStore)
 	gksvc := gke.New(stack.kvStore, clk)
-	lgsvc := cloudlogging.New(clk)
-	reg.SetLogSink(functionLog(lgsvc))
 	runReg := cloudrun.NewRegistry()
 	// Drain the async work a clock jump sets off, so a virtual-clock advance
 	// returns only once scheduled deliveries and the functions they trigger
@@ -391,6 +393,10 @@ func serveForTest(t testing.TB, o Options, stack storageStack) *Emulator {
 	stack.svc = storage.New(stack.kvStore, stack.blobs, o.Clock, bus)
 
 	reg := newRegistry(o.Clock, bus, o)
+	// Before any deploy, startup functions included: a function takes its log
+	// sink when it starts.
+	lgsvc := cloudlogging.New(o.Clock)
+	reg.SetLogSink(functionLog(lgsvc))
 	t.Cleanup(reg.StopAll)
 
 	t.Cleanup(stack.close)
@@ -402,8 +408,6 @@ func serveForTest(t testing.TB, o Options, stack storageStack) *Emulator {
 	cssvc := cloudscheduler.New(stack.kvStore, o.Clock, publishTo(psvc))
 	susvc := serviceusage.New(stack.kvStore)
 	gksvc := gke.New(stack.kvStore, o.Clock)
-	lgsvc := cloudlogging.New(o.Clock)
-	reg.SetLogSink(functionLog(lgsvc))
 	runReg := cloudrun.NewRegistry()
 	t.Cleanup(runReg.StopAll)
 	drain := func() { drainAsync(cssvc, bus, ctsvc) }

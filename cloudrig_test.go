@@ -335,6 +335,51 @@ func TestStartReportsAFunctionFailure(t *testing.T) {
 	}
 }
 
+// TestStartupFunctionLogsReachCloudLogging: a function configured at startup
+// deploys before the rest of the emulator is built, and must still get the
+// Cloud Logging sink.
+func TestStartupFunctionLogsReachCloudLogging(t *testing.T) {
+	if testing.Short() {
+		t.Skip("compiles a function")
+	}
+	t.Parallel()
+
+	emu, err := cloudrig.Start(context.Background(), cloudrig.Options{
+		Addr: "127.0.0.1:0",
+		Functions: []functions.Function{{
+			Name: "hello", Source: "./examples/functions-gcs/hello", EntryPoint: "Hello",
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = emu.Shutdown(context.Background()) })
+
+	resp, err := http.Get(emu.FunctionURL("hello") + "?name=startup")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+
+	// The line reaches Cloud Logging from the child's output asynchronously.
+	for deadline := time.Now().Add(5 * time.Second); ; {
+		list, err := http.Post(emu.BaseURL()+"/v2/entries:list", "application/json",
+			strings.NewReader(`{"resourceNames":["projects/cloudrig-local"],"filter":"resource.labels.function_name=\"hello\""}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, _ := io.ReadAll(list.Body)
+		list.Body.Close()
+		if strings.Contains(string(body), "name=startup") {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("no log entry for the startup function: %s", body)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
 // TestDeployIntoARunningEmulator is the shape the CLI uses: start first, deploy
 // afterwards, over the admin API.
 func TestDeployIntoARunningEmulator(t *testing.T) {
