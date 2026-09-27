@@ -10,6 +10,8 @@ import (
 
 	"github.com/monirz/cloudrig/core/gerr"
 	"github.com/monirz/cloudrig/functions"
+	"github.com/monirz/cloudrig/services/pubsub"
+	"github.com/monirz/cloudrig/services/storage"
 	"github.com/monirz/cloudrig/transport"
 )
 
@@ -88,11 +90,11 @@ func fromV1Event(e *v1Event) (functions.EventTrigger, error) {
 	if e == nil || e.EventType == "" {
 		return functions.EventTrigger{}, nil
 	}
-	switch {
-	case isStorageEvent(e.EventType):
+	switch e.EventType {
+	case storage.EventFinalized, storage.EventDeleted, storage.EventArchived, storage.EventUpdated:
 		bucket, _ := strings.CutPrefix(e.Resource, "projects/_/buckets/")
 		return functions.EventTrigger{EventType: e.EventType, Resource: bucket}, nil
-	case e.EventType == "google.pubsub.topic.publish":
+	case pubsub.EventPublish:
 		return functions.EventTrigger{EventType: e.EventType, Resource: lastSegment(e.Resource)}, nil
 	}
 	return functions.EventTrigger{}, gerr.New(gerr.InvalidArgument,

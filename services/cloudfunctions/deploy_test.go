@@ -296,9 +296,13 @@ func TestDeployKeepsTheEventTrigger(t *testing.T) {
 		t.Errorf("eventTrigger = %+v", fn.EventTrigger)
 	}
 
-	resp = post("on-audit", map[string]string{"eventType": "google.cloud.audit.log.v1.written"})
-	defer resp.Body.Close()
-	if body, _ := readAll(resp); resp.StatusCode != http.StatusBadRequest || !strings.Contains(body, "not delivered") {
-		t.Errorf("unsupported event type: status %d: %s", resp.StatusCode, body)
+	// A storage-looking type the storage service never emits would never fire.
+	for _, eventType := range []string{"google.cloud.audit.log.v1.written", "google.storage.object.change"} {
+		resp = post("never", map[string]string{"eventType": eventType, "resource": "projects/_/buckets/intake"})
+		body, _ := readAll(resp)
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusBadRequest || !strings.Contains(body, "not delivered") {
+			t.Errorf("%s: status %d: %s", eventType, resp.StatusCode, body)
+		}
 	}
 }
