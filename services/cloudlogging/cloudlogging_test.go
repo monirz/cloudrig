@@ -2,13 +2,16 @@ package cloudlogging
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
 	"cloud.google.com/go/logging/apiv2/loggingpb"
+	monitoredres "google.golang.org/genproto/googleapis/api/monitoredres"
 	ltype "google.golang.org/genproto/googleapis/logging/type"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/monirz/cloudrig/core/clock"
 )
@@ -38,6 +41,36 @@ func TestParseFilter(t *testing.T) {
 		{`severity>=WARNING labels.k="v"`, entry(ltype.LogSeverity_INFO, map[string]string{"k": "v"}), false},
 	}
 
+	fn := &loggingpb.LogEntry{
+		LogName:   "projects/p/logs/cloudfunctions.googleapis.com%2Fcloud-functions",
+		Severity:  ltype.LogSeverity_INFO,
+		Timestamp: timestamppb.New(epoch),
+		Resource: &monitoredres.MonitoredResource{Type: "cloud_function", Labels: map[string]string{
+			"function_name": "hello", "region": "us-central1",
+		}},
+		Labels: map[string]string{"goog-managed-by": "cloudfunctions"},
+	}
+	// What gcloud functions logs read sends, verbatim.
+	gcloudFn := `(resource.type="cloud_function" resource.labels.region="us-central1" logName:"cloud-functions" resource.labels.function_name="hello") OR (resource.type="cloud_run_revision" labels."goog-managed-by"="cloudfunctions" resource.labels.service_name="hello") timestamp>="2025-12-31T00:00:00Z"`
+	cases = append(cases, []struct {
+		filter string
+		entry  *loggingpb.LogEntry
+		match  bool
+	}{
+		{gcloudFn, fn, true},
+		{strings.Replace(gcloudFn, `"hello"`, `"other"`, 1), fn, false},
+		{strings.Replace(gcloudFn, "2025-12-31", "2026-01-02", 1), fn, false},
+		{`timestamp>="2026-01-01T00:00:00Z" AND logName:smoke`, &loggingpb.LogEntry{LogName: "projects/p/logs/smoke-log", Timestamp: timestamppb.New(epoch)}, true},
+		{`timestamp<"2026-01-01T00:00:00Z"`, fn, false},
+		{`severity=INFO OR severity=ERROR`, entry(ltype.LogSeverity_ERROR, nil), true},
+		// OR binds tighter than AND: (DEBUG OR ERROR) AND k=v, not DEBUG OR (...).
+		{`severity=DEBUG OR severity=ERROR labels.k="v"`, entry(ltype.LogSeverity_DEBUG, nil), false},
+		{`NOT severity=ERROR`, entry(ltype.LogSeverity_ERROR, nil), false},
+		{`-labels.k="v"`, entry(ltype.LogSeverity_INFO, map[string]string{"k": "x"}), true},
+		{`labels.k!="v"`, entry(ltype.LogSeverity_INFO, map[string]string{"k": "v"}), false},
+		{`labels."goog-managed-by"="cloudfunctions"`, fn, true},
+	}...)
+
 	for _, c := range cases {
 		pred, err := parseFilter(c.filter)
 		if err != nil {
@@ -54,7 +87,7 @@ func TestParseFilter(t *testing.T) {
 // model is an error, never a silent match-everything.
 func TestUnsupportedFilterFails(t *testing.T) {
 	t.Parallel()
-	for _, f := range []string{"httpRequest.status=500", "nonsense", "protoPayload.foo=1"} {
+	for _, f := range []string{"httpRequest.status=500", "nonsense", "protoPayload.foo=1", "(severity=INFO", `labels.k="v`, "timestamp>=yesterday"} {
 		if _, err := parseFilter(f); status.Code(err) != codes.InvalidArgument {
 			t.Errorf("parseFilter(%q) = %v, want InvalidArgument", f, err)
 		}

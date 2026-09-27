@@ -555,9 +555,9 @@ func newHandler(clk clock.Clock, o Options, reg *functions.Registry, runReg *clo
 	for _, prefix := range cloudfunctions.Prefixes {
 		mounts[prefix] = api
 	}
-	// Cloud Tasks serves /v2/projects/{p}/locations/{l}/queues, the same
-	// prefix Cloud Functions v2 uses, so the two are told apart by route.
-	mounts["/v2/"] = routeV1(api, cloudtasks.NewREST(ctsvc))
+	// Cloud Tasks and Cloud Logging share /v2/ with Cloud Functions v2, so
+	// they are told apart by route.
+	mounts["/v2/"] = routeV1(api, cloudtasks.NewREST(ctsvc), cloudlogging.NewREST(lgsvc))
 	closers := []io.Closer{api}
 
 	// Three services live under /v1/projects/{project}/, so a mount prefix
