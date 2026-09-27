@@ -163,3 +163,27 @@ func TestProjectScope(t *testing.T) {
 		t.Errorf("ListLogs for project b returned %v", logs.GetLogNames())
 	}
 }
+
+// TestFilterNestingIsBounded: deep nesting is refused, not recursed into, so
+// one request cannot exhaust the stack of an emulator others share.
+func TestFilterNestingIsBounded(t *testing.T) {
+	t.Parallel()
+	nested := func(n int) string {
+		return strings.Repeat("(", n) + "severity=INFO" + strings.Repeat(")", n)
+	}
+
+	if _, err := parseFilter(nested(MaxFilterDepth - 2)); err != nil {
+		t.Errorf("nesting within the bound: %v", err)
+	}
+	for _, f := range []string{
+		nested(MaxFilterDepth + 1),
+		nested(100000),
+		strings.Repeat("NOT ", MaxFilterDepth+1) + "severity=INFO",
+		strings.Repeat("-", 5000) + "severity=INFO",
+		strings.Repeat("severity=INFO ", MaxFilterLength/10),
+	} {
+		if _, err := parseFilter(f); status.Code(err) != codes.InvalidArgument {
+			t.Errorf("parseFilter(%.30q...) = %v, want InvalidArgument", f, err)
+		}
+	}
+}

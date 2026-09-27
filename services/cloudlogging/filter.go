@@ -24,6 +24,9 @@ var severityRank = map[string]int{
 // is a deliberate error rather than a silent match-everything, so a test
 // relying on a filter is never misled.
 func parseFilter(filter string) (predicate, error) {
+	if len(filter) > MaxFilterLength {
+		return nil, invalid("filter is longer than %d characters", MaxFilterLength)
+	}
 	toks, err := tokenize(filter)
 	if err != nil {
 		return nil, err
@@ -41,6 +44,13 @@ func parseFilter(filter string) (predicate, error) {
 	}
 	return pred, nil
 }
+
+// MaxFilterLength is Cloud Logging's own limit on a filter.
+const MaxFilterLength = 20000
+
+// MaxFilterDepth bounds nested parentheses and NOTs, so a hostile filter cannot
+// recurse the parser into exhausting the stack of an emulator others share.
+const MaxFilterDepth = 64
 
 func invalid(format string, args ...any) error {
 	return status.Errorf(codes.InvalidArgument, format, args...)
@@ -141,8 +151,18 @@ func quoted(s string) (string, int, error) {
 }
 
 type parser struct {
-	toks []token
-	pos  int
+	toks  []token
+	pos   int
+	depth int
+}
+
+// nest enters one level of nesting, refusing past MaxFilterDepth.
+func (p *parser) nest() (leave func(), err error) {
+	if p.depth >= MaxFilterDepth {
+		return nil, invalid("filter nests deeper than %d levels", MaxFilterDepth)
+	}
+	p.depth++
+	return func() { p.depth-- }, nil
 }
 
 func (p *parser) peek() (token, bool) {
@@ -207,6 +227,12 @@ func (p *parser) or() (predicate, error) {
 }
 
 func (p *parser) unary() (predicate, error) {
+	leave, err := p.nest()
+	if err != nil {
+		return nil, err
+	}
+	defer leave()
+
 	if p.keyword("NOT") {
 		inner, err := p.unary()
 		if err != nil {
