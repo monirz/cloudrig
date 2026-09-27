@@ -2,23 +2,25 @@ package pubsub
 
 import (
 	"net/http"
+	"strings"
 
 	"cloud.google.com/go/pubsub/v2/apiv1/pubsubpb"
 
+	"github.com/monirz/cloudrig/core/gerr"
 	"github.com/monirz/cloudrig/transport"
 )
 
 // REST serves the Pub/Sub JSON API over the same service the gRPC half uses.
 //
-// It exists for Terraform: the Google provider speaks REST for every resource,
-// so a gRPC-only Pub/Sub is invisible to it however complete it is.
+// It exists for Terraform and gcloud: both speak REST, so a gRPC-only Pub/Sub
+// is invisible to them however complete it is.
 type REST struct {
 	router *transport.Router
 	pub    *Publisher
 	sub    *Subscriber
 }
 
-// NewREST wires the JSON routes Terraform drives.
+// NewREST wires the JSON routes Terraform and gcloud drive.
 func NewREST(s *Service) *REST {
 	a := &REST{router: transport.NewRouter(), pub: NewPublisher(s), sub: NewSubscriber(s)}
 
@@ -28,6 +30,7 @@ func NewREST(s *Service) *REST {
 	a.router.Handle(http.MethodPatch, topics+"/{topic}", a.updateTopic)
 	a.router.Handle(http.MethodDelete, topics+"/{topic}", a.deleteTopic)
 	a.router.Handle(http.MethodGet, topics, a.listTopics)
+	a.router.Handle(http.MethodPost, topics+"/{topic}", a.topicVerb) // :publish
 
 	const subs = "/v1/projects/{project}/subscriptions"
 	a.router.Handle(http.MethodPut, subs+"/{subscription}", a.createSubscription)
@@ -35,6 +38,7 @@ func NewREST(s *Service) *REST {
 	a.router.Handle(http.MethodPatch, subs+"/{subscription}", a.updateSubscription)
 	a.router.Handle(http.MethodDelete, subs+"/{subscription}", a.deleteSubscription)
 	a.router.Handle(http.MethodGet, subs, a.listSubscriptions)
+	a.router.Handle(http.MethodPost, subs+"/{subscription}", a.subscriptionVerb) // :pull, :acknowledge, ...
 	return a
 }
 
@@ -139,4 +143,68 @@ func (a *REST) listSubscriptions(w http.ResponseWriter, r *http.Request, p trans
 		Project: "projects/" + p["project"],
 	})
 	return respond(w, out, err)
+}
+
+// splitVerb takes the :verb off a resource segment, e.g. orders:publish.
+func splitVerb(segment string) (name, verb string, err error) {
+	name, verb, ok := strings.Cut(segment, ":")
+	if !ok {
+		return "", "", gerr.New(gerr.InvalidArgument, "a POST here needs a :verb").
+			WithHTTPStatus(http.StatusBadRequest)
+	}
+	return name, verb, nil
+}
+
+func (a *REST) topicVerb(w http.ResponseWriter, r *http.Request, p transport.Params) error {
+	topic, verb, err := splitVerb(p["topic"])
+	if err != nil {
+		return err
+	}
+	if verb != "publish" {
+		return gerr.NewUnimplemented("pubsub.topics." + verb)
+	}
+	var req pubsubpb.PublishRequest
+	if err := decode(r, &req); err != nil {
+		return err
+	}
+	req.Topic = "projects/" + p["project"] + "/topics/" + topic
+
+	out, err := a.pub.Publish(r.Context(), &req)
+	return respond(w, out, err)
+}
+
+func (a *REST) subscriptionVerb(w http.ResponseWriter, r *http.Request, p transport.Params) error {
+	sub, verb, err := splitVerb(p["subscription"])
+	if err != nil {
+		return err
+	}
+	name := "projects/" + p["project"] + "/subscriptions/" + sub
+
+	switch verb {
+	case "pull":
+		var req pubsubpb.PullRequest
+		if err := decode(r, &req); err != nil {
+			return err
+		}
+		req.Subscription = name
+		out, err := a.sub.Pull(r.Context(), &req)
+		return respond(w, out, err)
+	case "acknowledge":
+		var req pubsubpb.AcknowledgeRequest
+		if err := decode(r, &req); err != nil {
+			return err
+		}
+		req.Subscription = name
+		out, err := a.sub.Acknowledge(r.Context(), &req)
+		return respond(w, out, err)
+	case "modifyAckDeadline":
+		var req pubsubpb.ModifyAckDeadlineRequest
+		if err := decode(r, &req); err != nil {
+			return err
+		}
+		req.Subscription = name
+		out, err := a.sub.ModifyAckDeadline(r.Context(), &req)
+		return respond(w, out, err)
+	}
+	return gerr.NewUnimplemented("pubsub.subscriptions." + verb)
 }
