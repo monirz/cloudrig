@@ -42,6 +42,7 @@ func NewAPI(svc *Service) *API {
 	a.router.Handle(http.MethodPut, "/storage/v1/b/{bucket}", a.patchBucket)
 	a.router.Handle(http.MethodDelete, "/storage/v1/b/{bucket}", a.deleteBucket)
 	a.router.Handle(http.MethodGet, "/storage/v1/b/{bucket}/storageLayout", a.storageLayout)
+	a.router.Handle(http.MethodGet, "/storage/v1/b/{bucket}/managedFolders", a.listManagedFolders)
 
 	a.router.Handle(http.MethodGet, "/storage/v1/b/{bucket}/iam", a.getBucketIAM)
 	a.router.Handle(http.MethodPut, "/storage/v1/b/{bucket}/iam", a.setBucketIAM)
@@ -204,6 +205,15 @@ func (a *API) storageLayout(w http.ResponseWriter, r *http.Request, p transport.
 		"bucket":   b.Name,
 		"location": b.Location,
 	})
+}
+
+// listManagedFolders answers empty: managed folders are not modelled, and
+// gcloud storage rm -r lists them before deleting a bucket.
+func (a *API) listManagedFolders(w http.ResponseWriter, r *http.Request, p transport.Params) error {
+	if _, err := a.svc.ProjectOf(r.Context(), p["bucket"]); err != nil {
+		return err
+	}
+	return writeJSON(w, http.StatusOK, map[string]any{"kind": "storage#managedFolders"})
 }
 
 func (a *API) listObjects(w http.ResponseWriter, r *http.Request, p transport.Params) error {

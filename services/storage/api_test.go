@@ -51,6 +51,8 @@ func TestAPIWalk(t *testing.T) {
 		{method: "GET", path: b + "/missing", want: 404},
 		{method: "GET", path: b + "/bkt/storageLayout", want: 200},
 		{method: "GET", path: b + "/missing/storageLayout", want: 404},
+		{method: "GET", path: b + "/bkt/managedFolders", want: 200},
+		{method: "GET", path: b + "/missing/managedFolders", want: 404},
 		{method: "PATCH", path: b + "/bkt", body: `{`, want: 400},
 		{method: "PATCH", path: b + "/bkt?ifMetagenerationMatch=x", body: `{}`, want: 400},
 		{method: "PATCH", path: b + "/bkt?ifMetagenerationMatch=99", body: `{"storageClass":"NEARLINE"}`, want: 412},
