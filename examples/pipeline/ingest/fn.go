@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"log"
 	"net/http"
 
 	"cloud.google.com/go/pubsub/v2"
@@ -33,9 +34,12 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 	res := c.Publisher("projects/cloudrig-local/topics/orders").Publish(ctx, &pubsub.Message{
 		Data: []byte(e.Data.Name),
 	})
-	if _, err := res.Get(ctx); err != nil {
+	id, err := res.Get(ctx)
+	if err != nil {
+		log.Printf("ERROR publishing %s: %v", e.Data.Name, err)
 		http.Error(w, err.Error(), 500)
 		return
 	}
+	log.Printf("gs://%s/%s -> published to orders (message %s)", e.Data.Bucket, e.Data.Name, id)
 	w.WriteHeader(http.StatusNoContent)
 }
