@@ -89,6 +89,57 @@ func TestRESTListsWhatWasCreated(t *testing.T) {
 	}
 }
 
+// TestRESTPublishPullAck is the round trip gcloud topics publish and
+// subscriptions pull --auto-ack make.
+func TestRESTPublishPullAck(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(NewREST(newService(t)))
+	t.Cleanup(srv.Close)
+
+	do := func(method, path, body string, want int) []byte {
+		t.Helper()
+		req, _ := http.NewRequest(method, srv.URL+path, strings.NewReader(body))
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		out, _ := io.ReadAll(resp.Body)
+		if resp.StatusCode != want {
+			t.Fatalf("%s %s = %d, want %d: %s", method, path, resp.StatusCode, want, out)
+		}
+		return out
+	}
+
+	do("PUT", "/v1/projects/p/topics/t", ``, 200)
+	do("PUT", "/v1/projects/p/subscriptions/s", `{"topic":"projects/p/topics/t"}`, 200)
+	do("POST", "/v1/projects/p/topics/t:publish", `{"messages":[{"data":"aGk="}]}`, 200) // "hi"
+
+	var pulled struct {
+		ReceivedMessages []struct {
+			AckID   string `json:"ackId"`
+			Message struct{ Data string }
+		} `json:"receivedMessages"`
+	}
+	body := do("POST", "/v1/projects/p/subscriptions/s:pull", `{"maxMessages":10}`, 200)
+	if err := json.Unmarshal(body, &pulled); err != nil {
+		t.Fatal(err)
+	}
+	if len(pulled.ReceivedMessages) != 1 || pulled.ReceivedMessages[0].Message.Data != "aGk=" {
+		t.Fatalf("pull = %s", body)
+	}
+
+	ack, _ := json.Marshal(map[string]any{"ackIds": []string{pulled.ReceivedMessages[0].AckID}})
+	do("POST", "/v1/projects/p/subscriptions/s:acknowledge", string(ack), 200)
+	if body := do("POST", "/v1/projects/p/subscriptions/s:pull", `{"maxMessages":10}`, 200); strings.Contains(string(body), "ackId") {
+		t.Errorf("an acknowledged message came back: %s", body)
+	}
+
+	do("POST", "/v1/projects/p/topics/missing:publish", `{"messages":[{"data":"aGk="}]}`, 404)
+	do("POST", "/v1/projects/p/topics/t", ``, 400)
+	do("POST", "/v1/projects/p/topics/t:frobnicate", ``, 501)
+}
+
 func TestRESTRefusesAnOversizedBody(t *testing.T) {
 	t.Parallel()
 	srv := httptest.NewServer(NewREST(newService(t)))

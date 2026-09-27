@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"log"
 	"net/http"
 	"net/url"
 	"os"
@@ -47,7 +48,7 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 	}
 	defer c.Close()
 
-	if _, err := c.CreateTask(ctx, &cloudtaskspb.CreateTaskRequest{
+	task, err := c.CreateTask(ctx, &cloudtaskspb.CreateTaskRequest{
 		Parent: "projects/cloudrig-local/locations/us-central1/queues/pipeline",
 		Task: &cloudtaskspb.Task{MessageType: &cloudtaskspb.Task_HttpRequest{
 			HttpRequest: &cloudtaskspb.HttpRequest{
@@ -56,9 +57,12 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 				Body:       order,
 			},
 		}},
-	}); err != nil {
+	})
+	if err != nil {
+		log.Printf("ERROR enqueueing %s: %v", order, err)
 		http.Error(w, err.Error(), 500)
 		return
 	}
+	log.Printf("order %s -> enqueued %s", order, task.GetName())
 	w.WriteHeader(http.StatusNoContent)
 }

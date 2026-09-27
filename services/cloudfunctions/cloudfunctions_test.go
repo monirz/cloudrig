@@ -109,6 +109,53 @@ func TestGetFunctionV2IsTheSameFacts(t *testing.T) {
 	}
 }
 
+// TestEventTriggerIsReported: gcloud describe and list render the trigger from
+// these fields, so a bucket-triggered function must not claim to be HTTP.
+func TestEventTriggerIsReported(t *testing.T) {
+	t.Parallel()
+	bucket := goFn("p", "us-central1", "on-upload")
+	bucket.Trigger = functions.EventTrigger{EventType: "google.storage.object.finalize", Resource: "intake"}
+	topic := goFn("p", "us-central1", "on-order")
+	topic.Trigger = functions.EventTrigger{EventType: "google.pubsub.topic.publish", Resource: "orders"}
+	srv := serve(t, bucket, topic)
+
+	base := srv.URL + "/v1/projects/p/locations/us-central1/functions/"
+	var v1 struct {
+		HTTPSTrigger any `json:"httpsTrigger"`
+		EventTrigger struct {
+			EventType, Resource, Service string
+		} `json:"eventTrigger"`
+	}
+	getJSON(t, base+"on-upload", &v1)
+	if v1.HTTPSTrigger != nil {
+		t.Errorf("v1 httpsTrigger = %v, want none on an event function", v1.HTTPSTrigger)
+	}
+	if e := v1.EventTrigger; e.EventType != "google.storage.object.finalize" ||
+		e.Resource != "projects/_/buckets/intake" || e.Service != "storage.googleapis.com" {
+		t.Errorf("v1 eventTrigger = %+v", e)
+	}
+	getJSON(t, base+"on-order", &v1)
+	if e := v1.EventTrigger; e.Resource != "projects/p/topics/orders" || e.Service != "pubsub.googleapis.com" {
+		t.Errorf("v1 pubsub eventTrigger = %+v", e)
+	}
+
+	var v2 struct {
+		EventTrigger struct {
+			EventType    string `json:"eventType"`
+			PubsubTopic  string `json:"pubsubTopic"`
+			EventFilters []struct{ Attribute, Value string }
+		} `json:"eventTrigger"`
+	}
+	getJSON(t, srv.URL+"/v2/projects/p/locations/us-central1/functions/on-upload", &v2)
+	if f := v2.EventTrigger.EventFilters; len(f) != 1 || f[0].Attribute != "bucket" || f[0].Value != "intake" {
+		t.Errorf("v2 eventFilters = %+v", f)
+	}
+	getJSON(t, srv.URL+"/v2/projects/p/locations/us-central1/functions/on-order", &v2)
+	if v2.EventTrigger.PubsubTopic != "projects/p/topics/orders" {
+		t.Errorf("v2 pubsubTopic = %q", v2.EventTrigger.PubsubTopic)
+	}
+}
+
 // TestNotFoundPointsAtTheRightProject guards the easiest mistake to make:
 // deploying to one project and addressing another. "does not exist" alone sends
 // you looking for the wrong problem.

@@ -19,8 +19,8 @@
 and the client libraries — against a deterministic local environment. No GCP
 project, no credentials, no network.
 
-**On a mission to build the best Google Cloud emulator there is.** If CloudRig
-saves you time, consider supporting the work.
+**I'm on a mission to build the best Google Cloud emulator out there.** If
+CloudRig saves you time, consider supporting the work.
 
 <a href="https://buymeacoffee.com/monirzbd"><img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me A Coffee" height="48"></a>
 
@@ -241,7 +241,10 @@ variables:
 ```sh
 export PUBSUB_EMULATOR_HOST=localhost:4599
 export FIRESTORE_EMULATOR_HOST=localhost:4599
+export STORAGE_EMULATOR_HOST=http://localhost:4599
 ```
+
+Deployed functions get these automatically.
 
 From here: [provision it with Terraform](#provision-with-terraform),
 [run a workload on GKE](#run-a-workload-on-gke), or watch

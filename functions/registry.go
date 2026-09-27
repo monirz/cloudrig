@@ -3,6 +3,7 @@ package functions
 import (
 	"context"
 	"fmt"
+	"io"
 	"net/http"
 	"sort"
 	"sync"
@@ -65,6 +66,14 @@ func NewRegistry(clk clock.Clock, bus *events.Bus, opts Options) *Registry {
 func (r *Registry) SetEnv(env []string) {
 	r.mu.Lock()
 	r.opts.Env = env
+	r.mu.Unlock()
+}
+
+// SetLogSink sends the output of every function deployed after this call to
+// sink as well as to fn logs.
+func (r *Registry) SetLogSink(sink func(Function) io.Writer) {
+	r.mu.Lock()
+	r.opts.LogSink = sink
 	r.mu.Unlock()
 }
 

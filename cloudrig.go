@@ -140,6 +140,10 @@ func Start(ctx context.Context, o Options) (*Emulator, error) {
 	flt := faults.New()
 
 	reg := newRegistry(clk, bus, o)
+	// Before any deploy, startup functions included: a function takes its log
+	// sink when it starts.
+	lgsvc := cloudlogging.New(clk)
+	reg.SetLogSink(functionLog(lgsvc))
 	stack, err := newStorage(clk, bus, o.DataDir)
 	if err != nil {
 		reg.StopAll()
@@ -166,7 +170,6 @@ func Start(ctx context.Context, o Options) (*Emulator, error) {
 	cssvc := cloudscheduler.New(stack.kvStore, clk, publishTo(psvc))
 	susvc := serviceusage.New(stack.kvStore)
 	gksvc := gke.New(stack.kvStore, clk)
-	lgsvc := cloudlogging.New(clk)
 	runReg := cloudrun.NewRegistry()
 	// Drain the async work a clock jump sets off, so a virtual-clock advance
 	// returns only once scheduled deliveries and the functions they trigger
@@ -244,6 +247,14 @@ func newStorage(clk clock.Clock, bus *events.Bus, dataDir string) (storageStack,
 		return storageStack{}, fmt.Errorf("cloudrig: %w", err)
 	}
 	return storageStack{svc: storage.New(kv, blobs, clk, bus), blobs: blobs, kv: kv, kvStore: kv}, nil
+}
+
+// functionLog sends each function's output to Cloud Logging, where gcloud
+// functions logs read finds it.
+func functionLog(lg *cloudlogging.Service) func(functions.Function) io.Writer {
+	return func(f functions.Function) io.Writer {
+		return lg.FunctionLog(f.Project, f.Location, f.Name)
+	}
 }
 
 // newRegistry constructs the function registry. Startup functions deploy later,
@@ -324,15 +335,16 @@ func clockState(clk clock.Clock) *state.ClockState {
 // with no manual emulator-host wiring. An explicit value in the environment
 // wins, so a function can still be pointed elsewhere.
 func selfEnv(addr string) []string {
-	// The emulator-host variables are scheme-less host:port; CLOUDRIG_ENDPOINT
-	// is a URL everywhere else in the repo, so it keeps its scheme.
+	// The Pub/Sub and Firestore hosts are scheme-less host:port. Storage takes a
+	// URL, which every storage SDK accepts, as does CLOUDRIG_ENDPOINT.
 	vals := map[string]string{
 		"PUBSUB_EMULATOR_HOST":    addr,
 		"FIRESTORE_EMULATOR_HOST": addr,
+		"STORAGE_EMULATOR_HOST":   "http://" + addr,
 		"CLOUDRIG_ENDPOINT":       "http://" + addr,
 	}
 	var env []string
-	for _, k := range []string{"PUBSUB_EMULATOR_HOST", "FIRESTORE_EMULATOR_HOST", "CLOUDRIG_ENDPOINT"} {
+	for _, k := range []string{"PUBSUB_EMULATOR_HOST", "FIRESTORE_EMULATOR_HOST", "STORAGE_EMULATOR_HOST", "CLOUDRIG_ENDPOINT"} {
 		if _, ok := os.LookupEnv(k); !ok {
 			env = append(env, k+"="+vals[k])
 		}
@@ -381,6 +393,10 @@ func serveForTest(t testing.TB, o Options, stack storageStack) *Emulator {
 	stack.svc = storage.New(stack.kvStore, stack.blobs, o.Clock, bus)
 
 	reg := newRegistry(o.Clock, bus, o)
+	// Before any deploy, startup functions included: a function takes its log
+	// sink when it starts.
+	lgsvc := cloudlogging.New(o.Clock)
+	reg.SetLogSink(functionLog(lgsvc))
 	t.Cleanup(reg.StopAll)
 
 	t.Cleanup(stack.close)
@@ -392,7 +408,6 @@ func serveForTest(t testing.TB, o Options, stack storageStack) *Emulator {
 	cssvc := cloudscheduler.New(stack.kvStore, o.Clock, publishTo(psvc))
 	susvc := serviceusage.New(stack.kvStore)
 	gksvc := gke.New(stack.kvStore, o.Clock)
-	lgsvc := cloudlogging.New(o.Clock)
 	runReg := cloudrun.NewRegistry()
 	t.Cleanup(runReg.StopAll)
 	drain := func() { drainAsync(cssvc, bus, ctsvc) }
@@ -554,9 +569,9 @@ func newHandler(clk clock.Clock, o Options, reg *functions.Registry, runReg *clo
 	for _, prefix := range cloudfunctions.Prefixes {
 		mounts[prefix] = api
 	}
-	// Cloud Tasks serves /v2/projects/{p}/locations/{l}/queues, the same
-	// prefix Cloud Functions v2 uses, so the two are told apart by route.
-	mounts["/v2/"] = routeV1(api, cloudtasks.NewREST(ctsvc))
+	// Cloud Tasks and Cloud Logging share /v2/ with Cloud Functions v2, so
+	// they are told apart by route.
+	mounts["/v2/"] = routeV1(api, cloudtasks.NewREST(ctsvc), cloudlogging.NewREST(lgsvc))
 	closers := []io.Closer{api}
 
 	// Three services live under /v1/projects/{project}/, so a mount prefix

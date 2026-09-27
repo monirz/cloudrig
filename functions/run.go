@@ -43,6 +43,10 @@ type Options struct {
 
 	// Env is extra environment for the child, as KEY=VALUE.
 	Env []string
+
+	// LogSink, when set, also receives each function's output: the emulator
+	// uses it to put function logs in Cloud Logging.
+	LogSink func(Function) io.Writer
 }
 
 // Start builds f and launches it, returning once the child is listening.
@@ -64,11 +68,17 @@ func Start(ctx context.Context, f Function, o Options) (*Instance, error) {
 	// One buffer serves both purposes: it is the function's log, and the tail
 	// of it explains a child that dies before it ever listens.
 	logs := logring.New(logring.DefaultLines)
+	var out io.Writer = logs
+	if o.LogSink != nil {
+		if w := o.LogSink(f); w != nil {
+			out = io.MultiWriter(logs, w)
+		}
+	}
 	cmd := sp.cmd
 	cmd.Env = append(cmd.Environ(), o.Env...)
-	cmd.Stderr = io.Writer(logs)
+	cmd.Stderr = out
 	if o.Stderr != nil {
-		cmd.Stderr = io.MultiWriter(logs, o.Stderr)
+		cmd.Stderr = io.MultiWriter(out, o.Stderr)
 	}
 
 	stdout, err := cmd.StdoutPipe()
@@ -81,7 +91,7 @@ func Start(ctx context.Context, f Function, o Options) (*Instance, error) {
 		return nil, fmt.Errorf("starting %s: %w", f.Name, err)
 	}
 
-	addr, err := awaitListen(ctx, stdout, logs, o.Stderr, sp.ready)
+	addr, err := awaitListen(ctx, stdout, out, o.Stderr, sp.ready)
 	if err != nil {
 		_ = cmd.Process.Kill()
 		_ = cmd.Wait()

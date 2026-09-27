@@ -10,15 +10,18 @@ import (
 
 	"github.com/monirz/cloudrig/core/gerr"
 	"github.com/monirz/cloudrig/functions"
+	"github.com/monirz/cloudrig/services/pubsub"
+	"github.com/monirz/cloudrig/services/storage"
 	"github.com/monirz/cloudrig/transport"
 )
 
 // deployRequest is the slice of the v1 CloudFunction body a deploy needs.
 type deployRequest struct {
-	Name            string `json:"name"`
-	Runtime         string `json:"runtime"`
-	EntryPoint      string `json:"entryPoint"`
-	SourceUploadURL string `json:"sourceUploadUrl"`
+	Name            string   `json:"name"`
+	Runtime         string   `json:"runtime"`
+	EntryPoint      string   `json:"entryPoint"`
+	SourceUploadURL string   `json:"sourceUploadUrl"`
+	EventTrigger    *v1Event `json:"eventTrigger"`
 }
 
 // deployFunction handles both create and patch: gcloud sends a full function
@@ -47,6 +50,11 @@ func (s *Service) deployFunction(w http.ResponseWriter, r *http.Request, p trans
 			WithReason("required")
 	}
 
+	trigger, err := fromV1Event(body.EventTrigger)
+	if err != nil {
+		return err
+	}
+
 	source, err := s.materialize(body.SourceUploadURL, name)
 	if err != nil {
 		return err
@@ -59,6 +67,7 @@ func (s *Service) deployFunction(w http.ResponseWriter, r *http.Request, p trans
 		Source:     source,
 		Runtime:    functions.Runtime(body.Runtime),
 		EntryPoint: body.EntryPoint,
+		Trigger:    trigger,
 	})
 	if err != nil {
 		// A source that does not build is the caller's problem, so report it
@@ -73,6 +82,25 @@ func (s *Service) deployFunction(w http.ResponseWriter, r *http.Request, p trans
 		"name":  desc.ResourceName(),
 	})
 	return writeJSON(w, http.StatusOK, op)
+}
+
+// fromV1Event reads a deploy's event trigger. Only the events the emulator
+// delivers are accepted: a trigger that could never fire is refused, not stored.
+func fromV1Event(e *v1Event) (functions.EventTrigger, error) {
+	if e == nil || e.EventType == "" {
+		return functions.EventTrigger{}, nil
+	}
+	switch e.EventType {
+	case storage.EventFinalized, storage.EventDeleted, storage.EventArchived, storage.EventUpdated:
+		bucket, _ := strings.CutPrefix(e.Resource, "projects/_/buckets/")
+		return functions.EventTrigger{EventType: e.EventType, Resource: bucket}, nil
+	case pubsub.EventPublish:
+		return functions.EventTrigger{EventType: e.EventType, Resource: lastSegment(e.Resource)}, nil
+	}
+	return functions.EventTrigger{}, gerr.New(gerr.InvalidArgument,
+		"event type "+e.EventType+" is not delivered by cloudrig; Cloud Storage and Pub/Sub triggers are").
+		WithHTTPStatus(http.StatusBadRequest).
+		WithReason("unsupportedEventType")
 }
 
 // materialize turns an upload URL into a directory the runner can build.
