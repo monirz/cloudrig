@@ -1,6 +1,7 @@
 package pubsub
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -52,5 +53,35 @@ func TestRestorePendingReplaces(t *testing.T) {
 	s.RestorePending(0, nil)
 	if seq, msgs := s.Pending(); seq != 0 || len(msgs) != 0 {
 		t.Errorf("after restoring nothing: seq %d, %d subscriptions pending", seq, len(msgs))
+	}
+}
+
+// An ack held from before a restore must not settle a delivery made after it,
+// even of a message with the same id.
+func TestStaleAckAfterRestore(t *testing.T) {
+	t.Parallel()
+
+	s := newService(t)
+	const sub = "projects/p/subscriptions/s"
+	subscribe(t, s, sub)
+	s.backlog[sub] = []*pubsubpb.PubsubMessage{{MessageId: "1", Data: []byte("a")}}
+	seq, msgs := s.Pending()
+	stale := s.take(sub, 1, time.Minute)[0].GetAckId()
+
+	s.RestorePending(seq, msgs)
+	fresh := s.take(sub, 1, time.Minute)[0].GetAckId()
+	if fresh == stale {
+		t.Fatalf("ack id %q reused across a restore", fresh)
+	}
+
+	if _, err := NewSubscriber(s).Acknowledge(context.Background(), &pubsubpb.AcknowledgeRequest{
+		Subscription: sub, AckIds: []string{stale},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.outstanding[sub]) != 1 {
+		t.Errorf("a stale ack settled the new delivery: outstanding = %d", len(s.outstanding[sub]))
 	}
 }

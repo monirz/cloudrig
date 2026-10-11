@@ -44,6 +44,8 @@ type Service struct {
 	// cannot stall delivery.
 	waiters map[string]map[chan struct{}]struct{}
 	seq     uint64
+	// deliveries numbers ack ids; unlike seq it never travels in a snapshot.
+	deliveries uint64
 }
 
 // New wires a service.

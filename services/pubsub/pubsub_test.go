@@ -258,7 +258,7 @@ func TestSourceOfMatchesATopicTrigger(t *testing.T) {
 
 // leased publishes one message and takes it, returning the fake clock so a
 // test can decide what the deadline does.
-func leased(t *testing.T, deadline time.Duration) (*Service, *clock.FakeClock, string) {
+func leased(t *testing.T, deadline time.Duration) (*Service, *clock.FakeClock, string, string) {
 	t.Helper()
 
 	clk := clock.NewFake(epoch)
@@ -266,10 +266,11 @@ func leased(t *testing.T, deadline time.Duration) (*Service, *clock.FakeClock, s
 	const sub = "projects/p/subscriptions/s"
 	s.backlog[sub] = []*pubsubpb.PubsubMessage{{MessageId: "1", Data: []byte("a")}}
 
-	if got := s.take(sub, 1, deadline); len(got) != 1 {
+	got := s.take(sub, 1, deadline)
+	if len(got) != 1 {
 		t.Fatalf("take = %d messages, want 1", len(got))
 	}
-	return s, clk, sub
+	return s, clk, sub, got[0].GetAckId()
 }
 
 // TestDeadlineRedelivers is the case a subscriber that dies mid-handler
@@ -277,7 +278,7 @@ func leased(t *testing.T, deadline time.Duration) (*Service, *clock.FakeClock, s
 func TestDeadlineRedelivers(t *testing.T) {
 	t.Parallel()
 
-	s, clk, sub := leased(t, 10*time.Second)
+	s, clk, sub, _ := leased(t, 10*time.Second)
 
 	clk.Advance(9 * time.Second)
 	s.mu.Lock()
@@ -306,12 +307,12 @@ func TestDeadlineRedelivers(t *testing.T) {
 func TestAckStopsTheDeadline(t *testing.T) {
 	t.Parallel()
 
-	s, clk, sub := leased(t, 10*time.Second)
+	s, clk, sub, ackID := leased(t, 10*time.Second)
 
 	b := NewSubscriber(s)
 	subscribe(t, s, sub)
 	if _, err := b.Acknowledge(context.Background(), &pubsubpb.AcknowledgeRequest{
-		Subscription: sub, AckIds: []string{"1"},
+		Subscription: sub, AckIds: []string{ackID},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -332,12 +333,12 @@ func TestAckStopsTheDeadline(t *testing.T) {
 func TestExtendPostponesRedelivery(t *testing.T) {
 	t.Parallel()
 
-	s, clk, sub := leased(t, 10*time.Second)
+	s, clk, sub, ackID := leased(t, 10*time.Second)
 
 	b := NewSubscriber(s)
 	subscribe(t, s, sub)
 	if _, err := b.ModifyAckDeadline(context.Background(), &pubsubpb.ModifyAckDeadlineRequest{
-		Subscription: sub, AckIds: []string{"1"}, AckDeadlineSeconds: 60,
+		Subscription: sub, AckIds: []string{ackID}, AckDeadlineSeconds: 60,
 	}); err != nil {
 		t.Fatal(err)
 	}

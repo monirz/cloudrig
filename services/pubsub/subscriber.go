@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"sort"
 	"strings"
 	"time"
@@ -141,9 +142,10 @@ func (s *Service) take(subscription string, n int, deadline time.Duration) []*pu
 
 	out := make([]*pubsubpb.ReceivedMessage, 0, len(taken))
 	for _, msg := range taken {
-		// The ack id is the message id: an emulator has no reason to make
-		// them differ, and a readable ack id helps when a test prints one.
-		ackID := msg.GetMessageId()
+		// The message id plus a delivery count no restore resets, so an ack
+		// held from before a restore cannot settle a later delivery.
+		s.deliveries++
+		ackID := fmt.Sprintf("%s-%d", msg.GetMessageId(), s.deliveries)
 		s.outstanding[subscription][ackID] = &lease{
 			msg: msg,
 			// Through the injected clock, so a test drives redelivery by
