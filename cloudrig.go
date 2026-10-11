@@ -298,6 +298,7 @@ func (s stateSnapshot) WriteSnapshot(w io.Writer) error {
 	if !ok {
 		return gerr.New(gerr.FailedPrecondition, "snapshot needs an in-memory emulator; a --data-dir store persists on disk already")
 	}
+	// Messages before the store; see RestorePending.
 	seq, msgs := s.pubsub.Pending()
 	return state.Write(w, mem.Snapshot(), s.blobs, state.Runtime{
 		Faults: s.faults.Snapshot(),
@@ -481,6 +482,9 @@ func (e *Emulator) Fork(t testing.TB) *Emulator {
 		t.Fatal("cloudrig: only an in-memory emulator can fork; one started with a DataDir cannot")
 	}
 
+	// Messages before the store, as a snapshot takes them, so a subscription
+	// deleted in between leaves no orphans; see RestorePending.
+	seq, msgs := e.pubsub.Pending()
 	copied := store.NewMemory()
 	copied.Restore(mem.Snapshot())
 
@@ -501,7 +505,7 @@ func (e *Emulator) Fork(t testing.TB) *Emulator {
 	for _, rule := range e.faults.Snapshot() {
 		forked.faults.Add(rule)
 	}
-	forked.pubsub.RestorePending(e.pubsub.Pending())
+	forked.pubsub.RestorePending(seq, msgs)
 	return forked
 }
 

@@ -2,6 +2,7 @@ package pubsub
 
 import (
 	"cmp"
+	"context"
 	"maps"
 	"slices"
 	"strconv"
@@ -38,8 +39,16 @@ func (s *Service) Pending() (uint64, map[string][]*pubsubpb.PubsubMessage) {
 }
 
 // RestorePending replaces every pending message and the id counter. Leases
-// are dropped: a restored message is delivered afresh.
+// are dropped: a restored message is delivered afresh. Messages are captured
+// before the store, so one whose subscription the store lacks was deleted in
+// between, and is dropped with it.
 func (s *Service) RestorePending(seq uint64, msgs map[string][]*pubsubpb.PubsubMessage) {
+	live := map[string]bool{}
+	for sub := range msgs {
+		_, _, err := s.kv.Get(context.Background(), subscriptionKey(sub))
+		live[sub] = err == nil
+	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -51,6 +60,9 @@ func (s *Service) RestorePending(seq uint64, msgs map[string][]*pubsubpb.PubsubM
 	s.outstanding = map[string]map[string]*lease{}
 	s.backlog = map[string][]*pubsubpb.PubsubMessage{}
 	for sub, queue := range msgs {
+		if !live[sub] {
+			continue
+		}
 		for _, m := range queue {
 			s.backlog[sub] = append(s.backlog[sub], proto.CloneOf(m))
 		}

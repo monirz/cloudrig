@@ -28,6 +28,7 @@ func TestPendingRoundTrips(t *testing.T) {
 	}
 
 	r := newService(t)
+	subscribe(t, r, sub)
 	r.RestorePending(seq, msgs)
 	got := r.take(sub, 10, time.Minute)
 	var bodies string
@@ -83,5 +84,24 @@ func TestStaleAckAfterRestore(t *testing.T) {
 	defer s.mu.Unlock()
 	if len(s.outstanding[sub]) != 1 {
 		t.Errorf("a stale ack settled the new delivery: outstanding = %d", len(s.outstanding[sub]))
+	}
+}
+
+// A message whose subscription is not in the store was captured while the
+// subscription was being deleted; restoring it would leave an orphan.
+func TestRestorePendingDropsOrphans(t *testing.T) {
+	t.Parallel()
+
+	s := newService(t)
+	const kept, gone = "projects/p/subscriptions/kept", "projects/p/subscriptions/gone"
+	subscribe(t, s, kept)
+	s.RestorePending(2, map[string][]*pubsubpb.PubsubMessage{
+		kept: {{MessageId: "1"}},
+		gone: {{MessageId: "2"}},
+	})
+
+	_, msgs := s.Pending()
+	if len(msgs[kept]) != 1 || len(msgs[gone]) != 0 {
+		t.Errorf("pending = %v, want only the kept subscription's message", msgs)
 	}
 }
