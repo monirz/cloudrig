@@ -188,8 +188,9 @@ Seed expensive state once, then branch it per case:
 
 A fork copies metadata and **hardlinks** object payloads, so branching a
 hundred gigabytes of objects costs the size of the metadata. Store contents,
-armed faults, the virtual clock and pending Pub/Sub messages all travel, and each is copied rather than
-shared — travelling time in one fork leaves the others where they were.
+armed faults, the virtual clock and pending Pub/Sub messages all travel, and
+each is copied rather than shared — travelling time in one fork leaves the
+others where they were.
 
 ### Failure reproduction
 
