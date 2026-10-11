@@ -86,6 +86,30 @@ No project, no credentials, no network. The same is true of `terraform`,
 
 ---
 
+## Replay a CI Failure on Your Laptop
+
+A test that fails in CI and passes locally usually fails because of the
+environment. With CloudRig the environment is one file: snapshot before the
+tests run, upload it when they fail, restore it and get the same failure.
+
+```sh
+# in CI, before the tests
+cloudrig fault pubsub --path /google.pubsub.v1.Publisher/Publish --latency 3s --failure-rate 20%
+cloudrig snapshot start.tar     # uploaded as an artifact if the tests fail
+
+# on your laptop
+cloudrig restore start.tar
+go test ./...
+# order-10 is saved but was never announced
+# order-5 is saved but was never announced
+```
+
+Seeded data, armed faults and a virtual clock all travel in the file.
+Guide: [replay a CI failure](docs/ci-replay.md), with a runnable
+[example](examples/ci-replay).
+
+---
+
 ## Test Controls
 
 Provoke the failures, delays, and starting conditions a test needs, all against
@@ -164,15 +188,19 @@ shared — travelling time in one fork leaves the others where they were.
 
 ### Failure reproduction
 
-A snapshot is a file. When an integration test fails in CI, upload the snapshot
-as a build artifact; whoever picks up the bug restores it and gets the exact
-world the failure happened in, down to the clock reading and the armed faults.
+A snapshot is a file. Take one before the tests run and upload it as a build
+artifact when they fail; whoever picks up the bug restores it and starts from
+the exact world the failing run started from, down to the clock reading and
+the armed faults.
 
 ```sh
-cloudrig snapshot failure.tar   # in CI, on test failure
-cloudrig restore failure.tar    # on a laptop, an hour later
+cloudrig snapshot start.tar     # in CI, before the tests
+cloudrig restore start.tar      # on a laptop, an hour later
 # restored
 ```
+
+A snapshot taken after the failure is for inspecting what it left behind, not
+for rerunning. See [replay a CI failure](docs/ci-replay.md).
 
 More: [in-process testing](docs/in-process-testing.md), [fork state](docs/fork-state.md).
 
@@ -473,6 +501,7 @@ Full compatibility and limitations: [service guides](docs/services.md) ·
 - [Fault Injection](docs/fault-injection.md)
 - [Fork State](docs/fork-state.md)
 - [Snapshot and Restore](docs/snapshot.md)
+- [Replay a CI Failure](docs/ci-replay.md)
 - [In-Process Testing](docs/in-process-testing.md)
 - [Configuration](docs/configuration.md)
 - [Authentication](docs/authentication.md)
