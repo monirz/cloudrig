@@ -16,6 +16,8 @@ import (
 	"strings"
 	"time"
 
+	"cloud.google.com/go/pubsub/v2/apiv1/pubsubpb"
+
 	"github.com/monirz/cloudrig/core/faults"
 	"github.com/monirz/cloudrig/store"
 	"github.com/monirz/cloudrig/store/blob"
@@ -24,20 +26,28 @@ import (
 const (
 	manifestName = "manifest.json"
 	blobPrefix   = "blobs/"
-	formatVer    = 2
+	formatVer    = 3
 )
 
-// Runtime is the deterministic testing state that sits beside the store:
-// armed faults and, under a virtual clock, the time. Deployed functions are
-// environment, not state, and stay behind.
+// Runtime is the state that sits beside the store: armed faults, under a
+// virtual clock the time, and undelivered Pub/Sub messages. Deployed functions
+// are environment, not state, and stay behind.
 type Runtime struct {
 	Faults []faults.Rule `json:"faults,omitempty"`
 	Clock  *ClockState   `json:"clock,omitempty"`
+	PubSub *PubSubState  `json:"pubsub,omitempty"`
 }
 
 // ClockState is a virtual clock's reading. A real clock writes none.
 type ClockState struct {
 	Now time.Time `json:"now"`
+}
+
+// PubSubState is every unacknowledged message by subscription, and the
+// message-id counter so ids published after a restore do not repeat.
+type PubSubState struct {
+	Seq      uint64                               `json:"seq"`
+	Messages map[string][]*pubsubpb.PubsubMessage `json:"messages,omitempty"`
 }
 
 type manifest struct {
@@ -79,7 +89,8 @@ func Write(w io.Writer, entries []store.Entry, blobs *blob.Store, rt Runtime) er
 
 // Read loads a stream written by Write: it replaces kv's contents with the
 // manifest, adds every blob to blobs, and returns the runtime state for the
-// caller to apply. A version 1 archive carries no runtime state.
+// caller to apply. A version 1 archive carries no runtime state, and a
+// version 2 archive no Pub/Sub messages.
 func Read(r io.Reader, kv *store.Memory, blobs *blob.Store) (Runtime, error) {
 	var rt Runtime
 	tr := tar.NewReader(r)

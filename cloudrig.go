@@ -113,6 +113,7 @@ type Emulator struct {
 	sched    *cloudscheduler.Service
 	svcusage *serviceusage.Service
 	logging  *cloudlogging.Service
+	pubsub   *pubsub.Service
 }
 
 // Start runs the emulator on a real listener; the caller owns shutdown. ctx
@@ -175,7 +176,7 @@ func Start(ctx context.Context, o Options) (*Emulator, error) {
 	// returns only once scheduled deliveries and the functions they trigger
 	// have run.
 	drain := func() { drainAsync(cssvc, bus, ctsvc) }
-	snap := stateSnapshot{kv: stack.kvStore, blobs: stack.blobs, faults: flt, clk: clk}
+	snap := stateSnapshot{kv: stack.kvStore, blobs: stack.blobs, faults: flt, clk: clk, pubsub: psvc}
 	handler, closeAPIs := newHandler(clk, o, reg, runReg, stack.svc, psvc, smsvc, ctsvc, cssvc, susvc, gksvc, lgsvc, newGRPC(clk, flt, psvc, fsvc, smsvc, ctsvc, cssvc, gksvc, lgsvc), flt, snap, drain)
 	srv := &http.Server{
 		Handler:   handler,
@@ -193,6 +194,7 @@ func Start(ctx context.Context, o Options) (*Emulator, error) {
 		sched:    cssvc,
 		svcusage: susvc,
 		logging:  lgsvc,
+		pubsub:   psvc,
 		addr:     dialable(ln.Addr().String()),
 		fns:      reg,
 		storage:  stack.svc,
@@ -280,14 +282,15 @@ func deployStartup(ctx context.Context, reg *functions.Registry, addr string, o 
 	return nil
 }
 
-// stateSnapshot serves /_emu/snapshot from the live store and blobs. Snapshot
-// captures store state only, like Fork; a --data-dir store is not in memory and
-// is refused with a clear error.
+// stateSnapshot serves /_emu/snapshot from the live store and blobs, plus the
+// runtime state Fork also carries; a --data-dir store is not in memory and is
+// refused with a clear error.
 type stateSnapshot struct {
 	kv     store.Store
 	blobs  *blob.Store
 	faults *faults.Set
 	clk    clock.Clock
+	pubsub *pubsub.Service
 }
 
 func (s stateSnapshot) WriteSnapshot(w io.Writer) error {
@@ -295,9 +298,12 @@ func (s stateSnapshot) WriteSnapshot(w io.Writer) error {
 	if !ok {
 		return gerr.New(gerr.FailedPrecondition, "snapshot needs an in-memory emulator; a --data-dir store persists on disk already")
 	}
+	// Messages before the store; see RestorePending.
+	seq, msgs := s.pubsub.Pending()
 	return state.Write(w, mem.Snapshot(), s.blobs, state.Runtime{
 		Faults: s.faults.Snapshot(),
 		Clock:  clockState(s.clk),
+		PubSub: &state.PubSubState{Seq: seq, Messages: msgs},
 	})
 }
 
@@ -317,6 +323,12 @@ func (s stateSnapshot) ReadSnapshot(r io.Reader) error {
 	}
 	if fake, ok := s.clk.(*clock.FakeClock); ok && rt.Clock != nil {
 		fake.SetNow(rt.Clock.Now)
+	}
+	// An older archive has no messages; restoring still replaces, so none remain.
+	if ps := rt.PubSub; ps != nil {
+		s.pubsub.RestorePending(ps.Seq, ps.Messages)
+	} else {
+		s.pubsub.RestorePending(0, nil)
 	}
 	return nil
 }
@@ -411,7 +423,7 @@ func serveForTest(t testing.TB, o Options, stack storageStack) *Emulator {
 	runReg := cloudrun.NewRegistry()
 	t.Cleanup(runReg.StopAll)
 	drain := func() { drainAsync(cssvc, bus, ctsvc) }
-	snap := stateSnapshot{kv: stack.kvStore, blobs: stack.blobs, faults: flt, clk: o.Clock}
+	snap := stateSnapshot{kv: stack.kvStore, blobs: stack.blobs, faults: flt, clk: o.Clock, pubsub: psvc}
 	handler, closeAPIs := newHandler(o.Clock, o, reg, runReg, stack.svc, psvc, smsvc, ctsvc, cssvc, susvc, gksvc, lgsvc, newGRPC(o.Clock, flt, psvc, fsvc, smsvc, ctsvc, cssvc, gksvc, lgsvc), flt, snap, drain)
 	t.Cleanup(closeAPIs)
 
@@ -432,6 +444,7 @@ func serveForTest(t testing.TB, o Options, stack storageStack) *Emulator {
 		sched:    cssvc,
 		svcusage: susvc,
 		logging:  lgsvc,
+		pubsub:   psvc,
 		addr:     srv.Listener.Addr().String(),
 		fns:      reg,
 		storage:  stack.svc,
@@ -456,8 +469,8 @@ func serveForTest(t testing.TB, o Options, stack storageStack) *Emulator {
 // content-addressed and immutable — the same bytes under the same name. So a
 // fork of a hundred gigabytes of objects costs the size of the metadata.
 //
-// What travels is the same deterministic state a snapshot carries: store
-// contents, armed faults and a virtual clock's reading. Each is copied, not
+// What travels is the same state a snapshot carries: store contents, armed
+// faults, a virtual clock's reading and undelivered Pub/Sub messages. Each is copied, not
 // shared, so the two emulators drift apart from a common starting point.
 // Deployed functions are environment rather than state: the fork gets its own
 // port and event bus, and starts with none deployed.
@@ -469,6 +482,9 @@ func (e *Emulator) Fork(t testing.TB) *Emulator {
 		t.Fatal("cloudrig: only an in-memory emulator can fork; one started with a DataDir cannot")
 	}
 
+	// Messages before the store, as a snapshot takes them, so a subscription
+	// deleted in between leaves no orphans; see RestorePending.
+	seq, msgs := e.pubsub.Pending()
 	copied := store.NewMemory()
 	copied.Restore(mem.Snapshot())
 
@@ -489,6 +505,7 @@ func (e *Emulator) Fork(t testing.TB) *Emulator {
 	for _, rule := range e.faults.Snapshot() {
 		forked.faults.Add(rule)
 	}
+	forked.pubsub.RestorePending(seq, msgs)
 	return forked
 }
 

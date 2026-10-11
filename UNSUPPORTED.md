@@ -57,7 +57,8 @@ Pub/Sub:
 - Ack deadlines expire through the injected clock, so a test drives
   redelivery by advancing time. Under a FakeClock nothing expires on its own,
   which is the point: delivery stays deterministic.
-- Messages are held in memory and are not persisted by --data-dir.
+- Messages are held in memory and are not persisted by --data-dir. They do
+  travel in a snapshot or fork.
 - A --trigger-topic function fires on the publish, not through a subscription:
   it sees every message on the topic and has no backlog, no ack and no
   redelivery of its own. Real GCF creates a push subscription, so a function
@@ -114,9 +115,10 @@ Fault injection:
 
 Snapshot/restore:
 
-- Store state, armed faults and a virtual clock's reading. Deployed functions
-  are environment rather than state and stay behind: a restore never rebuilds
-  or restarts one. An in-process fork carries the same three.
+- Store state, armed faults, a virtual clock's reading and unacknowledged
+  Pub/Sub messages. Deployed functions are environment rather than state and
+  stay behind: a restore never rebuilds or restarts one. An in-process fork
+  carries the same.
 - In-memory emulators only. A `--data-dir` emulator persists on disk already
   and is refused rather than snapshotted.
 - Restore replaces the target's store contents wholesale; it is not a merge.
