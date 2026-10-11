@@ -76,6 +76,21 @@ func TestCLISnapshotRestore(t *testing.T) {
 	}
 }
 
+// The environment names a dead endpoint, so these pass only if the flag after
+// the file is honoured.
+func TestCLISnapshotFlagAfterFile(t *testing.T) {
+	t.Parallel()
+	emu := cloudrig.MustStart(t)
+	path := t.TempDir() + "/state.tar"
+
+	if out, err := runCLI(t, "http://127.0.0.1:1", "snapshot", path, "--endpoint", emu.BaseURL()); err != nil {
+		t.Fatalf("snapshot: %v\n%s", err, out)
+	}
+	if out, err := runCLI(t, "http://127.0.0.1:1", "restore", path, "--endpoint", emu.BaseURL()); err != nil {
+		t.Fatalf("restore: %v\n%s", err, out)
+	}
+}
+
 func TestCLIClock(t *testing.T) {
 	t.Parallel()
 	emu := cloudrig.MustStart(t, cloudrig.Options{Clock: clock.NewFakeNow()})

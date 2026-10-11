@@ -18,9 +18,10 @@ usage:
   cloudrig snapshot <file>   save state to file ("-" for stdout)
   cloudrig restore  <file>   load state from file ("-" for stdin)
 
-A snapshot captures store state: buckets and objects, Pub/Sub, Firestore, Tasks
-and the rest. Deployed functions, armed faults and the clock stay behind, as
-with an in-process fork. Restoring replaces the target's state with the file's.
+A snapshot captures store state (buckets and objects, Pub/Sub topics and
+subscriptions, Firestore, Tasks and the rest), armed faults, and a virtual
+clock's reading. Deployed functions stay behind, as with an in-process fork.
+Restoring replaces the target's state with the file's.
 
   --endpoint URL   emulator to talk to (default http://localhost:4599,
                    env CLOUDRIG_ENDPOINT)`
@@ -83,8 +84,13 @@ func snapshotFlags(sub string, args []string, env lookupEnv, stderr *os.File) (c
 	if len(rest) == 0 {
 		return client{}, "", fmt.Errorf("cloudrig %s needs a file\n%s", sub, snapshotUsage)
 	}
-	if len(rest) > 1 {
-		return client{}, "", fmt.Errorf("cloudrig %s takes one file; got %q", sub, rest[1])
+	// Flags may follow the file too, as they may follow a fault's service.
+	file := rest[0]
+	if err := fs.Parse(rest[1:]); err != nil {
+		return client{}, "", err
 	}
-	return client{endpoint: resolveEndpoint(*endpoint, env)}, rest[0], nil
+	if rest := fs.Args(); len(rest) > 0 {
+		return client{}, "", fmt.Errorf("cloudrig %s takes one file; got %q", sub, rest[0])
+	}
+	return client{endpoint: resolveEndpoint(*endpoint, env)}, file, nil
 }
