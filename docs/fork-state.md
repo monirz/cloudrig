@@ -20,8 +20,9 @@ A fork copies metadata and **hardlinks** object payloads, so branching a
 hundred gigabytes of objects costs the size of the metadata. Neither side can
 see the other's writes, and neither can delete the other's bytes.
 
-What travels is the same deterministic state a [snapshot](snapshot.md)
-carries: store contents, armed faults and a virtual clock's reading. Each is
+What travels is the same state a [snapshot](snapshot.md) carries: store
+contents, armed faults, a virtual clock's reading and unacknowledged Pub/Sub
+messages. Each is
 copied rather than shared, so travelling time or clearing a fault in one
 emulator leaves the other where it was.
 

@@ -76,13 +76,11 @@ To inspect the wreckage as well, snapshot again in a step with
 ## What replays and what doesn't
 
 A snapshot carries the store (buckets and objects, topics and subscriptions,
-Firestore, tasks, secrets), armed faults with the firings each has left, and a
-virtual clock's reading. See [snapshot and restore](snapshot.md).
+Firestore, tasks, secrets), unacknowledged Pub/Sub messages, armed faults with
+the firings each has left, and a virtual clock's reading. See [snapshot and restore](snapshot.md).
 
 It does not carry:
 
-- **Undelivered Pub/Sub messages.** They are held in memory, outside the
-  store. Publish seed messages in the test, not before the snapshot.
 - **Deployed functions.** They are environment, not state. Deploy them the
   same way in CI and locally.
 - **Wall-clock time.** Under the default real clock, code that reads the time

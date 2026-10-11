@@ -19,9 +19,10 @@ usage:
   cloudrig restore  <file>   load state from file ("-" for stdin)
 
 A snapshot captures store state (buckets and objects, Pub/Sub topics and
-subscriptions, Firestore, Tasks and the rest), armed faults, and a virtual
-clock's reading. Deployed functions stay behind, as with an in-process fork.
-Restoring replaces the target's state with the file's.
+subscriptions, Firestore, Tasks and the rest), armed faults, a virtual clock's
+reading, and unacknowledged Pub/Sub messages. Deployed functions stay behind,
+as with an in-process fork. Restoring replaces the target's state with the
+file's.
 
   --endpoint URL   emulator to talk to (default http://localhost:4599,
                    env CLOUDRIG_ENDPOINT)`

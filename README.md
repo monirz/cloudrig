@@ -104,7 +104,8 @@ go test ./...
 # order-5 is saved but was never announced
 ```
 
-Seeded data, armed faults and a virtual clock all travel in the file.
+Seeded data, pending Pub/Sub messages, armed faults and a virtual clock all
+travel in the file.
 Guide: [replay a CI failure](docs/ci-replay.md), with a runnable
 [example](examples/ci-replay).
 
@@ -183,7 +184,7 @@ Seed expensive state once, then branch it per case:
 
 A fork copies metadata and **hardlinks** object payloads, so branching a
 hundred gigabytes of objects costs the size of the metadata. Store contents,
-armed faults and the virtual clock all travel, and each is copied rather than
+armed faults, the virtual clock and pending Pub/Sub messages all travel, and each is copied rather than
 shared — travelling time in one fork leaves the others where they were.
 
 ### Failure reproduction

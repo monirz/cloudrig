@@ -15,18 +15,20 @@ cloudrig snapshot - | cloudrig restore -   # against two --endpoint targets
 ```
 
 A snapshot is a tar of the key-value metadata plus every object payload, so it
-captures store state: buckets and objects, Pub/Sub, Firestore, Cloud Tasks,
-Secret Manager and the rest. Payloads are content-addressed, so restoring a
+captures store state: buckets and objects, Pub/Sub topics and subscriptions,
+Firestore, Cloud Tasks, Secret Manager and the rest. Payloads are content-addressed, so restoring a
 blob lands it at the address its metadata already references.
 
-A snapshot also carries the deterministic testing state around the store:
-armed faults, and a virtual clock's reading. A restored emulator fails the
-same way and reads the same time as the one it came from. A real clock carries
+A snapshot also carries the state around the store: armed faults, a virtual
+clock's reading, and every unacknowledged Pub/Sub message. A restored emulator
+fails the same way, reads the same time and delivers the same backlog as the
+one it came from; a message that was leased but not acknowledged is delivered
+afresh. A real clock carries
 nothing — the restoring emulator's wall clock is already the right answer.
 
 Deployed functions stay behind: they are environment, not state, so restoring
 never rebuilds or restarts a process. An in-process [fork](fork-state.md) carries the
-same three. Restoring replaces the target's store contents with the
+same state. Restoring replaces the target's store contents with the
 file's.
 
 Seed an environment once, snapshot it, and each run or test case restores from
