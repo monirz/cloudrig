@@ -53,7 +53,7 @@ Start it, deploy a function, call it. CloudRig's own CLI:
 
 ```sh
 cloudrig start &
-# cloudrig v0.1.0 listening on http://127.0.0.1:4599
+# cloudrig v0.2.0 listening on http://127.0.0.1:4599
 # health: http://127.0.0.1:4599/_emu/health
 
 cloudrig fn deploy hello --source ./testdata/go-hello
@@ -215,7 +215,7 @@ Pick one. All three put a `cloudrig` binary on your PATH.
 on macOS and Linux:
 
 ```sh
-VERSION=v0.1.0
+VERSION=v0.2.0
 OS=$(uname -s | tr '[:upper:]' '[:lower:]')                 # darwin or linux
 ARCH=$(uname -m); [ "$ARCH" = x86_64 ] && ARCH=amd64; [ "$ARCH" = aarch64 ] && ARCH=arm64
 curl -sSL "https://github.com/monirz/cloudrig/releases/download/$VERSION/cloudrig_${VERSION#v}_${OS}_${ARCH}.tar.gz" | tar -xz cloudrig
