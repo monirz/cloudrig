@@ -41,7 +41,10 @@ Start CloudRig, set up the conditions under test, snapshot, then test:
     path: start.tar
 ```
 
-Seed data goes before the snapshot too, so it travels with it.
+Seed data goes before the snapshot too, so it travels with it. This
+repository runs the same steps against the example in
+[`.github/workflows/ci-replay.yml`](../.github/workflows/ci-replay.yml),
+started by hand from the Actions tab.
 
 ## On your laptop
 

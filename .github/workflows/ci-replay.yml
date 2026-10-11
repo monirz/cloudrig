@@ -1,0 +1,52 @@
+name: ci-replay
+
+# The docs/ci-replay.md walkthrough as a real run. It fails on purpose, so it
+# runs only when started by hand and never gates a push or a pull request.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  GO_VERSION: '1.26'
+
+jobs:
+  orders:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          check-latest: true
+
+      # Built from this commit; outside this repo, go install the release.
+      - name: Start CloudRig
+        run: |
+          make build
+          ./cloudrig start &
+          until curl -sf http://localhost:4599/_emu/health >/dev/null; do sleep 0.2; done
+
+      - name: Arm faults and save the starting state
+        run: |
+          ./cloudrig fault pubsub --path /google.pubsub.v1.Publisher/Publish --latency 3s --failure-rate 20%
+          ./cloudrig snapshot start.tar
+
+      - name: Test
+        working-directory: examples/ci-replay
+        env:
+          GOWORK: 'off'
+          STORAGE_EMULATOR_HOST: localhost:4599
+          PUBSUB_EMULATOR_HOST: localhost:4599
+        run: go test -count=1 -v ./...
+
+      - name: Upload the starting state
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: cloudrig-start
+          path: start.tar
