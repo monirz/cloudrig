@@ -2,7 +2,7 @@ GO ?= go
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 
 .DEFAULT_GOAL := help
-.PHONY: help all build demo examples tests test-unit test-integration coverage vet lint fmt fmt-check tidy vuln release-check check clean
+.PHONY: help all build demo demo-replay examples tests test-unit test-integration coverage vet lint fmt fmt-check tidy vuln release-check check clean
 
 help: ## List targets
 	@grep -hE '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-17s %s\n", $$1, $$2}'
@@ -49,6 +49,14 @@ demo: build ## Re-record assets/demo.gif (needs vhs and ffmpeg)
 		-filter_complex "$(DEMO_FILTER)" -loop 0 assets/demo.gif
 	@rm -rf $(DEMO_FRAMES)
 	@echo "  assets/demo.gif: $$(du -h assets/demo.gif | cut -f1)"
+
+demo-replay: build ## Re-record assets/replay.gif (needs vhs and ffmpeg)
+	@rm -rf $(DEMO_FRAMES)
+	vhs assets/replay.tape
+	ffmpeg -y -loglevel error -framerate 50 -i '$(DEMO_FRAMES)/frame-text-%05d.png' \
+		-filter_complex "$(DEMO_FILTER)" -loop 0 assets/replay.gif
+	@rm -rf $(DEMO_FRAMES)
+	@echo "  assets/replay.gif: $$(du -h assets/replay.gif | cut -f1)"
 
 ## Quality
 

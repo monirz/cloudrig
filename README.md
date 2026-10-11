@@ -92,6 +92,10 @@ A test that fails in CI and passes locally usually fails because of the
 environment. With CloudRig the environment is one file: snapshot before the
 tests run, upload it when they fail, restore it and get the same failure.
 
+<p align="center">
+  <img src="assets/replay.gif" alt="A CI run arms a slow Pub/Sub Publish, snapshots, and the orders test fails on order-5 and order-10. A fresh emulator restores the snapshot and the same test fails the same way." width="900">
+</p>
+
 ```sh
 # in CI, before the tests
 cloudrig fault pubsub --path /google.pubsub.v1.Publisher/Publish --latency 3s --failure-rate 20%
