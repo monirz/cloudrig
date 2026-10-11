@@ -101,9 +101,9 @@ tests run, upload it when they fail, restore it and get the same failure.
 cloudrig fault pubsub --path /google.pubsub.v1.Publisher/Publish --latency 3s --failure-rate 20%
 cloudrig snapshot start.tar     # uploaded as an artifact if the tests fail
 
-# on your laptop
+# on your laptop, in examples/ci-replay
 cloudrig restore start.tar
-go test ./...
+STORAGE_EMULATOR_HOST=localhost:4599 PUBSUB_EMULATOR_HOST=localhost:4599 go test ./...
 # order-10 is saved but was never announced
 # order-5 is saved but was never announced
 ```

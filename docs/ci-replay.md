@@ -56,6 +56,8 @@ cloudrig restore start.tar
 cloudrig fault list
 # /google.pubsub.v1.Publisher/Publish → latency 3s, 20% of requests  (/google.pubsub.v1.Publisher/Publish)
 
+cd examples/ci-replay     # the example is its own Go module
+export STORAGE_EMULATOR_HOST=localhost:4599 PUBSUB_EMULATOR_HOST=localhost:4599
 go test ./...
 # --- FAIL: TestEveryOrderIsAnnounced
 #     orders_test.go:72: order-10 is saved but was never announced
