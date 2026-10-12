@@ -19,11 +19,6 @@
 and the client libraries — against a deterministic local environment. No GCP
 project, no credentials, no network.
 
-**I'm on a mission to build the best Google Cloud emulator out there.** If
-CloudRig saves you time, consider supporting the work.
-
-<a href="https://buymeacoffee.com/monirzbd"><img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me A Coffee" height="48"></a>
-
 <p align="center">
   <img src="assets/demo.gif" alt="Starting CloudRig, deploying a function with the cloudrig CLI and calling it, then driving the same emulator with unmodified gcloud: functions list, a bucket created, a file uploaded and listed." width="900">
 </p>
