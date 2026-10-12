@@ -11,6 +11,8 @@ import (
 	"testing"
 	"time"
 
+	"cloud.google.com/go/pubsub/v2/apiv1/pubsubpb"
+
 	"github.com/monirz/cloudrig/core/faults"
 	"github.com/monirz/cloudrig/state"
 	"github.com/monirz/cloudrig/store"
@@ -81,6 +83,9 @@ func TestRuntimeRoundTrip(t *testing.T) {
 	rt := state.Runtime{
 		Faults: []faults.Rule{{Path: "/storage/v1/*", Status: 503, Count: 2}},
 		Clock:  &state.ClockState{Now: at},
+		PubSub: &state.PubSubState{Seq: 7, Messages: map[string][]*pubsubpb.PubsubMessage{
+			"projects/p/subscriptions/s": {{MessageId: "7", Data: []byte("order-7")}},
+		}},
 	}
 
 	var buf bytes.Buffer
@@ -97,6 +102,10 @@ func TestRuntimeRoundTrip(t *testing.T) {
 	}
 	if got.Clock == nil || !got.Clock.Now.Equal(at) {
 		t.Errorf("clock = %+v, want %s", got.Clock, at)
+	}
+	if got.PubSub == nil || got.PubSub.Seq != 7 ||
+		string(got.PubSub.Messages["projects/p/subscriptions/s"][0].GetData()) != "order-7" {
+		t.Errorf("pubsub = %+v, want order-7 pending and seq 7", got.PubSub)
 	}
 }
 
