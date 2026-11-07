@@ -17,6 +17,8 @@ cloud.google.com/go/firestore v1.25.0 h1:yY3rQKyQXNhnhETdseNayF6W1p4x0bdg9ZYS4hK
 cloud.google.com/go/firestore v1.25.0/go.mod h1:0PU6hj+r/QlhB6BLsRX+Kt/SYefTXrpYrBeHbYaSis8=
 cloud.google.com/go/iam v1.12.0 h1:Aki3bX9aHUDKPHfnRJfDcTdVedvy6quGBQcTqx3DRXk=
 cloud.google.com/go/iam v1.12.0/go.mod h1:FEZ4lXpADAC2AIpQY7LANNjjwyQ2jK439CI2VaD+sLY=
+cloud.google.com/go/kms v1.36.0 h1:Yewd4nwxa5IOaYJX0dpfzEM5PMCcg6d2LOdrW7V7bbQ=
+cloud.google.com/go/kms v1.36.0/go.mod h1:BZZ2mD9XlonF2JRr7DVIokrTeHKG/CKde5aSPHqeuS4=
 cloud.google.com/go/logging v1.19.1 h1:7SsLhyTDBDrJw+Ll6Ns3I2mByqHXvJUc3rGjSlwiWgU=
 cloud.google.com/go/logging v1.19.1/go.mod h1:2IkQ/d8jVJqV2qW8ZUGUiMjdZG1gkLD2JReGbZ8isqg=
 cloud.google.com/go/longrunning v1.2.0 h1:WjYH3YHBGCxGJP9M4dWGHBfXr/cFIjMkNgWcJj7/iMM=
@@ -119,6 +121,8 @@ github.com/googleapis/enterprise-certificate-proxy v0.3.20 h1:t/xL64VUoN69MuMRQu
 github.com/googleapis/enterprise-certificate-proxy v0.3.20/go.mod h1:L3D/IQExI6LqEjBdXcZQ1WluSgigQmSwBboFstVPM4w=
 github.com/googleapis/gax-go/v2 v2.24.0 h1:myMaPYyF9MecEmvQqMqomIwn9t/4KCZN9qnwsS76wlg=
 github.com/googleapis/gax-go/v2 v2.24.0/go.mod h1:IaTHBDd7NHxSCiu0vEs8pQZu4dGZrWwuSoxCnk16OFM=
+github.com/googleapis/gax-go/v2 v2.26.2 h1:ydkmNXxj7bEmmeK5AihkKnWxyOyBR9TDebvp5L5izk8=
+github.com/googleapis/gax-go/v2 v2.26.2/go.mod h1:sMKqnMesnKH+3wiRJROcttA+cJoZoGbZl1vDQ8XYtGk=
 github.com/moby/docker-image-spec v1.3.1 h1:jMKff3w6PgbfSa69GfNg+zN/XLhfXJGnEx3Nl2EsFP0=
 github.com/moby/docker-image-spec v1.3.1/go.mod h1:eKmb5VW8vQEh/BAr2yvVNvuiJuY6UIocYsFu/DxxRpo=
 github.com/moby/moby/api v1.56.0 h1:GQzua3NA599ASSIICx0iFgiJeO9YkdDARvQsm23ZZuQ=

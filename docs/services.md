@@ -36,6 +36,9 @@ filter, so a test can assert on what a service logged.
 enable and destroy. gRPC for the client libraries, REST for `gcloud secrets`,
 one service behind both.
 
+**Cloud KMS** — key rings, symmetric keys, versions and rotation, encrypt and
+decrypt with additional data and checksums, over gRPC.
+
 **Cloud Run** — deploy an image and it runs as a container through Docker,
 driven by real `gcloud run`. A source directory runs as a process instead.
 
@@ -521,6 +524,49 @@ granted, because there is no identity here to check.
 
 Not supported: user-managed replication, CMEK, rotation schedules, expiry, and
 version aliases other than `latest`.
+
+---
+
+## Cloud KMS
+
+gRPC, on the same port. Symmetric `ENCRYPT_DECRYPT` keys only:
+
+```go
+c, _ := kms.NewKeyManagementClient(ctx, /* endpoint options */)
+
+ring, _ := c.CreateKeyRing(ctx, &kmspb.CreateKeyRingRequest{
+    Parent: "projects/cloudrig-local/locations/global", KeyRingId: "ring",
+})
+key, _ := c.CreateCryptoKey(ctx, &kmspb.CreateCryptoKeyRequest{
+    Parent: ring.Name, CryptoKeyId: "files",
+    CryptoKey: &kmspb.CryptoKey{Purpose: kmspb.CryptoKey_ENCRYPT_DECRYPT},
+})
+
+enc, _ := c.Encrypt(ctx, &kmspb.EncryptRequest{Name: key.Name, Plaintext: []byte("data key")})
+dec, _ := c.Decrypt(ctx, &kmspb.DecryptRequest{Name: key.Name, Ciphertext: enc.Ciphertext})
+```
+
+From Python, give the client an insecure channel to the emulator:
+
+```python
+import grpc
+from google.cloud import kms
+from google.cloud.kms_v1.services.key_management_service.transports import KeyManagementServiceGrpcTransport
+
+channel = grpc.insecure_channel("localhost:4599")
+client = kms.KeyManagementServiceClient(transport=KeyManagementServiceGrpcTransport(channel=channel))
+```
+
+The encryption is real: AES-256-GCM with a random key per version, so tampered
+ciphertext and the wrong additional data are refused, and the checksums the
+client sends are verified. A new version is not primary until
+`UpdateCryptoKeyPrimaryVersion` moves it there, and ciphertext from an older
+version still decrypts. The key material sits in the emulator's store in the
+clear: a stand-in for local runs, not a place for a real secret.
+
+Not supported: asymmetric, MAC and raw keys, import jobs, key destruction and
+version state changes, Autokey, IAM, and the REST API, so `gcloud kms` does not
+reach it.
 
 ---
 
