@@ -47,10 +47,11 @@ type Bucket struct {
 	StorageClass string `json:"storageClass"`
 	// Versioning off is the GCS default: an overwrite discards the previous
 	// generation and a delete removes it. On, both are kept.
-	Versioning     bool      `json:"versioning"`
-	Metageneration int64     `json:"metageneration"`
-	Created        time.Time `json:"timeCreated"`
-	Updated        time.Time `json:"updated"`
+	Versioning     bool              `json:"versioning"`
+	Labels         map[string]string `json:"labels,omitempty"`
+	Metageneration int64             `json:"metageneration"`
+	Created        time.Time         `json:"timeCreated"`
+	Updated        time.Time         `json:"updated"`
 }
 
 // Defaults applied when a caller does not say, matching what GCS assumes.

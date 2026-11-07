@@ -11,16 +11,17 @@ import (
 // below are separate from the stored ones rather than reusing them.
 
 type apiBucket struct {
-	Kind           string         `json:"kind"`
-	ID             string         `json:"id"`
-	Name           string         `json:"name"`
-	Location       string         `json:"location"`
-	StorageClass   string         `json:"storageClass"`
-	Versioning     *apiVersioning `json:"versioning,omitempty"`
-	Metageneration string         `json:"metageneration"`
-	TimeCreated    string         `json:"timeCreated"`
-	Updated        string         `json:"updated"`
-	SelfLink       string         `json:"selfLink,omitempty"`
+	Kind           string            `json:"kind"`
+	ID             string            `json:"id"`
+	Name           string            `json:"name"`
+	Location       string            `json:"location"`
+	StorageClass   string            `json:"storageClass"`
+	Versioning     *apiVersioning    `json:"versioning,omitempty"`
+	Labels         map[string]string `json:"labels,omitempty"`
+	Metageneration string            `json:"metageneration"`
+	TimeCreated    string            `json:"timeCreated"`
+	Updated        string            `json:"updated"`
+	SelfLink       string            `json:"selfLink,omitempty"`
 }
 
 type apiObject struct {
@@ -55,12 +56,14 @@ type apiVersioning struct {
 	Enabled bool `json:"enabled"`
 }
 
-// bucketRequest is the body of a bucket create.
+// bucketRequest is the body of a bucket create or patch. A label's value is a
+// pointer because a patch removes a label by sending it as null.
 type bucketRequest struct {
-	Name         string         `json:"name,omitempty"`
-	Location     string         `json:"location,omitempty"`
-	StorageClass string         `json:"storageClass,omitempty"`
-	Versioning   *apiVersioning `json:"versioning,omitempty"`
+	Name         string             `json:"name,omitempty"`
+	Location     string             `json:"location,omitempty"`
+	StorageClass string             `json:"storageClass,omitempty"`
+	Versioning   *apiVersioning     `json:"versioning,omitempty"`
+	Labels       map[string]*string `json:"labels,omitempty"`
 }
 
 func toAPIBucket(b Bucket, base string) apiBucket {
@@ -71,6 +74,7 @@ func toAPIBucket(b Bucket, base string) apiBucket {
 		Location:       b.Location,
 		StorageClass:   b.StorageClass,
 		Versioning:     &apiVersioning{Enabled: b.Versioning},
+		Labels:         b.Labels,
 		Metageneration: strconv.FormatInt(b.Metageneration, 10),
 		TimeCreated:    rfc3339(b.Created),
 		Updated:        rfc3339(b.Updated),

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"maps"
 	"net/http"
 	"strings"
 
@@ -115,8 +116,12 @@ func (s *Service) ListBuckets(ctx context.Context, project string) ([]Bucket, er
 
 // BucketPatch is a partial update. A nil field is left unchanged.
 type BucketPatch struct {
-	StorageClass  string
-	Versioning    *bool
+	StorageClass string
+	Versioning   *bool
+	// Labels merges into the bucket's labels, as a GCS patch does: each key
+	// is set to its value, a nil value removes the key, and keys not named
+	// are kept.
+	Labels        map[string]*string
 	Preconditions Preconditions
 }
 
@@ -143,6 +148,7 @@ func (s *Service) UpdateBucket(ctx context.Context, project, name string, patch 
 	if patch.Versioning != nil {
 		b.Versioning = *patch.Versioning
 	}
+	b.Labels = applyLabels(b.Labels, patch.Labels)
 	b.Metageneration++
 	b.Updated = s.clk.Now()
 
@@ -221,6 +227,27 @@ func conflict(message, name string) error {
 	return gerr.Newf(gerr.AlreadyExists, "%s (%s)", message, name).
 		WithHTTPStatus(http.StatusConflict).
 		WithReason("conflict")
+}
+
+// applyLabels merges a patch into labels and returns the result, nil when it
+// is empty so an unlabelled bucket stores and renders no labels field.
+func applyLabels(labels map[string]string, patch map[string]*string) map[string]string {
+	if len(patch) == 0 {
+		return labels
+	}
+	out := make(map[string]string, len(labels)+len(patch))
+	maps.Copy(out, labels)
+	for k, v := range patch {
+		if v == nil {
+			delete(out, k)
+		} else {
+			out[k] = *v
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 func orDefault(v, def string) string {

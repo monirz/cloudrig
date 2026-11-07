@@ -107,6 +107,7 @@ func (a *API) createBucket(w http.ResponseWriter, r *http.Request, p transport.P
 		Location:     body.Location,
 		StorageClass: body.StorageClass,
 		Versioning:   body.Versioning != nil && body.Versioning.Enabled,
+		Labels:       applyLabels(nil, body.Labels),
 	})
 	if err != nil {
 		return err
@@ -160,6 +161,7 @@ func (a *API) patchBucket(w http.ResponseWriter, r *http.Request, p transport.Pa
 	b, err := a.svc.UpdateBucket(r.Context(), project, p["bucket"], BucketPatch{
 		StorageClass:  body.StorageClass,
 		Versioning:    versioningOf(body),
+		Labels:        body.Labels,
 		Preconditions: pre,
 	})
 	if err != nil {
