@@ -671,8 +671,8 @@ the emulator alone. It needs Docker, and runs the pinned
 
 The emulator keeps everything in memory, so a restart starts it empty, and it
 allows one read-write transaction at a time. If cloudrig is killed rather than
-stopped, the container stays behind:
-`docker rm -f $(docker ps -q --filter label=cloudrig.role=spanner-emulator)`.
+stopped, its container stays behind until the next `--with-spanner` start,
+which removes any emulator whose cloudrig is no longer running.
 
 ---
 

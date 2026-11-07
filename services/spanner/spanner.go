@@ -14,6 +14,7 @@ import (
 	"io"
 	"net"
 	"net/netip"
+	"os"
 	"strconv"
 	"time"
 
@@ -22,6 +23,7 @@ import (
 	"github.com/moby/moby/client"
 
 	"github.com/monirz/cloudrig/core/clock"
+	"github.com/monirz/cloudrig/core/tmp"
 )
 
 // DefaultImage is the emulator release cloudrig starts. Pinned, so an
@@ -70,6 +72,10 @@ func Start(ctx context.Context, o Options) (*Emulator, error) {
 		_ = cli.Close()
 		return nil, err
 	}
+	// A cloudrig killed outright never ran its deferred Stop, so its
+	// emulator may still hold the ports this one needs.
+	removeOrphans(ctx, cli)
+	host, _ := os.Hostname()
 
 	grpcPort, _ := network.PortFrom(containerGRPC, network.TCP)
 	restPort, _ := network.PortFrom(containerREST, network.TCP)
@@ -78,7 +84,11 @@ func Start(ctx context.Context, o Options) (*Emulator, error) {
 		Config: &container.Config{
 			Image:        o.Image,
 			ExposedPorts: network.PortSet{grpcPort: struct{}{}, restPort: struct{}{}},
-			Labels:       map[string]string{"cloudrig.role": "spanner-emulator"},
+			Labels: map[string]string{
+				roleLabel: roleValue,
+				pidLabel:  strconv.Itoa(os.Getpid()),
+				hostLabel: host,
+			},
 		},
 		HostConfig: &container.HostConfig{
 			PortBindings: network.PortMap{
@@ -133,6 +143,40 @@ func (e *Emulator) Stop(ctx context.Context) error {
 		return fmt.Errorf("spanner: removing the emulator container: %w", err)
 	}
 	return nil
+}
+
+// Labels on the emulator container: what it is, and the cloudrig that owns it.
+const (
+	roleLabel = "cloudrig.role"
+	roleValue = "spanner-emulator"
+	pidLabel  = "cloudrig.pid"
+	hostLabel = "cloudrig.host"
+)
+
+// removeOrphans removes emulator containers whose cloudrig is gone: started
+// on this machine by a process no longer running. One owned by a live
+// cloudrig, by another machine sharing the daemon, or carrying no owner is
+// left alone. Failures are ignored; at worst the ports stay taken and Start
+// says so.
+func removeOrphans(ctx context.Context, cli *client.Client) {
+	host, err := os.Hostname()
+	if err != nil {
+		return
+	}
+	list, err := cli.ContainerList(ctx, client.ContainerListOptions{
+		All:     true,
+		Filters: make(client.Filters).Add("label", roleLabel+"="+roleValue),
+	})
+	if err != nil {
+		return
+	}
+	for _, c := range list.Items {
+		pid, err := strconv.Atoi(c.Labels[pidLabel])
+		if err != nil || c.Labels[hostLabel] != host || tmp.Alive(pid) {
+			continue
+		}
+		_, _ = cli.ContainerRemove(ctx, c.ID, client.ContainerRemoveOptions{Force: true})
+	}
 }
 
 func ensureImage(ctx context.Context, cli *client.Client, ref string) error {
