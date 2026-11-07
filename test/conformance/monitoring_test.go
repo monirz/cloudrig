@@ -201,3 +201,35 @@ func TestMonitoringConcurrentWritesToOneSeries(t *testing.T) {
 		t.Errorf("%d writes stored the same point, want 1", stored)
 	}
 }
+
+// A quoted value may itself hold " AND ", and must be read whole.
+func TestMonitoringFilterQuotedAnd(t *testing.T) {
+	c, ctx := monitoringClient(t)
+	t0 := time.Date(2026, 11, 1, 12, 0, 0, 0, time.UTC)
+	for _, step := range []string{"ocr AND redact", "ocr"} {
+		if err := c.CreateTimeSeries(ctx, &monitoringpb.CreateTimeSeriesRequest{
+			Name: "projects/p", TimeSeries: []*monitoringpb.TimeSeries{gauge(step, t0, 1)},
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	window := &monitoringpb.TimeInterval{StartTime: timestamppb.New(t0.Add(-time.Second)), EndTime: timestamppb.New(t0)}
+	got := listSeries(t, c, ctx, &monitoringpb.ListTimeSeriesRequest{
+		Name:     "projects/p",
+		Filter:   `metric.type = "` + filesMetric + `" AND metric.labels.step = "ocr AND redact"`,
+		Interval: window,
+	})
+	if len(got) != 1 || got[0].GetMetric().GetLabels()["step"] != "ocr AND redact" {
+		t.Errorf("series = %v, want the one with step \"ocr AND redact\"", got)
+	}
+	for _, bad := range []string{
+		`metric.type = "` + filesMetric + `" AND`,
+		`metric.type = "` + filesMetric + `" AND AND metric.labels.step = "ocr"`,
+		`metric.type = "` + filesMetric + `" OR metric.labels.step = "ocr"`,
+	} {
+		_, err := c.ListTimeSeries(ctx, &monitoringpb.ListTimeSeriesRequest{Name: "projects/p", Filter: bad, Interval: window}).Next()
+		if status.Code(err) != codes.Unimplemented {
+			t.Errorf("filter %q: %v, want Unimplemented", bad, err)
+		}
+	}
+}

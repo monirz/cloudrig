@@ -343,7 +343,11 @@ type filter struct {
 	resourceLabels map[string]string
 }
 
-var clause = regexp.MustCompile(`^\s*([a-z_.]+[A-Za-z0-9_]*)\s*=\s*"((?:[^"\\]|\\.)*)"\s*$`)
+// clause matches one field = "value" clause at the start of a filter.
+// Clauses are read one at a time from the left, each with whatever ends it: AND
+// or the end of the filter. Splitting on AND first would cut a quoted value
+// such as "x AND y" in two.
+var clause = regexp.MustCompile(`^\s*([a-z_.]+[A-Za-z0-9_]*)\s*=\s*"((?:[^"\\]|\\.)*)"(\s+AND\s+|\s*$)`)
 
 func parseFilter(raw string) (filter, error) {
 	f := filter{metricLabels: map[string]string{}, resourceLabels: map[string]string{}}
@@ -355,11 +359,12 @@ func parseFilter(raw string) (filter, error) {
 			`cloudrig reads only filters of field = "value" joined by AND, on metric.type, resource.type, `+
 				`metric.labels.* and resource.labels.*: %q`, raw)
 	}
-	for _, part := range regexp.MustCompile(`\s+AND\s+`).Split(raw, -1) {
-		m := clause.FindStringSubmatch(part)
+	for rest := raw; ; {
+		m := clause.FindStringSubmatch(rest)
 		if m == nil {
 			return unsupported()
 		}
+		rest = rest[len(m[0]):]
 		field, value := m[1], strings.ReplaceAll(m[2], `\"`, `"`)
 		switch {
 		case field == "metric.type":
@@ -372,6 +377,9 @@ func parseFilter(raw string) (filter, error) {
 			f.resourceLabels[strings.TrimPrefix(field, "resource.labels.")] = value
 		default:
 			return unsupported()
+		}
+		if strings.TrimSpace(m[3]) == "" { // the filter's end, not an AND
+			break
 		}
 	}
 	if f.metricType == "" {
