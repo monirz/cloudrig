@@ -1,7 +1,9 @@
 # Point gcloud back at real GCP. Source it: . ./cloudrig-env-off.sh
 #
-# Undoes cloudrig-env.sh, plus the CLOUDSDK_CONFIG and KUBECONFIG a demo shell
-# sets. Run as a script it would only clear a child shell, so it refuses.
+# Undoes cloudrig-env.sh. CLOUDSDK_CONFIG and KUBECONFIG are cleared only when
+# they look like a demo shell's: a temporary directory, or the kubeconfig k3d
+# writes for a cloudrig cluster. Your own are left alone. Run as a script it
+# would only clear a child shell, so it refuses.
 if [ -n "$ZSH_VERSION" ]; then
   case $ZSH_EVAL_CONTEXT in *:file*) ;; *) echo "source it: . ./cloudrig-env-off.sh" >&2; exit 1 ;; esac
 elif [ -n "$BASH_VERSION" ] && [ "${BASH_SOURCE[0]}" = "$0" ]; then
@@ -9,7 +11,24 @@ elif [ -n "$BASH_VERSION" ] && [ "${BASH_SOURCE[0]}" = "$0" ]; then
 fi
 
 unset CLOUDRIG_ENDPOINT CLOUDSDK_CORE_PROJECT CLOUDSDK_AUTH_DISABLE_CREDENTIALS \
-  PUBSUB_EMULATOR_HOST STORAGE_EMULATOR_HOST SPANNER_EMULATOR_HOST CLOUDSDK_CONFIG KUBECONFIG
+  PUBSUB_EMULATOR_HOST STORAGE_EMULATOR_HOST SPANNER_EMULATOR_HOST
+
+# A path from mktemp, or k3d's kubeconfig for a cloudrig-* cluster.
+cloudrig_demo_path() {
+  case $1 in
+    "${TMPDIR:-/tmp}"*|/tmp/*|/private/tmp/*|/var/folders/*|*kubeconfig-cloudrig*) return 0 ;;
+  esac
+  return 1
+}
+if [ -n "$CLOUDSDK_CONFIG" ]; then
+  if cloudrig_demo_path "$CLOUDSDK_CONFIG"; then unset CLOUDSDK_CONFIG
+  else echo "note: CLOUDSDK_CONFIG=$CLOUDSDK_CONFIG left as it is" >&2; fi
+fi
+if [ -n "$KUBECONFIG" ]; then
+  if cloudrig_demo_path "$KUBECONFIG"; then unset KUBECONFIG
+  else echo "note: KUBECONFIG=$KUBECONFIG left as it is" >&2; fi
+fi
+unset -f cloudrig_demo_path
 for v in $(env | sed -n 's/^\(CLOUDSDK_API_ENDPOINT_OVERRIDES_[A-Z_]*\)=.*/\1/p'); do
   unset "$v"
 done
