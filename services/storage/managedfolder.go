@@ -59,6 +59,8 @@ func ManagedFolderName(id string) (string, error) {
 // CreateManagedFolder creates a folder in a bucket. A second create of the
 // same name is AlreadyExists, as GCS answers.
 func (s *Service) CreateManagedFolder(ctx context.Context, project, bucket, id string) (ManagedFolder, error) {
+	s.folderMu.Lock()
+	defer s.folderMu.Unlock()
 	name, err := ManagedFolderName(id)
 	if err != nil {
 		return ManagedFolder{}, err
@@ -159,6 +161,8 @@ func (s *Service) ManagedFolderPolicy(ctx context.Context, project, bucket, id s
 // etag was read from; a policy changed in between is Aborted, which is what
 // IAM answers. A nil ifEtag overwrites whatever is there.
 func (s *Service) SetManagedFolderPolicy(ctx context.Context, project, bucket, id string, policy, ifEtag []byte) ([]byte, error) {
+	s.folderMu.Lock()
+	defer s.folderMu.Unlock()
 	f, err := s.GetManagedFolder(ctx, project, bucket, id)
 	if err != nil {
 		return nil, err
@@ -228,6 +232,8 @@ type DeleteFolderOptions struct {
 // GCS does; what is under it stays either way, since a managed folder never
 // owned it.
 func (s *Service) DeleteManagedFolder(ctx context.Context, project, bucket, id string, opts DeleteFolderOptions) error {
+	s.folderMu.Lock()
+	defer s.folderMu.Unlock()
 	f, err := s.GetManagedFolder(ctx, project, bucket, id)
 	if err != nil {
 		return err

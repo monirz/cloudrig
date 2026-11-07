@@ -2,6 +2,7 @@ package storage_test
 
 import (
 	"context"
+	"sync"
 	"testing"
 
 	"github.com/monirz/cloudrig/core/gerr"
@@ -145,5 +146,35 @@ func TestDeleteManagedFolderConditions(t *testing.T) {
 	}
 	if err := s.DeleteManagedFolder(ctx, "p", "bkt", "a/", storage.DeleteFolderOptions{IfMetagenerationMatch: &one, IfMetagenerationNotMatch: &two}); err != nil {
 		t.Errorf("delete with met conditions: %v", err)
+	}
+}
+
+// A policy write racing a delete must not leave the policy behind for a
+// later create of the same name to inherit.
+func TestPolicyWriteRacingDelete(t *testing.T) {
+	s, _ := newService(t)
+	ctx := context.Background()
+	if _, err := s.CreateBucket(ctx, storage.Bucket{Name: "bkt", Project: "p"}); err != nil {
+		t.Fatal(err)
+	}
+	for range 200 {
+		if _, err := s.CreateManagedFolder(ctx, "p", "bkt", "r/"); err != nil {
+			t.Fatal(err)
+		}
+		var wg sync.WaitGroup
+		wg.Go(func() { _, _ = s.SetManagedFolderPolicy(ctx, "p", "bkt", "r/", []byte("old"), nil) })
+		if err := s.DeleteManagedFolder(ctx, "p", "bkt", "r/", storage.DeleteFolderOptions{}); err != nil {
+			t.Fatal(err)
+		}
+		wg.Wait()
+		if _, err := s.CreateManagedFolder(ctx, "p", "bkt", "r/"); err != nil {
+			t.Fatal(err)
+		}
+		if raw, _, err := s.ManagedFolderPolicy(ctx, "p", "bkt", "r/"); err != nil || raw != nil {
+			t.Fatalf("a re-created folder has policy %q, %v; want none", raw, err)
+		}
+		if err := s.DeleteManagedFolder(ctx, "p", "bkt", "r/", storage.DeleteFolderOptions{}); err != nil {
+			t.Fatal(err)
+		}
 	}
 }

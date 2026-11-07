@@ -9,6 +9,7 @@ package storage
 import (
 	"context"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/monirz/cloudrig/core/clock"
@@ -29,6 +30,12 @@ type Service struct {
 	blobs *blob.Store
 	clk   clock.Clock
 	bus   *events.Bus
+
+	// folderMu orders a managed folder's create, policy writes and delete.
+	// Without it a policy write that read the folder just before a delete
+	// could store the policy after the delete removed it, and a later create
+	// under the same name would inherit it.
+	folderMu sync.Mutex
 }
 
 // New wires a service. The blob tree holds payloads; kv holds only metadata.
