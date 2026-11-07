@@ -214,8 +214,9 @@ func concurrentPolicyChange() error {
 }
 
 // DeleteManagedFolder removes a folder and its policy. A folder with objects
-// under it is refused unless allowNonEmpty, as GCS does; the objects stay
-// either way, since a managed folder never owned them.
+// or other managed folders under it is refused unless allowNonEmpty, as GCS
+// does; what is under it stays either way, since a managed folder never owned
+// it.
 func (s *Service) DeleteManagedFolder(ctx context.Context, project, bucket, id string, allowNonEmpty bool) error {
 	f, err := s.GetManagedFolder(ctx, project, bucket, id)
 	if err != nil {
@@ -226,7 +227,13 @@ func (s *Service) DeleteManagedFolder(ctx context.Context, project, bucket, id s
 		if err != nil {
 			return gerr.Wrap(err, gerr.Internal, "checking whether the managed folder is empty")
 		}
-		if len(live) > 0 {
+		// A folder nested inside counts too. The folder's own key sorts first
+		// under its prefix, so a second entry is a nested one.
+		folders, _, err := s.kv.List(ctx, resource.ManagedFolder(project, bucket, f.Name), 2, "")
+		if err != nil {
+			return gerr.Wrap(err, gerr.Internal, "checking the managed folder for nested folders")
+		}
+		if len(live) > 0 || len(folders) > 1 {
 			return gerr.Newf(gerr.FailedPrecondition, "The managed folder you tried to delete is not empty: %s. Pass allowNonEmpty to delete it anyway.", f.Name).
 				WithHTTPStatus(http.StatusConflict).
 				WithReason("conflict")
