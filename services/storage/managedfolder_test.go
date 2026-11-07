@@ -21,9 +21,9 @@ func TestManagedFolderName(t *testing.T) {
 	}
 }
 
-// A bucket deleted and made again under the same name starts with no folders
-// and no folder policies.
-func TestDeleteBucketDropsManagedFolders(t *testing.T) {
+// A bucket holding a managed folder is not empty; once the folder is deleted
+// the bucket goes, and a bucket made again under the name starts clean.
+func TestDeleteManagedFolderThenBucket(t *testing.T) {
 	s, _ := newService(t)
 	ctx := context.Background()
 	mustBucket := func() {
@@ -39,20 +39,32 @@ func TestDeleteBucketDropsManagedFolders(t *testing.T) {
 	if _, err := s.SetManagedFolderPolicy(ctx, "p", "bkt", "a/", []byte("policy"), 0); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.DeleteBucket(ctx, "p", "bkt"); err != nil {
+	if err := s.DeleteBucket(ctx, "p", "bkt"); gerr.From(err).Code != gerr.AlreadyExists {
+		t.Fatalf("deleting a bucket with a folder = %v, want a 409 conflict", err)
+	}
+
+	if _, err := write(t, s, "a/x.txt", "x", storage.Preconditions{}); err != nil {
 		t.Fatal(err)
 	}
-	mustBucket()
-
-	folders, _, err := s.ListManagedFolders(ctx, "p", "bkt", "", 0, "")
-	if err != nil || len(folders) != 0 {
-		t.Fatalf("folders after re-create = %v, %v; want none", folders, err)
+	if err := s.DeleteManagedFolder(ctx, "p", "bkt", "a", false); gerr.From(err).Code != gerr.FailedPrecondition {
+		t.Errorf("deleting a non-empty folder = %v, want FailedPrecondition", err)
 	}
+	if err := s.DeleteManagedFolder(ctx, "p", "bkt", "a", true); err != nil {
+		t.Fatalf("deleting with allowNonEmpty: %v", err)
+	}
+	if _, err := s.GetManagedFolder(ctx, "p", "bkt", "a/"); gerr.From(err).Code != gerr.NotFound {
+		t.Errorf("get after delete = %v, want NotFound", err)
+	}
+	if err := s.DeleteManagedFolder(ctx, "p", "bkt", "a", true); gerr.From(err).Code != gerr.NotFound {
+		t.Errorf("second delete = %v, want NotFound", err)
+	}
+
+	// The policy went with the folder.
 	if _, err := s.CreateManagedFolder(ctx, "p", "bkt", "a/"); err != nil {
 		t.Fatal(err)
 	}
 	if raw, _, err := s.ManagedFolderPolicy(ctx, "p", "bkt", "a/"); err != nil || raw != nil {
-		t.Errorf("policy after re-create = %q, %v; want none", raw, err)
+		t.Errorf("policy of a re-created folder = %q, %v; want none", raw, err)
 	}
 	if _, err := s.CreateManagedFolder(ctx, "p", "bkt", "a"); gerr.From(err).Code != gerr.AlreadyExists {
 		t.Errorf("repeat create = %v, want AlreadyExists", err)

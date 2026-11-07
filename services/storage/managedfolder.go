@@ -159,15 +159,44 @@ func (s *Service) SetManagedFolderPolicy(ctx context.Context, project, bucket, i
 	return version, nil
 }
 
-// dropManagedFolders removes a bucket's folders and their policies, so a
-// bucket created again under the same name does not inherit them.
-func (s *Service) dropManagedFolders(ctx context.Context, project, bucket string) error {
-	for _, prefix := range []string{resource.ManagedFolderPrefix(project, bucket), resource.ManagedFolderIAMPrefix(project, bucket)} {
-		if err := s.kv.Reset(ctx, prefix); err != nil {
-			return gerr.Wrap(err, gerr.Internal, "removing the bucket's managed folders")
+// DeleteManagedFolder removes a folder and its policy. A folder with objects
+// under it is refused unless allowNonEmpty, as GCS does; the objects stay
+// either way, since a managed folder never owned them.
+func (s *Service) DeleteManagedFolder(ctx context.Context, project, bucket, id string, allowNonEmpty bool) error {
+	f, err := s.GetManagedFolder(ctx, project, bucket, id)
+	if err != nil {
+		return err
+	}
+	if !allowNonEmpty {
+		live, _, err := s.kv.List(ctx, resource.LivePrefix(project, bucket)+f.Name, 1, "")
+		if err != nil {
+			return gerr.Wrap(err, gerr.Internal, "checking whether the managed folder is empty")
+		}
+		if len(live) > 0 {
+			return gerr.Newf(gerr.FailedPrecondition, "The managed folder you tried to delete is not empty: %s. Pass allowNonEmpty to delete it anyway.", f.Name).
+				WithHTTPStatus(http.StatusConflict).
+				WithReason("conflict")
 		}
 	}
+	// The policy goes first: a folder left without one reads as an empty
+	// policy, while a policy left without its folder would come back on a
+	// later create of the same name.
+	if err := s.kv.Delete(ctx, resource.ManagedFolderIAM(project, bucket, f.Name), 0); err != nil && !errors.Is(err, store.ErrNotFound) {
+		return gerr.Wrap(err, gerr.Internal, "deleting the managed folder's IAM policy")
+	}
+	if err := s.kv.Delete(ctx, resource.ManagedFolder(project, bucket, f.Name), 0); err != nil && !errors.Is(err, store.ErrNotFound) {
+		return gerr.Wrap(err, gerr.Internal, "deleting the managed folder")
+	}
 	return nil
+}
+
+// hasManagedFolders reports whether a bucket holds any managed folder.
+func (s *Service) hasManagedFolders(ctx context.Context, project, bucket string) (bool, error) {
+	entries, _, err := s.kv.List(ctx, resource.ManagedFolderPrefix(project, bucket), 1, "")
+	if err != nil {
+		return false, gerr.Wrap(err, gerr.Internal, "checking the bucket for managed folders")
+	}
+	return len(entries) > 0, nil
 }
 
 func badFolderName(id, why string) error {

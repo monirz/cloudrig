@@ -376,8 +376,10 @@ Payload bytes never enter the heap: 2 GiB moves for about 1 MiB of allocation.
 Managed folders are served over gRPC on the same port, as
 `google.storage.control.v2.StorageControl`, which is what Google's
 `StorageControlClient` speaks by default: create (a repeat is
-`ALREADY_EXISTS`), get, and `GetIamPolicy`/`SetIamPolicy` on a folder. A
-folder made this way shows in the JSON API's `managedFolders` list.
+`ALREADY_EXISTS`), get, delete, and `GetIamPolicy`/`SetIamPolicy` on a folder.
+A folder made this way shows in the JSON API's `managedFolders` list. As in
+GCS, a bucket holding managed folders is not empty: `gcloud storage rm -r`
+deletes them first, and a plain bucket delete is refused with a 409.
 
 `StorageControlClient` does not read `STORAGE_EMULATOR_HOST` and would dial
 `storage.googleapis.com` over TLS, so hand it a plaintext channel to cloudrig

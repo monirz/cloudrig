@@ -43,6 +43,7 @@ func NewAPI(svc *Service) *API {
 	a.router.Handle(http.MethodDelete, "/storage/v1/b/{bucket}", a.deleteBucket)
 	a.router.Handle(http.MethodGet, "/storage/v1/b/{bucket}/storageLayout", a.storageLayout)
 	a.router.Handle(http.MethodGet, "/storage/v1/b/{bucket}/managedFolders", a.listManagedFolders)
+	a.router.Handle(http.MethodDelete, "/storage/v1/b/{bucket}/managedFolders/{folder}", a.deleteManagedFolder)
 
 	a.router.Handle(http.MethodGet, "/storage/v1/b/{bucket}/iam", a.getBucketIAM)
 	a.router.Handle(http.MethodPut, "/storage/v1/b/{bucket}/iam", a.setBucketIAM)
@@ -237,6 +238,21 @@ func (a *API) listManagedFolders(w http.ResponseWriter, r *http.Request, p trans
 		resp["nextPageToken"] = next
 	}
 	return writeJSON(w, http.StatusOK, resp)
+}
+
+// deleteManagedFolder is what gcloud storage rm -r calls for each folder it
+// listed, before it deletes the bucket.
+func (a *API) deleteManagedFolder(w http.ResponseWriter, r *http.Request, p transport.Params) error {
+	project, err := a.svc.ProjectOf(r.Context(), p["bucket"])
+	if err != nil {
+		return err
+	}
+	allow := r.URL.Query().Get("allowNonEmpty") == "true"
+	if err := a.svc.DeleteManagedFolder(r.Context(), project, p["bucket"], p["folder"], allow); err != nil {
+		return err
+	}
+	w.WriteHeader(http.StatusNoContent)
+	return nil
 }
 
 func (a *API) listObjects(w http.ResponseWriter, r *http.Request, p transport.Params) error {
