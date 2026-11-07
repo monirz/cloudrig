@@ -50,7 +50,7 @@ process the same way they would reach Google.
 | `core/faults` | Rules that fail chosen requests, matched before routing |
 | `core/resource` | GCP resource names encoded as store keys |
 | `core/tmp` | One temp-directory root per process, so a crash leaves one thing |
-| `store` | Versioned compare-and-swap KV, in memory or persisted |
+| `store` | Versioned compare-and-swap KV, in memory or on disk (bbolt, with `--data-dir`) |
 | `store/blob` | Object payloads as content-addressed files; forks by hardlink |
 | `functions` | Builds and runs functions as child processes |
 | `services/cloudfunctions` | The Cloud Functions v1 REST API |

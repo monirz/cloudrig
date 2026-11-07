@@ -243,8 +243,15 @@ func newStorage(clk clock.Clock, bus *events.Bus, dataDir string) (storageStack,
 	if err != nil {
 		return storageStack{}, fmt.Errorf("cloudrig: %w", err)
 	}
-	kv, err := store.OpenPersistent(filepath.Join(dataDir, "storage", "metadata.json"), clk)
+	kv, err := store.OpenBolt(filepath.Join(dataDir, "storage", "metadata.db"))
 	if err != nil {
+		_ = blobs.Close()
+		return storageStack{}, fmt.Errorf("cloudrig: %w", err)
+	}
+	// A --data-dir from before the disk store holds its metadata in one JSON
+	// file. It is imported the first time, then set aside.
+	if err := kv.ImportSnapshot(filepath.Join(dataDir, "storage", "metadata.json")); err != nil {
+		_ = kv.Close()
 		_ = blobs.Close()
 		return storageStack{}, fmt.Errorf("cloudrig: %w", err)
 	}

@@ -19,6 +19,7 @@ require (
 	github.com/moby/moby/api v1.56.0
 	github.com/moby/moby/client v0.6.0
 	github.com/robfig/cron/v3 v3.0.1
+	go.etcd.io/bbolt v1.5.0
 	google.golang.org/api v0.295.0
 	google.golang.org/genproto v0.0.0-20260715232425-e75dac1f907d
 	google.golang.org/genproto/googleapis/api v0.0.0-20260819154853-08b0e4226688
