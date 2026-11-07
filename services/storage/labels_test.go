@@ -99,4 +99,15 @@ func TestBucketLabelsArePersisted(t *testing.T) {
 	u, stop = start()
 	defer stop()
 	check("get after restart", call("GET", u+"/label-two", ""), want)
+
+	// A PUT is buckets.update, which replaces: keys it does not name are gone.
+	check("put", call("PUT", u+"/label-two", `{"name":"label-two","labels":{"z":"9"}}`),
+		map[string]string{"z": "9"})
+	// A PUT with no labels at all leaves none.
+	check("put without labels", call("PUT", u+"/label-two", `{"name":"label-two"}`), nil)
+
+	// "labels": null in a patch removes them all; absent leaves them alone.
+	call("PATCH", u+"/label-two", `{"labels":{"x":"1","y":"2"}}`)
+	check("patch null", call("PATCH", u+"/label-two", `{"labels":null}`), nil)
+	check("get after patch null", call("GET", u+"/label-two", ""), nil)
 }

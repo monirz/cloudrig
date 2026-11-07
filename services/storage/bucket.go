@@ -121,7 +121,10 @@ type BucketPatch struct {
 	// Labels merges into the bucket's labels, as a GCS patch does: each key
 	// is set to its value, a nil value removes the key, and keys not named
 	// are kept.
-	Labels        map[string]*string
+	Labels map[string]*string
+	// ReplaceLabels makes Labels the bucket's whole set instead of a merge:
+	// keys not named are dropped, as are nil values.
+	ReplaceLabels bool
 	Preconditions Preconditions
 }
 
@@ -148,7 +151,11 @@ func (s *Service) UpdateBucket(ctx context.Context, project, name string, patch 
 	if patch.Versioning != nil {
 		b.Versioning = *patch.Versioning
 	}
-	b.Labels = applyLabels(b.Labels, patch.Labels)
+	if patch.ReplaceLabels {
+		b.Labels = applyLabels(nil, patch.Labels)
+	} else {
+		b.Labels = applyLabels(b.Labels, patch.Labels)
+	}
 	b.Metageneration++
 	b.Updated = s.clk.Now()
 
