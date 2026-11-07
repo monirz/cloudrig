@@ -97,10 +97,10 @@ func TestSweepSparesLiveRoots(t *testing.T) {
 // TestAliveOnThisProcess pins the liveness check against the one process we
 // know the answer for.
 func TestAliveOnThisProcess(t *testing.T) {
-	if !alive(os.Getpid()) {
-		t.Error("alive() says this process is not running")
+	if !Alive(os.Getpid()) {
+		t.Error("Alive() says this process is not running")
 	}
-	if alive(0) {
-		t.Error("alive() says pid 0 is running")
+	if Alive(0) {
+		t.Error("Alive() says pid 0 is running")
 	}
 }
