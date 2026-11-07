@@ -2,7 +2,6 @@ package storage
 
 import (
 	"context"
-	"encoding/binary"
 	"strings"
 
 	"cloud.google.com/go/iam/apiv1/iampb"
@@ -87,7 +86,7 @@ func (c *Control) GetIamPolicy(ctx context.Context, req *iampb.GetIamPolicyReque
 	if err != nil {
 		return nil, err
 	}
-	raw, version, err := c.svc.ManagedFolderPolicy(ctx, project, bucket, folder)
+	raw, etag, err := c.svc.ManagedFolderPolicy(ctx, project, bucket, folder)
 	if err != nil {
 		return nil, grpcError(err)
 	}
@@ -97,7 +96,7 @@ func (c *Control) GetIamPolicy(ctx context.Context, req *iampb.GetIamPolicyReque
 			return nil, status.Errorf(codes.Internal, "decoding the stored policy: %v", err)
 		}
 	}
-	p.Etag = policyEtag(version)
+	p.Etag = etag
 	return p, nil
 }
 
@@ -125,28 +124,20 @@ func (c *Control) SetIamPolicy(ctx context.Context, req *iampb.SetIamPolicyReque
 		}
 	}
 
-	var ifVersion uint64
-	if tag := p.GetEtag(); len(tag) > 0 {
-		if len(tag) != 8 {
-			return nil, status.Error(codes.InvalidArgument, "the etag was not issued by this server")
-		}
-		ifVersion = binary.BigEndian.Uint64(tag)
-	} else {
-		// No etag means overwrite whatever is there.
-		if _, ifVersion, err = c.svc.ManagedFolderPolicy(ctx, project, bucket, folder); err != nil {
-			return nil, grpcError(err)
-		}
+	var ifEtag []byte
+	if len(p.GetEtag()) > 0 {
+		ifEtag = p.GetEtag()
 	}
 	p.Etag = nil
 	raw, err := proto.MarshalOptions{Deterministic: true}.Marshal(p)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "encoding the policy: %v", err)
 	}
-	version, err := c.svc.SetManagedFolderPolicy(ctx, project, bucket, folder, raw, ifVersion)
+	etag, err := c.svc.SetManagedFolderPolicy(ctx, project, bucket, folder, raw, ifEtag)
 	if err != nil {
 		return nil, grpcError(err)
 	}
-	p.Etag = policyEtag(version)
+	p.Etag = etag
 	return p, nil
 }
 
@@ -195,12 +186,6 @@ func toProtoFolder(f ManagedFolder) *controlpb.ManagedFolder {
 		CreateTime:     timestamppb.New(f.Created),
 		UpdateTime:     timestamppb.New(f.Updated),
 	}
-}
-
-// policyEtag is the store version of the policy: it moves on every write, so an
-// A-B-A change still reads as a change.
-func policyEtag(version uint64) []byte {
-	return binary.BigEndian.AppendUint64(nil, version)
 }
 
 // grpcError carries a service error's canonical code onto the gRPC status;
