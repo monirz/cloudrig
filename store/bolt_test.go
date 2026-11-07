@@ -204,3 +204,58 @@ func writeSnapshot(t *testing.T, path string, entries []store.Entry) {
 		t.Fatal(err)
 	}
 }
+
+// An import killed partway leaves some batches committed and the snapshot in
+// place. The next start must finish it rather than refuse on the partial data.
+// Not parallel: the hooks are package state.
+func TestBoltResumesAnInterruptedImport(t *testing.T) {
+	dir := t.TempDir()
+	snapshot := filepath.Join(dir, "metadata.json")
+	db := filepath.Join(dir, "metadata.db")
+	entries := []store.Entry{
+		{Key: "k1", Val: []byte("1"), Version: 1},
+		{Key: "k2", Val: []byte("2"), Version: 2},
+		{Key: "k3", Val: []byte("3"), Version: 3},
+		{Key: "k4", Val: []byte("4"), Version: 4},
+		{Key: "k5", Val: []byte("5"), Version: 5},
+	}
+	writeSnapshot(t, snapshot, entries)
+	ctx := context.Background()
+
+	restoreBatch := store.SetImportBatch(2)
+	defer restoreBatch()
+	undo := store.InterruptImportAfter(2)
+	b := openBolt(t, db)
+	if err := b.ImportSnapshot(snapshot); err == nil {
+		t.Fatal("the interrupted import reported success")
+	}
+	undo()
+	if _, _, err := b.Get(ctx, "k1"); err != nil {
+		t.Fatalf("the first batch was not committed, so this tests nothing: %v", err)
+	}
+	if err := b.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	b = openBolt(t, db)
+	if err := b.ImportSnapshot(snapshot); err != nil {
+		t.Fatalf("the restart refused to finish the import: %v", err)
+	}
+	all, _, err := b.List(ctx, "", 0, "")
+	if err != nil || len(all) != len(entries) {
+		t.Fatalf("after the resumed import: %d entries, %v; want %d", len(all), err, len(entries))
+	}
+	if _, v, _ := b.Get(ctx, "k5"); v != 5 {
+		t.Errorf("k5 at version %d, want 5", v)
+	}
+
+	// Done: newer data written now must not be thrown away by a stray
+	// snapshot appearing later.
+	if _, err := b.Put(ctx, "new", []byte("y"), 0); err != nil {
+		t.Fatal(err)
+	}
+	writeSnapshot(t, snapshot, entries)
+	if err := b.ImportSnapshot(snapshot); err == nil {
+		t.Error("a snapshot was imported over data written after a finished import")
+	}
+}
