@@ -242,33 +242,52 @@ func (s *Bolt) Reset(ctx context.Context, keyPrefix string) error {
 
 // importBatch is how many entries one import transaction writes: large enough
 // that an import of a million entries is quick, small enough that one
-// transaction's dirty pages stay modest.
-const importBatch = 20000
+// transaction's dirty pages stay modest. A variable so a test can make an
+// import span several batches.
+var importBatch = 20000
+
+// metaBucket holds the store's own bookkeeping, apart from the keys it serves.
+var metaBucket = []byte("meta")
+
+// importingKey is set in metaBucket from before an import's first batch until
+// its file has been set aside. Seen at start, it means the last import was cut
+// short, and the half-imported keys can be thrown away and the import rerun.
+var importingKey = []byte("importing")
+
+// importInterrupted stops an import after a batch when it returns true. Only
+// tests set it, to stand in for a process killed mid-import.
+var importInterrupted func(imported int) bool
 
 // ImportSnapshot loads a metadata.json written by an older cloudrig, whose
 // store kept everything in memory and saved it whole to that one file.
 //
-// It runs only into an empty database, so it can never overwrite newer data,
-// and afterwards renames the file with an ".imported" suffix: kept, in case it
-// is wanted, but never imported twice. A missing file is not an error.
+// It runs only into an empty database, or one an earlier import was cut short
+// in, so it can never overwrite newer data. Afterwards it renames the file
+// with an ".imported" suffix: kept, in case it is wanted, but never imported
+// twice. A missing file is not an error.
 func (s *Bolt) ImportSnapshot(path string) error {
 	raw, err := os.ReadFile(path)
 	if os.IsNotExist(err) {
-		return nil
+		// The rename happened but the marker was not cleared: the import
+		// finished. Clearing it here keeps a later import possible.
+		return s.clearImporting()
 	}
 	if err != nil {
 		return fmt.Errorf("store: reading %s: %w", path, err)
 	}
 
-	var empty bool
+	var empty, resumed bool
 	if err := s.db.View(func(tx *bolt.Tx) error {
 		k, _ := tx.Bucket(kvBucket).Cursor().First()
 		empty = k == nil
+		if m := tx.Bucket(metaBucket); m != nil {
+			resumed = m.Get(importingKey) != nil
+		}
 		return nil
 	}); err != nil {
 		return err
 	}
-	if !empty {
+	if !empty && !resumed {
 		return fmt.Errorf("store: %s is from an older cloudrig, but the database beside it already has data; "+
 			"move one of them away", path)
 	}
@@ -279,6 +298,25 @@ func (s *Bolt) ImportSnapshot(path string) error {
 		// because a file was unreadable is the worse failure.
 		return fmt.Errorf("store: %s is not a cloudrig snapshot: %w", path, err)
 	}
+
+	// The marker and the clearing of any earlier partial import commit
+	// together, before the first batch.
+	if err := s.db.Update(func(tx *bolt.Tx) error {
+		if err := tx.DeleteBucket(kvBucket); err != nil {
+			return err
+		}
+		if _, err := tx.CreateBucket(kvBucket); err != nil {
+			return err
+		}
+		m, err := tx.CreateBucketIfNotExists(metaBucket)
+		if err != nil {
+			return err
+		}
+		return m.Put(importingKey, []byte(path))
+	}); err != nil {
+		return fmt.Errorf("store: starting the import of %s: %w", path, err)
+	}
+
 	for start := 0; start < len(entries); start += importBatch {
 		batch := entries[start:min(start+importBatch, len(entries))]
 		if err := s.db.Update(func(tx *bolt.Tx) error {
@@ -292,6 +330,9 @@ func (s *Bolt) ImportSnapshot(path string) error {
 		}); err != nil {
 			return fmt.Errorf("store: importing %s: %w", path, err)
 		}
+		if importInterrupted != nil && importInterrupted(start+len(batch)) {
+			return fmt.Errorf("store: importing %s: interrupted", path)
+		}
 	}
 	if err := s.db.Sync(); err != nil {
 		return fmt.Errorf("store: syncing the import: %w", err)
@@ -299,5 +340,21 @@ func (s *Bolt) ImportSnapshot(path string) error {
 	if err := os.Rename(path, path+".imported"); err != nil {
 		return fmt.Errorf("store: setting aside %s: %w", path, err)
 	}
-	return nil
+	return s.clearImporting()
+}
+
+// clearImporting removes the import marker, writing only when one is set:
+// it runs on every start.
+func (s *Bolt) clearImporting() error {
+	var set bool
+	if err := s.db.View(func(tx *bolt.Tx) error {
+		m := tx.Bucket(metaBucket)
+		set = m != nil && m.Get(importingKey) != nil
+		return nil
+	}); err != nil || !set {
+		return err
+	}
+	return s.db.Update(func(tx *bolt.Tx) error {
+		return tx.Bucket(metaBucket).Delete(importingKey)
+	})
 }
