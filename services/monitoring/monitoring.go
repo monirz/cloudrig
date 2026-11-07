@@ -10,9 +10,11 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -61,6 +63,13 @@ var (
 // within a series.
 func seriesPrefix(project, metricType string) string {
 	return "mon/ts/" + project + "/" + metricType + "\x00"
+}
+
+// latestKey holds the end time of a series' newest point, so a write checks
+// its order with one read rather than a scan of every point before it. It sits
+// outside mon/ts/ so listing points never meets it.
+func latestKey(project, metricType, series string) string {
+	return "mon/latest/" + project + "/" + metricType + "\x00" + series
 }
 
 func pointKey(project, metricType, series string, end time.Time) string {
@@ -114,6 +123,7 @@ func (s *Service) write(ctx context.Context, req *monitoringpb.CreateTimeSeriesR
 	// Checked whole before anything is stored, so a bad request leaves no
 	// partial write behind.
 	ids := make([]string, len(series))
+	markers := make([]uint64, len(series)) // each series' latestKey version
 	seen := map[string]bool{}
 	for i, ts := range series {
 		if err := validSeries(i, ts); err != nil {
@@ -125,11 +135,12 @@ func (s *Service) write(ctx context.Context, req *monitoringpb.CreateTimeSeriesR
 				"time_series[%d] repeats a series already in this request", i)
 		}
 		seen[ids[i]] = true
-		latest, err := s.latest(ctx, project, ts.GetMetric().GetType(), ids[i])
+		latest, marker, err := s.latest(ctx, project, ts.GetMetric().GetType(), ids[i])
 		if err != nil {
 			return nil, err
 		}
 		end := ts.GetPoints()[0].GetInterval().GetEndTime().AsTime()
+		markers[i] = marker
 		if !latest.IsZero() && !end.After(latest) {
 			return nil, status.Errorf(codes.InvalidArgument,
 				"time_series[%d]: Points must be written in order. One or more of the points specified "+
@@ -152,6 +163,12 @@ func (s *Service) write(ctx context.Context, req *monitoringpb.CreateTimeSeriesR
 		end := ts.GetPoints()[0].GetInterval().GetEndTime().AsTime()
 		if _, err := s.kv.Put(ctx, pointKey(project, ts.GetMetric().GetType(), ids[i], end), encoded, 0); err != nil {
 			return nil, status.Errorf(codes.Internal, "storing time series: %v", err)
+		}
+		// After the point: a marker behind its points only costs one slow
+		// read, while one ahead of them would refuse a valid write.
+		nanos := []byte(strconv.FormatInt(end.UnixNano(), 10))
+		if _, err := s.kv.Put(ctx, latestKey(project, ts.GetMetric().GetType(), ids[i]), nanos, markers[i]); err != nil {
+			return nil, status.Errorf(codes.Internal, "storing the latest point time: %v", err)
 		}
 	}
 	return &emptypb.Empty{}, nil
@@ -207,20 +224,35 @@ func valueType(v *monitoringpb.TypedValue) metric.MetricDescriptor_ValueType {
 	return metric.MetricDescriptor_VALUE_TYPE_UNSPECIFIED
 }
 
-// latest is the end time of a series' newest point, or zero if it has none.
-func (s *Service) latest(ctx context.Context, project, metricType, series string) (time.Time, error) {
+// latest is the end time of a series' newest point, or zero if it has none,
+// and the version of its latestKey (0 if unset).
+func (s *Service) latest(ctx context.Context, project, metricType, series string) (time.Time, uint64, error) {
+	raw, version, err := s.kv.Get(ctx, latestKey(project, metricType, series))
+	if err == nil {
+		nanos, err := strconv.ParseInt(string(raw), 10, 64)
+		if err != nil {
+			return time.Time{}, 0, status.Errorf(codes.Internal, "decoding the latest point time: %v", err)
+		}
+		return time.Unix(0, nanos).UTC(), version, nil
+	}
+	if !errors.Is(err, store.ErrNotFound) {
+		return time.Time{}, 0, status.Errorf(codes.Internal, "reading the latest point time: %v", err)
+	}
+
+	// No marker: a new series, or one stored before markers existed, whose
+	// newest point is found the slow way once. The next write sets the marker.
 	entries, _, err := s.kv.List(ctx, seriesPrefix(project, metricType)+series+"/", 0, "")
 	if err != nil {
-		return time.Time{}, status.Errorf(codes.Internal, "reading time series: %v", err)
+		return time.Time{}, 0, status.Errorf(codes.Internal, "reading time series: %v", err)
 	}
 	if len(entries) == 0 {
-		return time.Time{}, nil
+		return time.Time{}, 0, nil
 	}
 	var ts monitoringpb.TimeSeries
 	if err := unmarshal.Unmarshal(entries[len(entries)-1].Val, &ts); err != nil {
-		return time.Time{}, status.Errorf(codes.Internal, "decoding time series: %v", err)
+		return time.Time{}, 0, status.Errorf(codes.Internal, "decoding time series: %v", err)
 	}
-	return ts.GetPoints()[0].GetInterval().GetEndTime().AsTime(), nil
+	return ts.GetPoints()[0].GetInterval().GetEndTime().AsTime(), 0, nil
 }
 
 func (s *Service) ListTimeSeries(ctx context.Context, req *monitoringpb.ListTimeSeriesRequest) (*monitoringpb.ListTimeSeriesResponse, error) {
