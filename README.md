@@ -466,7 +466,7 @@ CloudRig emulates the following services:
 | Service | Status | Notes |
 |---|:--:|---|
 | Cloud Functions | ✅ | Real local execution (Go & Node), HTTP & event triggers |
-| Cloud Storage | ✅ | Buckets, objects, uploads, versioning, signed URLs |
+| Cloud Storage | ✅ | Buckets, objects, uploads, versioning, signed URLs, managed folders |
 | Pub/Sub | ✅ | Publish, streaming pull, ack/nack, redelivery |
 | Firestore | ✅ | Documents, queries, transactions, over gRPC |
 | Cloud Tasks | ✅ | Deferred HTTP work, dispatched on the clock |

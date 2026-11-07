@@ -33,6 +33,19 @@ Cloud Storage:
   by a restart cannot be resumed. Real GCS keeps a session usable for a week.
 - Any chunk size is accepted. Real GCS requires non-final chunks to be a
   multiple of 256 KiB.
+- Storage Control serves managed folders only: create, get, and
+  GetIamPolicy/SetIamPolicy on a folder. Folders (hierarchical namespace),
+  storage layout, caches, intelligence configs, and listing, deleting or
+  updating managed folders over gRPC answer Unimplemented. It is gRPC only.
+- The JSON API lists managed folders but cannot create, delete or read their
+  IAM, so `gcloud storage rm -r` on a bucket holding one prints a 404 for the
+  folder and exits 1, though it does delete the bucket. Deleting a bucket drops
+  its managed folders; real GCS refuses until they are deleted.
+- Managed folders are allowed whether or not the bucket has uniform
+  bucket-level access, which real GCS requires.
+- GetIamPolicy returns a folder's policy as stored, whatever
+  requested_policy_version asks for; real IAM rewrites conditional bindings
+  for a version-1 reader.
 
 Event triggers:
 
@@ -200,8 +213,6 @@ Cloud Run:
 - **`pageSize` and `pageToken`** on every list — all results are returned in one
   page. An emulator holds few enough functions that paging would only be
   ceremony.
-- **Managed folders** — listed as empty, so gcloud storage rm -r works; they
-  cannot be created.
 - **Bucket `location` and `storageClass`** — stored and echoed back, but nothing
   behaves differently for them.
 - **`projection`, `fields`, `userProject`** on storage requests.

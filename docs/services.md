@@ -8,7 +8,8 @@ reload, logs.
 
 **Cloud Storage** — buckets, objects, all three upload types, copy, rewrite,
 compose, listing with prefix and delimiter, every precondition the client sends,
-versioning, signed URLs, persistence. Verified against the real Go client and
+versioning, signed URLs, persistence, and managed folders with their IAM
+policies through Storage Control. Verified against the real Go client and
 `gcloud storage`.
 
 **Pub/Sub** — topics, subscriptions, publish, streaming pull, ack and nack,
@@ -369,6 +370,44 @@ c, _ := storage.NewClient(ctx,
 ```
 
 Payload bytes never enter the heap: 2 GiB moves for about 1 MiB of allocation.
+
+### Managed folders, through Storage Control
+
+Managed folders are served over gRPC on the same port, as
+`google.storage.control.v2.StorageControl`, which is what Google's
+`StorageControlClient` speaks by default: create (a repeat is
+`ALREADY_EXISTS`), get, and `GetIamPolicy`/`SetIamPolicy` on a folder. A
+folder made this way shows in the JSON API's `managedFolders` list.
+
+`StorageControlClient` does not read `STORAGE_EMULATOR_HOST` and would dial
+`storage.googleapis.com` over TLS, so hand it a plaintext channel to cloudrig
+instead. Use a recent google-cloud-storage-control: 1.17 has the IAM methods,
+1.6 does not.
+
+```python
+import grpc
+from google.cloud import storage_control_v2
+from google.cloud.storage_control_v2.services.storage_control.transports import StorageControlGrpcTransport
+
+channel = grpc.insecure_channel("localhost:4599")
+client = storage_control_v2.StorageControlClient(
+    transport=StorageControlGrpcTransport(channel=channel))
+
+folder = client.create_managed_folder(
+    parent="projects/_/buckets/my-bucket", managed_folder_id="tenants/acme/")
+policy = client.get_iam_policy(request={
+    "resource": folder.name, "options": {"requested_policy_version": 3}})
+policy.version = 3
+policy.bindings.add(role="roles/storage.objectViewer", members=["user:a@example.com"])
+client.set_iam_policy(request={"resource": folder.name, "policy": policy})
+```
+
+From Go: `control.NewStorageControlClient(ctx, option.WithEndpoint(emu.Endpoint()),
+option.WithoutAuthentication(), option.WithGRPCDialOption(grpc.WithTransportCredentials(insecure.NewCredentials())))`.
+
+Policies are stored, never enforced, like every IAM policy here. Conditions
+need version 3 and come back as they were set. The etag moves on every write,
+and a set carrying a stale one is `ABORTED`.
 
 ---
 
