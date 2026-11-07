@@ -16,7 +16,7 @@ import (
 )
 
 // Prefixes are the path prefixes the JSON API claims.
-var Prefixes = []string{"/storage/v1/", "/upload/storage/v1/", "/download/storage/v1/"}
+var Prefixes = []string{"/storage/v1/", "/upload/storage/v1/", "/resumable/upload/storage/v1/", "/download/storage/v1/"}
 
 // API is the Cloud Storage JSON API over a Service.
 type API struct {
@@ -67,6 +67,10 @@ func NewAPI(svc *Service) *API {
 	// A chunk may arrive as PUT from clients that prefer it; the Go client
 	// POSTs to the session URI.
 	a.router.Handle(http.MethodPut, "/upload/storage/v1/b/{bucket}/o", a.upload)
+	// gcloud storage cp from stdin opens its session on this alias, which GCS
+	// serves as the same resumable endpoint.
+	a.router.Handle(http.MethodPost, "/resumable/upload/storage/v1/b/{bucket}/o", a.upload)
+	a.router.Handle(http.MethodPut, "/resumable/upload/storage/v1/b/{bucket}/o", a.upload)
 
 	// The download path the Go client's reader uses. It is the one piece of the
 	// XML API surface that cannot be skipped: NewReader goes here, not to the
