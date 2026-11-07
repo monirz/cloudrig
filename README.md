@@ -474,6 +474,7 @@ CloudRig emulates the following services:
 | Secret Manager | ✅ | Secrets, versions, the `latest` alias |
 | Cloud KMS | ✅ | Symmetric keys, rotation, encrypt and decrypt, over gRPC |
 | Cloud Monitoring | ✅ | Time-series writes, read back by filter, over gRPC |
+| Spanner | ➡️ | `--with-spanner` runs Google's emulator in Docker beside cloudrig |
 | Cloud Logging | ✅ | Write and read structured entries with a filter |
 | Service Usage | ✅ | `gcloud services enable/disable/list` |
 | Cloud Run | ✅ | Runs a real container (needs Docker) |

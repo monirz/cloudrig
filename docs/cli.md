@@ -26,6 +26,8 @@ cloudrig restore <file>    # load state back ("-" for stdin)
   previous version serving.
 - `--data-dir` persists Cloud Storage across restarts. Without it, everything
   is in memory.
+- `--with-spanner` also runs Google's Spanner emulator in Docker, on
+  `localhost:9010` (gRPC) and `9020` (REST), and removes it on shutdown.
 - Every flag has a `CLOUDRIG_` environment twin.
 
 ---

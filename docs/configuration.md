@@ -11,6 +11,8 @@ twin (an explicit flag wins).
 | `--data-dir DIR` | `CLOUDRIG_DATA_DIR` | (memory) | Persist Cloud Storage across restarts. |
 | `--clock MODE` | `CLOUDRIG_CLOCK` | `real` | `virtual` freezes time so you can travel it. |
 | `--clock-start T` | `CLOUDRIG_CLOCK_START` | now | RFC3339 seed for the virtual clock. |
+| `--with-spanner` | `CLOUDRIG_WITH_SPANNER` | off | Also run Google's Spanner emulator in Docker, removed on shutdown. |
+| `--spanner-port N` | `CLOUDRIG_SPANNER_PORT` | `9010` | Its gRPC port; REST is `N+10`. |
 
 ```sh
 cloudrig start --port 8080 --clock virtual --clock-start 2026-01-01T00:00:00Z
