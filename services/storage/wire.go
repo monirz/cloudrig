@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"encoding/json"
 	"net/url"
 	"strconv"
 	"strings"
@@ -61,11 +62,24 @@ type apiVersioning struct {
 // bucketRequest is the body of a bucket create or patch. A label's value is a
 // pointer because a patch removes a label by sending it as null.
 type bucketRequest struct {
-	Name         string             `json:"name,omitempty"`
-	Location     string             `json:"location,omitempty"`
-	StorageClass string             `json:"storageClass,omitempty"`
-	Versioning   *apiVersioning     `json:"versioning,omitempty"`
-	Labels       map[string]*string `json:"labels,omitempty"`
+	Name         string         `json:"name,omitempty"`
+	Location     string         `json:"location,omitempty"`
+	StorageClass string         `json:"storageClass,omitempty"`
+	Versioning   *apiVersioning `json:"versioning,omitempty"`
+	Labels       labelsField    `json:"labels"`
+}
+
+// labelsField is a request's labels. JSON alone cannot tell "labels" absent
+// from "labels": null, and a patch means different things by them: leave the
+// labels alone, or remove them all.
+type labelsField struct {
+	Present bool               // the key appeared, even as null
+	Values  map[string]*string // nil for null; a nil value removes that key
+}
+
+func (l *labelsField) UnmarshalJSON(raw []byte) error {
+	l.Present = true
+	return json.Unmarshal(raw, &l.Values)
 }
 
 func toAPIBucket(b Bucket, base string) apiBucket {

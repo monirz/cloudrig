@@ -112,7 +112,7 @@ func (a *API) createBucket(w http.ResponseWriter, r *http.Request, p transport.P
 		Location:     body.Location,
 		StorageClass: body.StorageClass,
 		Versioning:   body.Versioning != nil && body.Versioning.Enabled,
-		Labels:       applyLabels(nil, body.Labels),
+		Labels:       applyLabels(nil, body.Labels.Values),
 	})
 	if err != nil {
 		return err
@@ -149,6 +149,8 @@ func (a *API) getBucket(w http.ResponseWriter, r *http.Request, p transport.Para
 	return writeJSON(w, http.StatusOK, toAPIBucket(b, baseURL(r)))
 }
 
+// patchBucket serves PATCH (buckets.patch) and PUT (buckets.update). They
+// differ only in labels: see ReplaceLabels.
 func (a *API) patchBucket(w http.ResponseWriter, r *http.Request, p transport.Params) error {
 	project, err := a.svc.ProjectOf(r.Context(), p["bucket"])
 	if err != nil {
@@ -164,9 +166,13 @@ func (a *API) patchBucket(w http.ResponseWriter, r *http.Request, p transport.Pa
 	}
 
 	b, err := a.svc.UpdateBucket(r.Context(), project, p["bucket"], BucketPatch{
-		StorageClass:  body.StorageClass,
-		Versioning:    versioningOf(body),
-		Labels:        body.Labels,
+		StorageClass: body.StorageClass,
+		Versioning:   versioningOf(body),
+		Labels:       body.Labels.Values,
+		// A PUT is buckets.update, which replaces the bucket whole: labels it
+		// does not name are gone. A PATCH merges, except "labels": null, which
+		// removes them all.
+		ReplaceLabels: r.Method == http.MethodPut || (body.Labels.Present && body.Labels.Values == nil),
 		Preconditions: pre,
 	})
 	if err != nil {
