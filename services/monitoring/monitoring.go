@@ -148,6 +148,9 @@ func (s *Service) write(ctx context.Context, req *monitoringpb.CreateTimeSeriesR
 		}
 	}
 
+	// Once checked, a write is stored whole even if its caller goes away: a
+	// point stored without its marker would let an older point in later.
+	commit := context.WithoutCancel(ctx)
 	for i, ts := range series {
 		stored := proto.Clone(ts).(*monitoringpb.TimeSeries)
 		if stored.GetMetricKind() == metric.MetricDescriptor_METRIC_KIND_UNSPECIFIED {
@@ -161,13 +164,16 @@ func (s *Service) write(ctx context.Context, req *monitoringpb.CreateTimeSeriesR
 			return nil, status.Errorf(codes.Internal, "encoding time series: %v", err)
 		}
 		end := ts.GetPoints()[0].GetInterval().GetEndTime().AsTime()
-		if _, err := s.kv.Put(ctx, pointKey(project, ts.GetMetric().GetType(), ids[i], end), encoded, 0); err != nil {
+		if _, err := s.kv.Put(commit, pointKey(project, ts.GetMetric().GetType(), ids[i], end), encoded, 0); err != nil {
 			return nil, status.Errorf(codes.Internal, "storing time series: %v", err)
 		}
-		// After the point: a marker behind its points only costs one slow
-		// read, while one ahead of them would refuse a valid write.
+		// After the point: a marker ahead of its points would refuse a valid
+		// write. If it cannot be moved up, it is removed instead, so the next
+		// write finds the newest point by a scan rather than trusting it.
+		mk := latestKey(project, ts.GetMetric().GetType(), ids[i])
 		nanos := []byte(strconv.FormatInt(end.UnixNano(), 10))
-		if _, err := s.kv.Put(ctx, latestKey(project, ts.GetMetric().GetType(), ids[i]), nanos, markers[i]); err != nil {
+		if _, err := s.kv.Put(commit, mk, nanos, markers[i]); err != nil {
+			_ = s.kv.Delete(commit, mk, 0)
 			return nil, status.Errorf(codes.Internal, "storing the latest point time: %v", err)
 		}
 	}
