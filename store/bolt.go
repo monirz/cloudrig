@@ -84,11 +84,17 @@ func (s *Bolt) Close() error {
 
 // A stored value is its version, 8 bytes big-endian, then the caller's bytes.
 
-func encodeEntry(version uint64, val []byte) []byte {
+// maxVal is the largest caller value: bbolt's own limit, less the version.
+const maxVal = bolt.MaxValueSize - 8
+
+func encodeEntry(version uint64, val []byte) ([]byte, error) {
+	if len(val) > maxVal {
+		return nil, fmt.Errorf("store: a value of %d bytes is over the %d-byte limit", len(val), maxVal)
+	}
 	out := make([]byte, 8+len(val))
 	binary.BigEndian.PutUint64(out, version)
 	copy(out[8:], val)
-	return out
+	return out, nil
 }
 
 // decodeEntry copies the value out: bbolt's slices are only valid inside the
@@ -145,7 +151,11 @@ func (s *Bolt) Put(ctx context.Context, key string, val []byte, ifVersion uint64
 		}
 		// A fresh key lands on 1, keeping 0 reserved for "must not exist".
 		next = current + 1
-		return b.Put([]byte(key), encodeEntry(next, val))
+		entry, err := encodeEntry(next, val)
+		if err != nil {
+			return err
+		}
+		return b.Put([]byte(key), entry)
 	})
 	if err != nil {
 		return 0, err
@@ -322,7 +332,11 @@ func (s *Bolt) ImportSnapshot(path string) error {
 		if err := s.db.Update(func(tx *bolt.Tx) error {
 			b := tx.Bucket(kvBucket)
 			for _, e := range batch {
-				if err := b.Put([]byte(e.Key), encodeEntry(e.Version, e.Val)); err != nil {
+				entry, err := encodeEntry(e.Version, e.Val)
+				if err != nil {
+					return err
+				}
+				if err := b.Put([]byte(e.Key), entry); err != nil {
 					return err
 				}
 			}

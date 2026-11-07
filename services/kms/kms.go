@@ -20,6 +20,7 @@ import (
 	"errors"
 	"fmt"
 	"hash/crc32"
+	"math"
 	"regexp"
 	"strconv"
 	"strings"
@@ -124,7 +125,7 @@ func parseVersion(name string) (string, int64, error) {
 		return "", 0, status.Errorf(codes.InvalidArgument,
 			"invalid crypto key version name %q; expected .../cryptoKeys/{k}/cryptoKeyVersions/{n}", name)
 	}
-	n, err := strconv.ParseInt(parts[9], 10, 64)
+	n, err := strconv.ParseInt(parts[9], 10, 32)
 	if err != nil || n < 1 {
 		return "", 0, status.Errorf(codes.InvalidArgument, "invalid crypto key version %q", parts[9])
 	}
@@ -488,7 +489,7 @@ func (s *Service) UpdateCryptoKeyPrimaryVersion(ctx context.Context, req *kmspb.
 	if err := parseKey(req.GetName()); err != nil {
 		return nil, err
 	}
-	n, err := strconv.ParseInt(req.GetCryptoKeyVersionId(), 10, 64)
+	n, err := strconv.ParseInt(req.GetCryptoKeyVersionId(), 10, 32)
 	if err != nil || n < 1 {
 		return nil, status.Errorf(codes.InvalidArgument, "invalid crypto key version id %q", req.GetCryptoKeyVersionId())
 	}
@@ -519,6 +520,11 @@ func seal(material []byte, n int64, plaintext, aad []byte) ([]byte, error) {
 	gcm, err := newGCM(material)
 	if err != nil {
 		return nil, err
+	}
+	// The ciphertext carries the version in 4 bytes; parsing already caps a
+	// version at 32 bits, and this keeps the conversion honest regardless.
+	if n < 1 || n > math.MaxUint32 {
+		return nil, fmt.Errorf("version %d does not fit a ciphertext header", n)
 	}
 	out := make([]byte, 4+nonceSize, 4+nonceSize+len(plaintext)+gcm.Overhead())
 	binary.BigEndian.PutUint32(out, uint32(n))
