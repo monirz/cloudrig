@@ -426,18 +426,22 @@ func (s *Service) addVersion(ctx context.Context, keyName string, makePrimary bo
 		return nil, status.Errorf(codes.Internal, "encoding version: %v", err)
 	}
 	record, _ := json.Marshal(versionRecord{Version: encoded, Material: material})
-	if _, err := s.kv.Put(ctx, versionKey(keyName, n), record, 0); err != nil {
+
+	// The version and the primary that may follow it are stored even if the
+	// caller goes away, and a version whose primary cannot be set is removed:
+	// a first version left without the primary would leave a key that never
+	// encrypts, since a retry makes version 2, which is not made primary.
+	commit := context.WithoutCancel(ctx)
+	if _, err := s.kv.Put(commit, versionKey(keyName, n), record, 0); err != nil {
 		return nil, status.Errorf(codes.Internal, "storing version: %v", err)
 	}
-
-	rec, stored, err := s.keyRecord(ctx, keyName)
-	if err != nil {
-		return nil, err
+	rec, stored, err := s.keyRecord(commit, keyName)
+	if err == nil && (makePrimary || rec.PrimaryID == 0 && n == 1) {
+		err = s.setPrimary(commit, keyName, rec, stored, n)
 	}
-	if makePrimary || rec.PrimaryID == 0 && n == 1 {
-		if err := s.setPrimary(ctx, keyName, rec, stored, n); err != nil {
-			return nil, err
-		}
+	if err != nil {
+		_ = s.kv.Delete(commit, versionKey(keyName, n), 0)
+		return nil, err
 	}
 	return v, nil
 }
