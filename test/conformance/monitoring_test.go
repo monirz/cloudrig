@@ -171,3 +171,33 @@ func TestMonitoringRefusals(t *testing.T) {
 		}
 	}
 }
+
+// Concurrent writes of one point to the same series: exactly one is stored,
+// and every other is refused as out of order, never Internal.
+func TestMonitoringConcurrentWritesToOneSeries(t *testing.T) {
+	c, ctx := monitoringClient(t)
+	t0 := time.Date(2026, 11, 1, 12, 0, 0, 0, time.UTC)
+
+	const writers = 8
+	errs := make(chan error, writers)
+	for range writers {
+		go func() {
+			errs <- c.CreateTimeSeries(ctx, &monitoringpb.CreateTimeSeriesRequest{
+				Name: "projects/p", TimeSeries: []*monitoringpb.TimeSeries{gauge("resize", t0, 1)},
+			})
+		}()
+	}
+	stored := 0
+	for range writers {
+		switch err := <-errs; status.Code(err) {
+		case codes.OK:
+			stored++
+		case codes.InvalidArgument:
+		default:
+			t.Errorf("a racing write: %v, want OK or InvalidArgument", err)
+		}
+	}
+	if stored != 1 {
+		t.Errorf("%d writes stored the same point, want 1", stored)
+	}
+}

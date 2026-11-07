@@ -14,6 +14,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"cloud.google.com/go/monitoring/apiv3/v2/monitoringpb"
@@ -34,6 +35,11 @@ type Service struct {
 
 	kv  store.Store
 	clk clock.Clock
+
+	// mu makes each write's order check and its store one step. Without it two
+	// writes to a series could both pass the check, storing an older point
+	// after a newer one, or failing a duplicate as Internal.
+	mu sync.Mutex
 }
 
 // New wires a service.
@@ -101,6 +107,9 @@ func (s *Service) write(ctx context.Context, req *monitoringpb.CreateTimeSeriesR
 		return nil, status.Errorf(codes.InvalidArgument, "at most %d time series per request, got %d",
 			maxSeriesPerCall, len(series))
 	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
 
 	// Checked whole before anything is stored, so a bad request leaves no
 	// partial write behind.
