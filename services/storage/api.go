@@ -232,6 +232,9 @@ func (a *API) listManagedFolders(w http.ResponseWriter, r *http.Request, p trans
 	if err != nil {
 		return err
 	}
+	if maxResults < 0 || maxResults > math.MaxInt32 {
+		return invalidParam("maxResults", q.Get("maxResults"))
+	}
 	folders, next, err := a.svc.ListManagedFolders(r.Context(), project, p["bucket"], q.Get("prefix"), int(maxResults), q.Get("pageToken"))
 	if err != nil {
 		return err
