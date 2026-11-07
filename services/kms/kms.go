@@ -54,6 +54,24 @@ func New(kv store.Store, clk clock.Clock) *Service {
 	return &Service{kv: kv, clk: clk}
 }
 
+// Reset clears a project's key rings, keys and versions, or every project's
+// when project is empty. The emulator's Reset calls it, since this state
+// lives outside the storage tree a project reset otherwise clears.
+func (s *Service) Reset(ctx context.Context, project string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if project == "" {
+		return s.kv.Reset(ctx, "kms/")
+	}
+	name := "projects/" + project + "/"
+	for _, prefix := range []string{ringKey(name), keyKey(name), "kms/v/" + name} {
+		if err := s.kv.Reset(ctx, prefix); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // Key layout. Versions are zero-padded so key order is version order.
 const versionDigits = 12
 

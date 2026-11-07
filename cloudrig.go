@@ -119,6 +119,8 @@ type Emulator struct {
 	svcusage *serviceusage.Service
 	logging  *cloudlogging.Service
 	pubsub   *pubsub.Service
+	// resets clear the state services keep outside the storage tree.
+	resets []projectResetter
 }
 
 // Start runs the emulator on a real listener; the caller owns shutdown. ctx
@@ -178,13 +180,14 @@ func Start(ctx context.Context, o Options) (*Emulator, error) {
 	cssvc := cloudscheduler.New(stack.kvStore, clk, publishTo(psvc))
 	susvc := serviceusage.New(stack.kvStore)
 	gksvc := gke.New(stack.kvStore, clk)
+	resets := []projectResetter{susvc, lgsvc, kmsvc, mnsvc}
 	runReg := cloudrun.NewRegistry()
 	// Drain the async work a clock jump sets off, so a virtual-clock advance
 	// returns only once scheduled deliveries and the functions they trigger
 	// have run.
 	drain := func() { drainAsync(cssvc, bus, ctsvc) }
 	snap := stateSnapshot{kv: stack.kvStore, blobs: stack.blobs, faults: flt, clk: clk, pubsub: psvc}
-	handler, closeAPIs := newHandler(clk, o, reg, runReg, stack.svc, psvc, smsvc, ctsvc, cssvc, susvc, gksvc, lgsvc, newGRPC(clk, flt, stack.svc, psvc, fsvc, smsvc, kmsvc, mnsvc, ctsvc, cssvc, gksvc, lgsvc), flt, snap, drain)
+	handler, closeAPIs := newHandler(clk, o, reg, runReg, stack.svc, psvc, smsvc, ctsvc, cssvc, susvc, gksvc, lgsvc, newGRPC(clk, flt, stack.svc, psvc, fsvc, smsvc, kmsvc, mnsvc, ctsvc, cssvc, gksvc, lgsvc), flt, snap, drain, resets)
 	srv := &http.Server{
 		Handler:   handler,
 		Protocols: transport.Protocols(), // HTTP/1.1 and h2c on one port
@@ -202,6 +205,7 @@ func Start(ctx context.Context, o Options) (*Emulator, error) {
 		svcusage: susvc,
 		logging:  lgsvc,
 		pubsub:   psvc,
+		resets:   resets,
 		addr:     dialable(ln.Addr().String()),
 		fns:      reg,
 		storage:  stack.svc,
@@ -436,11 +440,12 @@ func serveForTest(t testing.TB, o Options, stack storageStack) *Emulator {
 	cssvc := cloudscheduler.New(stack.kvStore, o.Clock, publishTo(psvc))
 	susvc := serviceusage.New(stack.kvStore)
 	gksvc := gke.New(stack.kvStore, o.Clock)
+	resets := []projectResetter{susvc, lgsvc, kmsvc, mnsvc}
 	runReg := cloudrun.NewRegistry()
 	t.Cleanup(runReg.StopAll)
 	drain := func() { drainAsync(cssvc, bus, ctsvc) }
 	snap := stateSnapshot{kv: stack.kvStore, blobs: stack.blobs, faults: flt, clk: o.Clock, pubsub: psvc}
-	handler, closeAPIs := newHandler(o.Clock, o, reg, runReg, stack.svc, psvc, smsvc, ctsvc, cssvc, susvc, gksvc, lgsvc, newGRPC(o.Clock, flt, stack.svc, psvc, fsvc, smsvc, kmsvc, mnsvc, ctsvc, cssvc, gksvc, lgsvc), flt, snap, drain)
+	handler, closeAPIs := newHandler(o.Clock, o, reg, runReg, stack.svc, psvc, smsvc, ctsvc, cssvc, susvc, gksvc, lgsvc, newGRPC(o.Clock, flt, stack.svc, psvc, fsvc, smsvc, kmsvc, mnsvc, ctsvc, cssvc, gksvc, lgsvc), flt, snap, drain, resets)
 	t.Cleanup(closeAPIs)
 
 	srv := httptest.NewUnstartedServer(handler)
@@ -461,6 +466,7 @@ func serveForTest(t testing.TB, o Options, stack storageStack) *Emulator {
 		svcusage: susvc,
 		logging:  lgsvc,
 		pubsub:   psvc,
+		resets:   resets,
 		addr:     srv.Listener.Addr().String(),
 		fns:      reg,
 		storage:  stack.svc,
@@ -584,7 +590,7 @@ func routeV1(fallback http.Handler, services ...matcher) http.Handler {
 
 // newHandler builds the request surface and returns what it must tear down:
 // the API objects own temporary directories, and nothing else can reach them.
-func newHandler(clk clock.Clock, o Options, reg *functions.Registry, runReg *cloudrun.Registry, gcs *storage.Service, psvc *pubsub.Service, smsvc *secretmanager.Service, ctsvc *cloudtasks.Service, cssvc *cloudscheduler.Service, susvc *serviceusage.Service, gksvc *gke.Service, lgsvc *cloudlogging.Service, grpcSrv http.Handler, flt *faults.Set, snap transport.Snapshotter, drain func()) (http.Handler, func()) {
+func newHandler(clk clock.Clock, o Options, reg *functions.Registry, runReg *cloudrun.Registry, gcs *storage.Service, psvc *pubsub.Service, smsvc *secretmanager.Service, ctsvc *cloudtasks.Service, cssvc *cloudscheduler.Service, susvc *serviceusage.Service, gksvc *gke.Service, lgsvc *cloudlogging.Service, grpcSrv http.Handler, flt *faults.Set, snap transport.Snapshotter, drain func(), resets []projectResetter) (http.Handler, func()) {
 	configured := o.Runner
 	if configured == "" {
 		configured = "auto"
@@ -644,7 +650,7 @@ func newHandler(clk clock.Clock, o Options, reg *functions.Registry, runReg *clo
 		Faults:    flt,
 		Snapshot:  snap,
 		Reset: func(ctx context.Context, project string) error {
-			return resetAll(ctx, project, runReg, susvc, lgsvc, gcs)
+			return resetAll(ctx, project, runReg, resets, gcs)
 		},
 		Drain: drain,
 	})
@@ -658,7 +664,7 @@ func newHandler(clk clock.Clock, o Options, reg *functions.Registry, runReg *clo
 
 // Reset clears emulator state. An empty project clears everything.
 func (e *Emulator) Reset(ctx context.Context, project string) error {
-	return resetAll(ctx, project, e.run, e.svcusage, e.logging, e.storage)
+	return resetAll(ctx, project, e.run, e.resets, e.storage)
 }
 
 // drainAsync waits for the asynchronous work a virtual-clock jump sets off —
@@ -681,21 +687,22 @@ func drainAsync(cs *cloudscheduler.Service, bus *events.Bus, ct *cloudtasks.Serv
 	}
 }
 
+// projectResetter is a service keeping state under its own key prefix, which
+// a project reset clears by asking it.
+type projectResetter interface {
+	Reset(ctx context.Context, project string) error
+}
+
 // resetAll is the one reset path: the /_emu/reset endpoint and Emulator.Reset
-// both call it, so they cannot drift. Cloud Run services are stopped, Service
-// Usage state is cleared from its own key prefix, and the storage tree is
-// reset last.
-func resetAll(ctx context.Context, project string, run *cloudrun.Registry, su *serviceusage.Service, lg *cloudlogging.Service, gcs *storage.Service) error {
+// both call it, so they cannot drift. Cloud Run services are stopped, each
+// service with its own key prefix (Service Usage, Logging, KMS, Monitoring)
+// clears it, and the storage tree is reset last.
+func resetAll(ctx context.Context, project string, run *cloudrun.Registry, resets []projectResetter, gcs *storage.Service) error {
 	if run != nil {
 		run.StopAll()
 	}
-	if su != nil {
-		if err := su.Reset(ctx, project); err != nil {
-			return err
-		}
-	}
-	if lg != nil {
-		if err := lg.Reset(ctx, project); err != nil {
+	for _, r := range resets {
+		if err := r.Reset(ctx, project); err != nil {
 			return err
 		}
 	}

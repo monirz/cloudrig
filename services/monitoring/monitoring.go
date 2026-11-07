@@ -65,6 +65,23 @@ func seriesPrefix(project, metricType string) string {
 	return "mon/ts/" + project + "/" + metricType + "\x00"
 }
 
+// Reset clears a project's time series, or every project's when project is
+// empty. The emulator's Reset calls it, since this state lives outside the
+// storage tree a project reset otherwise clears.
+func (s *Service) Reset(ctx context.Context, project string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if project == "" {
+		return s.kv.Reset(ctx, "mon/")
+	}
+	for _, prefix := range []string{"mon/ts/" + project + "/", "mon/latest/" + project + "/"} {
+		if err := s.kv.Reset(ctx, prefix); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // latestKey holds the end time of a series' newest point, so a write checks
 // its order with one read rather than a scan of every point before it. It sits
 // outside mon/ts/ so listing points never meets it.
