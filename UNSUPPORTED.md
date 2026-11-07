@@ -29,13 +29,21 @@ Cloud Storage:
   clock every real signed URL looks issued in the future. An expired URL
   therefore still works.
 - `GenerateSignedPostPolicyV4` — the form-upload flow is not routed.
-- `ifSource*` preconditions on copy and compose. They return 501 naming the
-  parameter rather than being ignored: a condition silently dropped is worse
-  than one refused.
 - Resumable sessions live in memory and in a temp directory, so one interrupted
   by a restart cannot be resumed. Real GCS keeps a session usable for a week.
 - Any chunk size is accepted. Real GCS requires non-final chunks to be a
   multiple of 256 KiB.
+- Storage Control serves managed folders only: create, get, delete, and
+  GetIamPolicy/SetIamPolicy on a folder. Folders (hierarchical namespace),
+  storage layout, caches, intelligence configs, and listing or updating
+  managed folders over gRPC answer Unimplemented. It is gRPC only.
+- The JSON API lists and deletes managed folders, which is what
+  `gcloud storage rm -r` needs, but cannot create one, get one or read its IAM.
+- Managed folders are allowed whether or not the bucket has uniform
+  bucket-level access, which real GCS requires.
+- GetIamPolicy returns a folder's policy as stored, whatever
+  requested_policy_version asks for; real IAM rewrites conditional bindings
+  for a version-1 reader.
 
 Event triggers:
 
@@ -144,6 +152,29 @@ Secret Manager:
   empty policy and testIamPermissions grants whatever is asked for, so a
   command that only wanted to read a policy is not blocked.
 
+Cloud KMS:
+
+- Every key purpose but ENCRYPT_DECRYPT, and every algorithm but
+  GOOGLE_SYMMETRIC_ENCRYPTION: asymmetric sign and decrypt, MAC, raw
+  encryption, and GetPublicKey.
+- Import jobs, key and version destruction, changing a version's state, key
+  updates, Autokey, EKM and IAM.
+- The REST API, so `gcloud kms` does not reach it; the client libraries use
+  gRPC.
+- filter and orderBy on the lists. Each list answers in one page.
+
+Cloud Monitoring:
+
+- Everything but CreateTimeSeries, CreateServiceTimeSeries and ListTimeSeries:
+  metric and monitored-resource descriptors, alerting, uptime checks,
+  dashboards and the query language.
+- On ListTimeSeries: aggregation, orderBy, and filters beyond `field =
+  "value"` clauses joined by AND on metric.type, resource.type,
+  metric.labels.* and resource.labels.*. Each list answers in one page.
+- The REST API.
+- The real API's limit of one point per series every 5 seconds is not
+  enforced; points only have to arrive in time order.
+
 Cloud Tasks:
 
 - App Engine task targets; only http_request is dispatched.
@@ -180,8 +211,6 @@ Cloud Run:
 - **`pageSize` and `pageToken`** on every list — all results are returned in one
   page. An emulator holds few enough functions that paging would only be
   ceremony.
-- **Managed folders** — listed as empty, so gcloud storage rm -r works; they
-  cannot be created.
 - **Bucket `location` and `storageClass`** — stored and echoed back, but nothing
   behaves differently for them.
 - **`projection`, `fields`, `userProject`** on storage requests.

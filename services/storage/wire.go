@@ -1,7 +1,10 @@
 package storage
 
 import (
+	"encoding/json"
+	"net/url"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -11,16 +14,17 @@ import (
 // below are separate from the stored ones rather than reusing them.
 
 type apiBucket struct {
-	Kind           string         `json:"kind"`
-	ID             string         `json:"id"`
-	Name           string         `json:"name"`
-	Location       string         `json:"location"`
-	StorageClass   string         `json:"storageClass"`
-	Versioning     *apiVersioning `json:"versioning,omitempty"`
-	Metageneration string         `json:"metageneration"`
-	TimeCreated    string         `json:"timeCreated"`
-	Updated        string         `json:"updated"`
-	SelfLink       string         `json:"selfLink,omitempty"`
+	Kind           string            `json:"kind"`
+	ID             string            `json:"id"`
+	Name           string            `json:"name"`
+	Location       string            `json:"location"`
+	StorageClass   string            `json:"storageClass"`
+	Versioning     *apiVersioning    `json:"versioning,omitempty"`
+	Labels         map[string]string `json:"labels,omitempty"`
+	Metageneration string            `json:"metageneration"`
+	TimeCreated    string            `json:"timeCreated"`
+	Updated        string            `json:"updated"`
+	SelfLink       string            `json:"selfLink,omitempty"`
 }
 
 type apiObject struct {
@@ -55,12 +59,27 @@ type apiVersioning struct {
 	Enabled bool `json:"enabled"`
 }
 
-// bucketRequest is the body of a bucket create.
+// bucketRequest is the body of a bucket create or patch. A label's value is a
+// pointer because a patch removes a label by sending it as null.
 type bucketRequest struct {
 	Name         string         `json:"name,omitempty"`
 	Location     string         `json:"location,omitempty"`
 	StorageClass string         `json:"storageClass,omitempty"`
 	Versioning   *apiVersioning `json:"versioning,omitempty"`
+	Labels       labelsField    `json:"labels"`
+}
+
+// labelsField is a request's labels. JSON alone cannot tell "labels" absent
+// from "labels": null, and a patch means different things by them: leave the
+// labels alone, or remove them all.
+type labelsField struct {
+	Present bool               // the key appeared, even as null
+	Values  map[string]*string // nil for null; a nil value removes that key
+}
+
+func (l *labelsField) UnmarshalJSON(raw []byte) error {
+	l.Present = true
+	return json.Unmarshal(raw, &l.Values)
 }
 
 func toAPIBucket(b Bucket, base string) apiBucket {
@@ -71,6 +90,7 @@ func toAPIBucket(b Bucket, base string) apiBucket {
 		Location:       b.Location,
 		StorageClass:   b.StorageClass,
 		Versioning:     &apiVersioning{Enabled: b.Versioning},
+		Labels:         b.Labels,
 		Metageneration: strconv.FormatInt(b.Metageneration, 10),
 		TimeCreated:    rfc3339(b.Created),
 		Updated:        rfc3339(b.Updated),
@@ -111,6 +131,49 @@ type composeRequest struct {
 }
 
 type composeSource struct {
-	Name       string `json:"name"`
-	Generation int64  `json:"generation,omitempty"`
+	Name                string               `json:"name"`
+	Generation          wireInt64            `json:"generation,omitempty"`
+	ObjectPreconditions *composePrecondition `json:"objectPreconditions,omitempty"`
+}
+
+// composePrecondition is the one condition GCS lets a compose part carry.
+type composePrecondition struct {
+	IfGenerationMatch *wireInt64 `json:"ifGenerationMatch,omitempty"`
+}
+
+// wireInt64 is an int64 the JSON API may spell as a string, as Google's client
+// does for generation, or as a number, as a hand-written request may.
+type wireInt64 int64
+
+func (n *wireInt64) UnmarshalJSON(b []byte) error {
+	v, err := strconv.ParseInt(strings.Trim(string(b), `"`), 10, 64)
+	if err != nil {
+		return err
+	}
+	*n = wireInt64(v)
+	return nil
+}
+
+type apiManagedFolder struct {
+	Kind           string `json:"kind"`
+	ID             string `json:"id"`
+	Name           string `json:"name"`
+	Bucket         string `json:"bucket"`
+	Metageneration string `json:"metageneration"`
+	CreateTime     string `json:"createTime"`
+	UpdateTime     string `json:"updateTime"`
+	SelfLink       string `json:"selfLink,omitempty"`
+}
+
+func toAPIManagedFolder(f ManagedFolder, base string) apiManagedFolder {
+	return apiManagedFolder{
+		Kind:           "storage#managedFolder",
+		ID:             f.Bucket + "/" + f.Name,
+		Name:           f.Name,
+		Bucket:         f.Bucket,
+		Metageneration: strconv.FormatInt(f.Metageneration, 10),
+		CreateTime:     rfc3339(f.Created),
+		UpdateTime:     rfc3339(f.Updated),
+		SelfLink:       base + "/storage/v1/b/" + f.Bucket + "/managedFolders/" + url.PathEscape(f.Name),
+	}
 }

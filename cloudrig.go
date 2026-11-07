@@ -26,10 +26,13 @@ import (
 	"cloud.google.com/go/cloudtasks/apiv2/cloudtaskspb"
 	"cloud.google.com/go/container/apiv1/containerpb"
 	"cloud.google.com/go/firestore/apiv1/firestorepb"
+	"cloud.google.com/go/kms/apiv1/kmspb"
 	"cloud.google.com/go/logging/apiv2/loggingpb"
+	"cloud.google.com/go/monitoring/apiv3/v2/monitoringpb"
 	"cloud.google.com/go/pubsub/v2/apiv1/pubsubpb"
 	"cloud.google.com/go/scheduler/apiv1/schedulerpb"
 	"cloud.google.com/go/secretmanager/apiv1/secretmanagerpb"
+	"cloud.google.com/go/storage/control/apiv2/controlpb"
 	"google.golang.org/grpc"
 
 	"github.com/monirz/cloudrig/core/clock"
@@ -45,6 +48,8 @@ import (
 	"github.com/monirz/cloudrig/services/cloudtasks"
 	"github.com/monirz/cloudrig/services/firestore"
 	"github.com/monirz/cloudrig/services/gke"
+	"github.com/monirz/cloudrig/services/kms"
+	"github.com/monirz/cloudrig/services/monitoring"
 	"github.com/monirz/cloudrig/services/pubsub"
 	"github.com/monirz/cloudrig/services/secretmanager"
 	"github.com/monirz/cloudrig/services/serviceusage"
@@ -114,6 +119,8 @@ type Emulator struct {
 	svcusage *serviceusage.Service
 	logging  *cloudlogging.Service
 	pubsub   *pubsub.Service
+	// resets clear the state services keep outside the storage tree.
+	resets []projectResetter
 }
 
 // Start runs the emulator on a real listener; the caller owns shutdown. ctx
@@ -167,17 +174,20 @@ func Start(ctx context.Context, o Options) (*Emulator, error) {
 	psvc := pubsub.New(stack.kvStore, clk, bus)
 	fsvc := firestore.New(stack.kvStore, clk)
 	smsvc := secretmanager.New(stack.kvStore, clk)
+	kmsvc := kms.New(stack.kvStore, clk)
+	mnsvc := monitoring.New(stack.kvStore, clk)
 	ctsvc := cloudtasks.New(stack.kvStore, clk)
 	cssvc := cloudscheduler.New(stack.kvStore, clk, publishTo(psvc))
 	susvc := serviceusage.New(stack.kvStore)
 	gksvc := gke.New(stack.kvStore, clk)
+	resets := []projectResetter{susvc, lgsvc, kmsvc, mnsvc}
 	runReg := cloudrun.NewRegistry()
 	// Drain the async work a clock jump sets off, so a virtual-clock advance
 	// returns only once scheduled deliveries and the functions they trigger
 	// have run.
 	drain := func() { drainAsync(cssvc, bus, ctsvc) }
 	snap := stateSnapshot{kv: stack.kvStore, blobs: stack.blobs, faults: flt, clk: clk, pubsub: psvc}
-	handler, closeAPIs := newHandler(clk, o, reg, runReg, stack.svc, psvc, smsvc, ctsvc, cssvc, susvc, gksvc, lgsvc, newGRPC(clk, flt, psvc, fsvc, smsvc, ctsvc, cssvc, gksvc, lgsvc), flt, snap, drain)
+	handler, closeAPIs := newHandler(clk, o, reg, runReg, stack.svc, psvc, smsvc, ctsvc, cssvc, susvc, gksvc, lgsvc, newGRPC(clk, flt, stack.svc, psvc, fsvc, smsvc, kmsvc, mnsvc, ctsvc, cssvc, gksvc, lgsvc), flt, snap, drain, resets)
 	srv := &http.Server{
 		Handler:   handler,
 		Protocols: transport.Protocols(), // HTTP/1.1 and h2c on one port
@@ -195,6 +205,7 @@ func Start(ctx context.Context, o Options) (*Emulator, error) {
 		svcusage: susvc,
 		logging:  lgsvc,
 		pubsub:   psvc,
+		resets:   resets,
 		addr:     dialable(ln.Addr().String()),
 		fns:      reg,
 		storage:  stack.svc,
@@ -243,8 +254,15 @@ func newStorage(clk clock.Clock, bus *events.Bus, dataDir string) (storageStack,
 	if err != nil {
 		return storageStack{}, fmt.Errorf("cloudrig: %w", err)
 	}
-	kv, err := store.OpenPersistent(filepath.Join(dataDir, "storage", "metadata.json"), clk)
+	kv, err := store.OpenBolt(filepath.Join(dataDir, "storage", "metadata.db"))
 	if err != nil {
+		_ = blobs.Close()
+		return storageStack{}, fmt.Errorf("cloudrig: %w", err)
+	}
+	// A --data-dir from before the disk store holds its metadata in one JSON
+	// file. It is imported the first time, then set aside.
+	if err := kv.ImportSnapshot(filepath.Join(dataDir, "storage", "metadata.json")); err != nil {
+		_ = kv.Close()
 		_ = blobs.Close()
 		return storageStack{}, fmt.Errorf("cloudrig: %w", err)
 	}
@@ -416,15 +434,18 @@ func serveForTest(t testing.TB, o Options, stack storageStack) *Emulator {
 	psvc := pubsub.New(stack.kvStore, o.Clock, bus)
 	fsvc := firestore.New(stack.kvStore, o.Clock)
 	smsvc := secretmanager.New(stack.kvStore, o.Clock)
+	kmsvc := kms.New(stack.kvStore, o.Clock)
+	mnsvc := monitoring.New(stack.kvStore, o.Clock)
 	ctsvc := cloudtasks.New(stack.kvStore, o.Clock)
 	cssvc := cloudscheduler.New(stack.kvStore, o.Clock, publishTo(psvc))
 	susvc := serviceusage.New(stack.kvStore)
 	gksvc := gke.New(stack.kvStore, o.Clock)
+	resets := []projectResetter{susvc, lgsvc, kmsvc, mnsvc}
 	runReg := cloudrun.NewRegistry()
 	t.Cleanup(runReg.StopAll)
 	drain := func() { drainAsync(cssvc, bus, ctsvc) }
 	snap := stateSnapshot{kv: stack.kvStore, blobs: stack.blobs, faults: flt, clk: o.Clock, pubsub: psvc}
-	handler, closeAPIs := newHandler(o.Clock, o, reg, runReg, stack.svc, psvc, smsvc, ctsvc, cssvc, susvc, gksvc, lgsvc, newGRPC(o.Clock, flt, psvc, fsvc, smsvc, ctsvc, cssvc, gksvc, lgsvc), flt, snap, drain)
+	handler, closeAPIs := newHandler(o.Clock, o, reg, runReg, stack.svc, psvc, smsvc, ctsvc, cssvc, susvc, gksvc, lgsvc, newGRPC(o.Clock, flt, stack.svc, psvc, fsvc, smsvc, kmsvc, mnsvc, ctsvc, cssvc, gksvc, lgsvc), flt, snap, drain, resets)
 	t.Cleanup(closeAPIs)
 
 	srv := httptest.NewUnstartedServer(handler)
@@ -445,6 +466,7 @@ func serveForTest(t testing.TB, o Options, stack storageStack) *Emulator {
 		svcusage: susvc,
 		logging:  lgsvc,
 		pubsub:   psvc,
+		resets:   resets,
 		addr:     srv.Listener.Addr().String(),
 		fns:      reg,
 		storage:  stack.svc,
@@ -526,7 +548,7 @@ func publishTo(ps *pubsub.Service) cloudscheduler.PublishFunc {
 //
 // Requests reach it through the transport's h2c dispatch, so gRPC and REST
 // share the one port.
-func newGRPC(clk clock.Clock, flt *faults.Set, ps *pubsub.Service, fs *firestore.Service, sm *secretmanager.Service, ct *cloudtasks.Service, cs *cloudscheduler.Service, gk *gke.Service, lg *cloudlogging.Service) *grpc.Server {
+func newGRPC(clk clock.Clock, flt *faults.Set, gcs *storage.Service, ps *pubsub.Service, fs *firestore.Service, sm *secretmanager.Service, km *kms.Service, mn *monitoring.Service, ct *cloudtasks.Service, cs *cloudscheduler.Service, gk *gke.Service, lg *cloudlogging.Service) *grpc.Server {
 	// The fault interceptor applies the same rules to unary gRPC calls that the
 	// REST path applies to HTTP, so cloudrig fault reaches gRPC-first services.
 	srv := grpc.NewServer(grpc.UnaryInterceptor(flt.UnaryServerInterceptor(clk)))
@@ -534,10 +556,13 @@ func newGRPC(clk clock.Clock, flt *faults.Set, ps *pubsub.Service, fs *firestore
 	pubsubpb.RegisterSubscriberServer(srv, pubsub.NewSubscriber(ps))
 	firestorepb.RegisterFirestoreServer(srv, fs)
 	secretmanagerpb.RegisterSecretManagerServiceServer(srv, sm)
+	kmspb.RegisterKeyManagementServiceServer(srv, km)
+	monitoringpb.RegisterMetricServiceServer(srv, mn)
 	cloudtaskspb.RegisterCloudTasksServer(srv, ct)
 	schedulerpb.RegisterCloudSchedulerServer(srv, cs)
 	containerpb.RegisterClusterManagerServer(srv, gk)
 	loggingpb.RegisterLoggingServiceV2Server(srv, lg)
+	controlpb.RegisterStorageControlServer(srv, storage.NewControl(gcs))
 	return srv
 }
 
@@ -565,7 +590,7 @@ func routeV1(fallback http.Handler, services ...matcher) http.Handler {
 
 // newHandler builds the request surface and returns what it must tear down:
 // the API objects own temporary directories, and nothing else can reach them.
-func newHandler(clk clock.Clock, o Options, reg *functions.Registry, runReg *cloudrun.Registry, gcs *storage.Service, psvc *pubsub.Service, smsvc *secretmanager.Service, ctsvc *cloudtasks.Service, cssvc *cloudscheduler.Service, susvc *serviceusage.Service, gksvc *gke.Service, lgsvc *cloudlogging.Service, grpcSrv http.Handler, flt *faults.Set, snap transport.Snapshotter, drain func()) (http.Handler, func()) {
+func newHandler(clk clock.Clock, o Options, reg *functions.Registry, runReg *cloudrun.Registry, gcs *storage.Service, psvc *pubsub.Service, smsvc *secretmanager.Service, ctsvc *cloudtasks.Service, cssvc *cloudscheduler.Service, susvc *serviceusage.Service, gksvc *gke.Service, lgsvc *cloudlogging.Service, grpcSrv http.Handler, flt *faults.Set, snap transport.Snapshotter, drain func(), resets []projectResetter) (http.Handler, func()) {
 	configured := o.Runner
 	if configured == "" {
 		configured = "auto"
@@ -625,7 +650,7 @@ func newHandler(clk clock.Clock, o Options, reg *functions.Registry, runReg *clo
 		Faults:    flt,
 		Snapshot:  snap,
 		Reset: func(ctx context.Context, project string) error {
-			return resetAll(ctx, project, runReg, susvc, lgsvc, gcs)
+			return resetAll(ctx, project, runReg, resets, gcs)
 		},
 		Drain: drain,
 	})
@@ -639,7 +664,7 @@ func newHandler(clk clock.Clock, o Options, reg *functions.Registry, runReg *clo
 
 // Reset clears emulator state. An empty project clears everything.
 func (e *Emulator) Reset(ctx context.Context, project string) error {
-	return resetAll(ctx, project, e.run, e.svcusage, e.logging, e.storage)
+	return resetAll(ctx, project, e.run, e.resets, e.storage)
 }
 
 // drainAsync waits for the asynchronous work a virtual-clock jump sets off —
@@ -662,21 +687,22 @@ func drainAsync(cs *cloudscheduler.Service, bus *events.Bus, ct *cloudtasks.Serv
 	}
 }
 
+// projectResetter is a service keeping state under its own key prefix, which
+// a project reset clears by asking it.
+type projectResetter interface {
+	Reset(ctx context.Context, project string) error
+}
+
 // resetAll is the one reset path: the /_emu/reset endpoint and Emulator.Reset
-// both call it, so they cannot drift. Cloud Run services are stopped, Service
-// Usage state is cleared from its own key prefix, and the storage tree is
-// reset last.
-func resetAll(ctx context.Context, project string, run *cloudrun.Registry, su *serviceusage.Service, lg *cloudlogging.Service, gcs *storage.Service) error {
+// both call it, so they cannot drift. Cloud Run services are stopped, each
+// service with its own key prefix (Service Usage, Logging, KMS, Monitoring)
+// clears it, and the storage tree is reset last.
+func resetAll(ctx context.Context, project string, run *cloudrun.Registry, resets []projectResetter, gcs *storage.Service) error {
 	if run != nil {
 		run.StopAll()
 	}
-	if su != nil {
-		if err := su.Reset(ctx, project); err != nil {
-			return err
-		}
-	}
-	if lg != nil {
-		if err := lg.Reset(ctx, project); err != nil {
+	for _, r := range resets {
+		if err := r.Reset(ctx, project); err != nil {
 			return err
 		}
 	}

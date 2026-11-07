@@ -115,7 +115,8 @@ func TestAPIWalk(t *testing.T) {
 		// Copy, rewrite and compose.
 		{method: "POST", path: o + "/a.txt/copyTo/b/bkt/o/c.txt", body: `{}`, want: 200},
 		{method: "POST", path: o + "/a.txt/rewriteTo/b/bkt/o/r.txt", body: `{}`, want: 200},
-		{method: "POST", path: o + "/a.txt/copyTo/b/bkt/o/c.txt?ifSourceGenerationMatch=1", body: `{}`, want: 501},
+		{method: "POST", path: o + "/a.txt/copyTo/b/bkt/o/c.txt?ifSourceGenerationMatch=1", body: `{}`, want: 412},
+		{method: "POST", path: o + "/a.txt/copyTo/b/bkt/o/c.txt?ifSourceMetagenerationMatch=x", body: `{}`, want: 400},
 		{method: "POST", path: o + "/a.txt/copyTo/b/bkt/o/c.txt?ifGenerationMatch=x", body: `{}`, want: 400},
 		{method: "POST", path: o + "/a.txt/copyTo/b/bkt/o/c.txt?sourceGeneration=x", body: `{}`, want: 400},
 		{method: "POST", path: o + "/a.txt/copyTo/b/bkt/o/c.txt", body: `{`, want: 400},
@@ -130,8 +131,20 @@ func TestAPIWalk(t *testing.T) {
 			method: "POST", path: o + "/d.txt/compose",
 			body: `{"sourceObjects":[{"name":"a.txt","generation":999999}]}`, want: 404,
 		},
+		{
+			method: "POST", path: o + "/d.txt/compose",
+			body: `{"sourceObjects":[{"name":"a.txt","generation":"999999"}]}`, want: 404,
+		},
+		{
+			method: "POST", path: o + "/d.txt/compose",
+			body: `{"sourceObjects":[{"name":"a.txt","generation":"x"}]}`, want: 400,
+		},
+		{
+			method: "POST", path: o + "/d.txt/compose",
+			body: `{"sourceObjects":[{"name":"a.txt","objectPreconditions":{"ifGenerationMatch":"1"}}]}`, want: 412,
+		},
 		{method: "POST", path: o + "/d.txt/compose", body: `{`, want: 400},
-		{method: "POST", path: o + "/d.txt/compose?ifSourceGenerationMatch=1", body: `{}`, want: 501},
+		{method: "POST", path: o + "/d.txt/compose?ifSourceGenerationMatch=1", body: `{}`, want: 400},
 		{method: "POST", path: b + "/missing/o/d.txt/compose", body: `{}`, want: 404},
 
 		// IAM.

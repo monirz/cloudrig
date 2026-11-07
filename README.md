@@ -65,6 +65,8 @@ it at the emulator:
 ```sh
 . ./cloudrig-env.sh
 # gcloud -> http://localhost:4599 (project cloudrig-local)
+# ...
+# back to real GCP: . ./cloudrig-env-off.sh
 
 gcloud functions list
 # NAME   STATE   TRIGGER       REGION       ENVIRONMENT
@@ -247,11 +249,16 @@ Start CloudRig and point `gcloud` at your local GCP:
 ```sh
 cloudrig start &
 curl -sSO https://raw.githubusercontent.com/monirz/cloudrig/main/cloudrig-env.sh
+curl -sSO https://raw.githubusercontent.com/monirz/cloudrig/main/cloudrig-env-off.sh
 . ./cloudrig-env.sh          # points gcloud at CloudRig, with no credentials
 ```
 
-If you installed from source, `cloudrig-env.sh` is already in the checkout, so
-skip the `curl` line.
+If you installed from source, both scripts are already in the checkout, so
+skip the `curl` lines.
+
+To go back to real GCP: `. ./cloudrig-env-off.sh`. Until then every gcloud call
+in that terminal reaches CloudRig, so a lookup meant for a real project comes
+back empty instead of failing.
 
 Now use it exactly like the real thing:
 
@@ -378,7 +385,7 @@ through it:
 # Start CloudRig with a virtual clock. It points functions at its own services
 # automatically; SINK_URL is this app's own setting.
 SINK_URL=http://localhost:8080/ cloudrig start --clock virtual &
-. ./cloudrig-env.sh
+. ./cloudrig-env.sh                  # to go back to real GCP: . ./cloudrig-env-off.sh
 
 # Provision a bucket, a Pub/Sub topic, and a task queue.
 gcloud storage buckets create gs://intake
@@ -459,12 +466,15 @@ CloudRig emulates the following services:
 | Service | Status | Notes |
 |---|:--:|---|
 | Cloud Functions | ✅ | Real local execution (Go & Node), HTTP & event triggers |
-| Cloud Storage | ✅ | Buckets, objects, uploads, versioning, signed URLs |
+| Cloud Storage | ✅ | Buckets, objects, uploads, versioning, signed URLs, managed folders |
 | Pub/Sub | ✅ | Publish, streaming pull, ack/nack, redelivery |
 | Firestore | ✅ | Documents, queries, transactions, over gRPC |
 | Cloud Tasks | ✅ | Deferred HTTP work, dispatched on the clock |
 | Cloud Scheduler | ✅ | Cron jobs firing HTTP or Pub/Sub, on the clock |
 | Secret Manager | ✅ | Secrets, versions, the `latest` alias |
+| Cloud KMS | ✅ | Symmetric keys, rotation, encrypt and decrypt, over gRPC |
+| Cloud Monitoring | ✅ | Time-series writes, read back by filter, over gRPC |
+| Spanner | ➡️ | `--with-spanner` runs Google's emulator in Docker beside cloudrig |
 | Cloud Logging | ✅ | Write and read structured entries with a filter |
 | Service Usage | ✅ | `gcloud services enable/disable/list` |
 | Cloud Run | ✅ | Runs a real container (needs Docker) |

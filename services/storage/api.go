@@ -16,7 +16,7 @@ import (
 )
 
 // Prefixes are the path prefixes the JSON API claims.
-var Prefixes = []string{"/storage/v1/", "/upload/storage/v1/", "/download/storage/v1/"}
+var Prefixes = []string{"/storage/v1/", "/upload/storage/v1/", "/resumable/upload/storage/v1/", "/download/storage/v1/"}
 
 // API is the Cloud Storage JSON API over a Service.
 type API struct {
@@ -43,6 +43,7 @@ func NewAPI(svc *Service) *API {
 	a.router.Handle(http.MethodDelete, "/storage/v1/b/{bucket}", a.deleteBucket)
 	a.router.Handle(http.MethodGet, "/storage/v1/b/{bucket}/storageLayout", a.storageLayout)
 	a.router.Handle(http.MethodGet, "/storage/v1/b/{bucket}/managedFolders", a.listManagedFolders)
+	a.router.Handle(http.MethodDelete, "/storage/v1/b/{bucket}/managedFolders/{folder}", a.deleteManagedFolder)
 
 	a.router.Handle(http.MethodGet, "/storage/v1/b/{bucket}/iam", a.getBucketIAM)
 	a.router.Handle(http.MethodPut, "/storage/v1/b/{bucket}/iam", a.setBucketIAM)
@@ -66,6 +67,10 @@ func NewAPI(svc *Service) *API {
 	// A chunk may arrive as PUT from clients that prefer it; the Go client
 	// POSTs to the session URI.
 	a.router.Handle(http.MethodPut, "/upload/storage/v1/b/{bucket}/o", a.upload)
+	// gcloud storage cp from stdin opens its session on this alias, which GCS
+	// serves as the same resumable endpoint.
+	a.router.Handle(http.MethodPost, "/resumable/upload/storage/v1/b/{bucket}/o", a.upload)
+	a.router.Handle(http.MethodPut, "/resumable/upload/storage/v1/b/{bucket}/o", a.upload)
 
 	// The download path the Go client's reader uses. It is the one piece of the
 	// XML API surface that cannot be skipped: NewReader goes here, not to the
@@ -107,6 +112,7 @@ func (a *API) createBucket(w http.ResponseWriter, r *http.Request, p transport.P
 		Location:     body.Location,
 		StorageClass: body.StorageClass,
 		Versioning:   body.Versioning != nil && body.Versioning.Enabled,
+		Labels:       applyLabels(nil, body.Labels.Values),
 	})
 	if err != nil {
 		return err
@@ -143,6 +149,8 @@ func (a *API) getBucket(w http.ResponseWriter, r *http.Request, p transport.Para
 	return writeJSON(w, http.StatusOK, toAPIBucket(b, baseURL(r)))
 }
 
+// patchBucket serves PATCH (buckets.patch) and PUT (buckets.update). They
+// differ only in labels: see ReplaceLabels.
 func (a *API) patchBucket(w http.ResponseWriter, r *http.Request, p transport.Params) error {
 	project, err := a.svc.ProjectOf(r.Context(), p["bucket"])
 	if err != nil {
@@ -158,8 +166,13 @@ func (a *API) patchBucket(w http.ResponseWriter, r *http.Request, p transport.Pa
 	}
 
 	b, err := a.svc.UpdateBucket(r.Context(), project, p["bucket"], BucketPatch{
-		StorageClass:  body.StorageClass,
-		Versioning:    versioningOf(body),
+		StorageClass: body.StorageClass,
+		Versioning:   versioningOf(body),
+		Labels:       body.Labels.Values,
+		// A PUT is buckets.update, which replaces the bucket whole: labels it
+		// does not name are gone. A PATCH merges, except "labels": null, which
+		// removes them all.
+		ReplaceLabels: r.Method == http.MethodPut || (body.Labels.Present && body.Labels.Values == nil),
 		Preconditions: pre,
 	})
 	if err != nil {
@@ -207,13 +220,61 @@ func (a *API) storageLayout(w http.ResponseWriter, r *http.Request, p transport.
 	})
 }
 
-// listManagedFolders answers empty: managed folders are not modelled, and
+// listManagedFolders lists the folders created through Storage Control.
 // gcloud storage rm -r lists them before deleting a bucket.
 func (a *API) listManagedFolders(w http.ResponseWriter, r *http.Request, p transport.Params) error {
-	if _, err := a.svc.ProjectOf(r.Context(), p["bucket"]); err != nil {
+	project, err := a.svc.ProjectOf(r.Context(), p["bucket"])
+	if err != nil {
 		return err
 	}
-	return writeJSON(w, http.StatusOK, map[string]any{"kind": "storage#managedFolders"})
+	q := r.URL.Query()
+	maxResults, err := optionalInt(q, "maxResults")
+	if err != nil {
+		return err
+	}
+	if maxResults < 0 || maxResults > math.MaxInt32 {
+		return invalidParam("maxResults", q.Get("maxResults"))
+	}
+	folders, next, err := a.svc.ListManagedFolders(r.Context(), project, p["bucket"], q.Get("prefix"), int(maxResults), q.Get("pageToken"))
+	if err != nil {
+		return err
+	}
+	resp := map[string]any{"kind": "storage#managedFolders"}
+	if len(folders) > 0 {
+		items := make([]apiManagedFolder, len(folders))
+		for i, f := range folders {
+			items[i] = toAPIManagedFolder(f, baseURL(r))
+		}
+		resp["items"] = items
+	}
+	if next != "" {
+		resp["nextPageToken"] = next
+	}
+	return writeJSON(w, http.StatusOK, resp)
+}
+
+// deleteManagedFolder is what gcloud storage rm -r calls for each folder it
+// listed, before it deletes the bucket.
+func (a *API) deleteManagedFolder(w http.ResponseWriter, r *http.Request, p transport.Params) error {
+	project, err := a.svc.ProjectOf(r.Context(), p["bucket"])
+	if err != nil {
+		return err
+	}
+	q := r.URL.Query()
+	pre, err := preconditionsOf(q)
+	if err != nil {
+		return err
+	}
+	opts := DeleteFolderOptions{
+		AllowNonEmpty:            q.Get("allowNonEmpty") == "true",
+		IfMetagenerationMatch:    pre.IfMetagenerationMatch,
+		IfMetagenerationNotMatch: pre.IfMetagenerationNotMatch,
+	}
+	if err := a.svc.DeleteManagedFolder(r.Context(), project, p["bucket"], p["folder"], opts); err != nil {
+		return err
+	}
+	w.WriteHeader(http.StatusNoContent)
+	return nil
 }
 
 func (a *API) listObjects(w http.ResponseWriter, r *http.Request, p transport.Params) error {
@@ -405,7 +466,11 @@ func (a *API) copy(r *http.Request, p transport.Params) (Object, error) {
 	}
 
 	q := r.URL.Query()
-	pre, err := destinationPreconditions(q)
+	pre, err := preconditionsOf(q)
+	if err != nil {
+		return Object{}, err
+	}
+	srcPre, err := sourcePreconditions(q)
 	if err != nil {
 		return Object{}, err
 	}
@@ -415,7 +480,7 @@ func (a *API) copy(r *http.Request, p transport.Params) (Object, error) {
 	}
 
 	return a.svc.CopyObject(r.Context(), project,
-		Source{Bucket: p["bucket"], Name: p["object"], Generation: generation},
+		Source{Bucket: p["bucket"], Name: p["object"], Generation: generation, Preconditions: srcPre},
 		Write{
 			Bucket:        p["dstBucket"],
 			Name:          p["dstObject"],
@@ -436,7 +501,20 @@ func (a *API) composeObject(w http.ResponseWriter, r *http.Request, p transport.
 	if err := decodeJSON(r, &body); err != nil {
 		return err
 	}
-	pre, err := destinationPreconditions(r.URL.Query())
+	q := r.URL.Query()
+	// Compose has no ifSource* parameters: each part carries its own
+	// condition in the body. Refused rather than ignored, so a caller who
+	// meant one learns where it goes.
+	for _, name := range sourceParams {
+		if q.Get(name) != "" {
+			return gerr.Newf(gerr.InvalidArgument,
+				"compose does not take %s; set sourceObjects[].objectPreconditions.ifGenerationMatch instead", name).
+				WithHTTPStatus(http.StatusBadRequest).
+				WithReason("invalid").
+				WithLocation(name, "parameter")
+		}
+	}
+	pre, err := preconditionsOf(q)
 	if err != nil {
 		return err
 	}
@@ -445,8 +523,12 @@ func (a *API) composeObject(w http.ResponseWriter, r *http.Request, p transport.
 	for i, src := range body.SourceObjects {
 		sources[i] = Source{Bucket: p["bucket"], Name: src.Name}
 		if src.Generation != 0 {
-			generation := src.Generation
+			generation := int64(src.Generation)
 			sources[i].Generation = &generation
+		}
+		if c := src.ObjectPreconditions; c != nil && c.IfGenerationMatch != nil {
+			match := int64(*c.IfGenerationMatch)
+			sources[i].Preconditions.IfGenerationMatch = &match
 		}
 	}
 
@@ -463,19 +545,27 @@ func (a *API) composeObject(w http.ResponseWriter, r *http.Request, p transport.
 	return writeJSON(w, http.StatusOK, toAPIObject(obj, baseURL(r)))
 }
 
-// destinationPreconditions reads the conditions that apply to the object being
-// written. Copy and compose also accept ifSource* conditions, which are not
-// implemented and would be wrong to silently ignore.
-func destinationPreconditions(q url.Values) (Preconditions, error) {
-	for _, unsupported := range []string{
-		"ifSourceGenerationMatch", "ifSourceGenerationNotMatch",
-		"ifSourceMetagenerationMatch", "ifSourceMetagenerationNotMatch",
+// sourceParams are the conditions a copy puts on its source object.
+var sourceParams = []string{
+	"ifSourceGenerationMatch", "ifSourceGenerationNotMatch",
+	"ifSourceMetagenerationMatch", "ifSourceMetagenerationNotMatch",
+}
+
+// sourcePreconditions reads a copy's ifSource* parameters into the same
+// conditions a write takes, to be checked against the source object.
+func sourcePreconditions(q url.Values) (Preconditions, error) {
+	var p Preconditions
+	for i, dst := range []**int64{
+		&p.IfGenerationMatch, &p.IfGenerationNotMatch,
+		&p.IfMetagenerationMatch, &p.IfMetagenerationNotMatch,
 	} {
-		if q.Get(unsupported) != "" {
-			return Preconditions{}, gerr.NewUnimplemented("storage.objects.copy with " + unsupported)
+		n, err := optionalNamed(q, sourceParams[i])
+		if err != nil {
+			return Preconditions{}, err
 		}
+		*dst = n
 	}
-	return preconditionsOf(q)
+	return p, nil
 }
 
 func optionalNamed(q url.Values, name string) (*int64, error) {

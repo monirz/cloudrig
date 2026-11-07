@@ -8,7 +8,8 @@ reload, logs.
 
 **Cloud Storage** — buckets, objects, all three upload types, copy, rewrite,
 compose, listing with prefix and delimiter, every precondition the client sends,
-versioning, signed URLs, persistence. Verified against the real Go client and
+versioning, signed URLs, persistence, and managed folders with their IAM
+policies through Storage Control. Verified against the real Go client and
 `gcloud storage`.
 
 **Pub/Sub** — topics, subscriptions, publish, streaming pull, ack and nack,
@@ -35,6 +36,15 @@ filter, so a test can assert on what a service logged.
 **Secret Manager** — secrets, versions, the `latest` alias, and disable,
 enable and destroy. gRPC for the client libraries, REST for `gcloud secrets`,
 one service behind both.
+
+**Cloud KMS** — key rings, symmetric keys, versions and rotation, encrypt and
+decrypt with additional data and checksums, over gRPC.
+
+**Cloud Monitoring** — time-series writes stored and read back by filter and
+interval, so a test can check the metrics code reported, over gRPC.
+
+**Spanner** — not emulated: `cloudrig start --with-spanner` runs Google's own
+emulator in Docker beside cloudrig and removes it on shutdown.
 
 **Cloud Run** — deploy an image and it runs as a container through Docker,
 driven by real `gcloud run`. A source directory runs as a process instead.
@@ -361,6 +371,46 @@ c, _ := storage.NewClient(ctx,
 
 Payload bytes never enter the heap: 2 GiB moves for about 1 MiB of allocation.
 
+### Managed folders, through Storage Control
+
+Managed folders are served over gRPC on the same port, as
+`google.storage.control.v2.StorageControl`, which is what Google's
+`StorageControlClient` speaks by default: create (a repeat is
+`ALREADY_EXISTS`), get, delete, and `GetIamPolicy`/`SetIamPolicy` on a folder.
+A folder made this way shows in the JSON API's `managedFolders` list. As in
+GCS, a bucket holding managed folders is not empty: `gcloud storage rm -r`
+deletes them first, and a plain bucket delete is refused with a 409.
+
+`StorageControlClient` does not read `STORAGE_EMULATOR_HOST` and would dial
+`storage.googleapis.com` over TLS, so hand it a plaintext channel to cloudrig
+instead. Use a recent google-cloud-storage-control: 1.17 has the IAM methods,
+1.6 does not.
+
+```python
+import grpc
+from google.cloud import storage_control_v2
+from google.cloud.storage_control_v2.services.storage_control.transports import StorageControlGrpcTransport
+
+channel = grpc.insecure_channel("localhost:4599")
+client = storage_control_v2.StorageControlClient(
+    transport=StorageControlGrpcTransport(channel=channel))
+
+folder = client.create_managed_folder(
+    parent="projects/_/buckets/my-bucket", managed_folder_id="tenants/acme/")
+policy = client.get_iam_policy(request={
+    "resource": folder.name, "options": {"requested_policy_version": 3}})
+policy.version = 3
+policy.bindings.add(role="roles/storage.objectViewer", members=["user:a@example.com"])
+client.set_iam_policy(request={"resource": folder.name, "policy": policy})
+```
+
+From Go: `control.NewStorageControlClient(ctx, option.WithEndpoint(emu.Endpoint()),
+option.WithoutAuthentication(), option.WithGRPCDialOption(grpc.WithTransportCredentials(insecure.NewCredentials())))`.
+
+Policies are stored, never enforced, like every IAM policy here. Conditions
+need version 3 and come back as they were set. The etag moves on every write,
+and a set carrying a stale one is `ABORTED`.
+
 ---
 
 ## Pub/Sub
@@ -521,6 +571,108 @@ granted, because there is no identity here to check.
 
 Not supported: user-managed replication, CMEK, rotation schedules, expiry, and
 version aliases other than `latest`.
+
+---
+
+## Cloud KMS
+
+gRPC, on the same port. Symmetric `ENCRYPT_DECRYPT` keys only:
+
+```go
+c, _ := kms.NewKeyManagementClient(ctx, /* endpoint options */)
+
+ring, _ := c.CreateKeyRing(ctx, &kmspb.CreateKeyRingRequest{
+    Parent: "projects/cloudrig-local/locations/global", KeyRingId: "ring",
+})
+key, _ := c.CreateCryptoKey(ctx, &kmspb.CreateCryptoKeyRequest{
+    Parent: ring.Name, CryptoKeyId: "files",
+    CryptoKey: &kmspb.CryptoKey{Purpose: kmspb.CryptoKey_ENCRYPT_DECRYPT},
+})
+
+enc, _ := c.Encrypt(ctx, &kmspb.EncryptRequest{Name: key.Name, Plaintext: []byte("data key")})
+dec, _ := c.Decrypt(ctx, &kmspb.DecryptRequest{Name: key.Name, Ciphertext: enc.Ciphertext})
+```
+
+From Python, give the client an insecure channel to the emulator:
+
+```python
+import grpc
+from google.cloud import kms
+from google.cloud.kms_v1.services.key_management_service.transports import KeyManagementServiceGrpcTransport
+
+channel = grpc.insecure_channel("localhost:4599")
+client = kms.KeyManagementServiceClient(transport=KeyManagementServiceGrpcTransport(channel=channel))
+```
+
+The encryption is real: AES-256-GCM with a random key per version, so tampered
+ciphertext and the wrong additional data are refused, and the checksums the
+client sends are verified. A new version is not primary until
+`UpdateCryptoKeyPrimaryVersion` moves it there, and ciphertext from an older
+version still decrypts. The key material sits in the emulator's store in the
+clear: a stand-in for local runs, not a place for a real secret.
+
+Not supported: asymmetric, MAC and raw keys, import jobs, key destruction and
+version state changes, Autokey, IAM, and the REST API, so `gcloud kms` does not
+reach it.
+
+---
+
+## Cloud Monitoring
+
+gRPC, on the same port. `CreateTimeSeries` stores each point and
+`ListTimeSeries` reads them back, so code that reports metrics can be checked
+rather than stubbed:
+
+```python
+import grpc
+from google.cloud import monitoring_v3
+from google.cloud.monitoring_v3.services.metric_service.transports import MetricServiceGrpcTransport
+
+channel = grpc.insecure_channel("localhost:4599")
+client = monitoring_v3.MetricServiceClient(transport=MetricServiceGrpcTransport(channel=channel))
+
+client.create_time_series(name="projects/cloudrig-local", time_series=[series])
+client.list_time_series(request={
+    "name": "projects/cloudrig-local",
+    "filter": 'metric.type = "custom.googleapis.com/files_done" AND metric.labels.step = "resize"',
+    "interval": interval,
+})
+```
+
+The write rules are the real API's: one point per series per call, points in
+time order, a start before the end for CUMULATIVE and DELTA. A list returns
+each series with its points newest first, in the window (start, end].
+
+The filter reads `field = "value"` clauses joined by `AND`, on `metric.type`
+(required), `resource.type`, `metric.labels.*` and `resource.labels.*`. Any
+other filter, aggregation and `orderBy` answer Unimplemented, as do metric
+descriptors, alerting and dashboards.
+
+---
+
+## Spanner
+
+Spanner's SQL, schema changes and transactions are beyond what cloudrig should
+guess at, and Google ships an emulator for them. cloudrig runs it for you, so
+one command brings up everything and one Ctrl-C takes it down:
+
+```sh
+cloudrig start --with-spanner
+# spanner: SPANNER_EMULATOR_HOST=localhost:9010 (gcloud: http://localhost:9020/)
+
+. ./cloudrig-env.sh        # sets SPANNER_EMULATOR_HOST and gcloud's Spanner endpoint
+gcloud spanner instances create test --config=emulator-config --description=test --nodes=1
+```
+
+The client libraries find it through `SPANNER_EMULATOR_HOST`, as they do with
+the emulator alone. It needs Docker, and runs the pinned
+`gcr.io/cloud-spanner-emulator/emulator:1.5.59`, pulled on first use.
+`--spanner-port` moves it; REST is always ten above gRPC.
+
+The emulator keeps everything in memory, so a restart starts it empty, and it
+allows one read-write transaction at a time. If cloudrig is killed rather than
+stopped, its container stays behind until the next `--with-spanner` start,
+which removes any emulator whose cloudrig is no longer running.
 
 ---
 

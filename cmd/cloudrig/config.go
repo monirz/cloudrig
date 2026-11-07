@@ -21,6 +21,11 @@ type config struct {
 	dataDir    string
 	clock      string
 	clockStart string
+
+	// withSpanner runs Google's Spanner emulator in Docker beside cloudrig,
+	// on spannerPort for gRPC and spannerPort+10 for REST, as it does alone.
+	withSpanner bool
+	spannerPort int
 }
 
 const (
@@ -41,6 +46,10 @@ const (
 	defaultHost   = "127.0.0.1"
 	defaultRunner = "auto"
 	defaultClock  = "real"
+
+	// defaultSpannerPort is the emulator's own default, so a client already
+	// set up for SPANNER_EMULATOR_HOST=localhost:9010 needs no change.
+	defaultSpannerPort = 9010
 )
 
 // lookupEnv is os.LookupEnv's shape, injected so precedence is testable
@@ -114,6 +123,27 @@ func parseConfig(args []string, env lookupEnv, out io.Writer) (config, error) {
 	fs.StringVar(&clockStart, "clock-start", clockStart,
 		"virtual clock's start time, RFC3339 (env CLOUDRIG_CLOCK_START); default: now")
 
+	withSpanner := false
+	if v, ok := env("CLOUDRIG_WITH_SPANNER"); ok {
+		b, err := strconv.ParseBool(v)
+		if err != nil {
+			return config{}, fmt.Errorf("CLOUDRIG_WITH_SPANNER=%q: not true or false", v)
+		}
+		withSpanner = b
+	}
+	fs.BoolVar(&withSpanner, "with-spanner", withSpanner,
+		"also run Google's Spanner emulator in Docker (env CLOUDRIG_WITH_SPANNER)")
+	spannerPort := defaultSpannerPort
+	if v, ok := env("CLOUDRIG_SPANNER_PORT"); ok {
+		n, err := atoiEnv("CLOUDRIG_SPANNER_PORT", v)
+		if err != nil {
+			return config{}, err
+		}
+		spannerPort = n
+	}
+	fs.IntVar(&spannerPort, "spanner-port", spannerPort,
+		"Spanner emulator gRPC port; REST is this plus 10 (env CLOUDRIG_SPANNER_PORT)")
+
 	if err := fs.Parse(args[1:]); err != nil {
 		return config{}, err
 	}
@@ -121,7 +151,10 @@ func parseConfig(args []string, env lookupEnv, out io.Writer) (config, error) {
 		return config{}, fmt.Errorf("unexpected argument %q", rest[0])
 	}
 
-	c := config{host: host, port: port, runner: runner, dataDir: dataDir, clock: clk, clockStart: clockStart}
+	c := config{
+		host: host, port: port, runner: runner, dataDir: dataDir, clock: clk, clockStart: clockStart,
+		withSpanner: withSpanner, spannerPort: spannerPort,
+	}
 	return c, c.validate()
 }
 
@@ -158,6 +191,9 @@ start flags:
   --clock MODE      real or virtual (default real, env CLOUDRIG_CLOCK);
                     virtual freezes time so cloudrig clock can travel it
   --clock-start T   virtual clock's start, RFC3339 (env CLOUDRIG_CLOCK_START)
+  --with-spanner    also run Google's Spanner emulator in Docker
+                    (env CLOUDRIG_WITH_SPANNER)
+  --spanner-port N  its gRPC port (default %d; REST is N+10, env CLOUDRIG_SPANNER_PORT)
 
 fn flags:
   --source DIR      source directory
@@ -174,7 +210,7 @@ fn run starts its own and needs no daemon.
 Every flag has a CLOUDRIG_ environment twin; an explicit flag wins.
 `, cmdStart, runnerModes,
 		cmdFn, cmdFn, cmdFn, cmdFn, cmdFn,
-		defaultHost, defaultPort, runnerModes, defaultRunner,
+		defaultHost, defaultPort, runnerModes, defaultRunner, defaultSpannerPort,
 		functions.KnownRuntimes(), defaultEndpoint)
 }
 
@@ -190,6 +226,9 @@ func atoiEnv(key, val string) (int, error) {
 func (c config) validate() error {
 	if c.port < 0 || c.port > 65535 {
 		return fmt.Errorf("--port %d is out of range", c.port)
+	}
+	if c.withSpanner && (c.spannerPort < 1 || c.spannerPort+10 > 65535) {
+		return fmt.Errorf("--spanner-port %d is out of range", c.spannerPort)
 	}
 	if !slices.Contains(runnerModes, c.runner) {
 		return fmt.Errorf("--runner %q is not one of %v", c.runner, runnerModes)

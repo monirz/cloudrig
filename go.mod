@@ -11,7 +11,10 @@ require (
 	cloud.google.com/go/cloudtasks v1.19.0
 	cloud.google.com/go/container v1.54.0
 	cloud.google.com/go/firestore v1.25.0
+	cloud.google.com/go/iam v1.12.0
+	cloud.google.com/go/kms v1.36.0
 	cloud.google.com/go/logging v1.19.1
+	cloud.google.com/go/monitoring v1.30.0
 	cloud.google.com/go/pubsub/v2 v2.7.0
 	cloud.google.com/go/scheduler v1.16.0
 	cloud.google.com/go/secretmanager v1.21.0
@@ -19,6 +22,7 @@ require (
 	github.com/moby/moby/api v1.56.0
 	github.com/moby/moby/client v0.6.0
 	github.com/robfig/cron/v3 v3.0.1
+	go.etcd.io/bbolt v1.5.0
 	google.golang.org/api v0.295.0
 	google.golang.org/genproto v0.0.0-20260715232425-e75dac1f907d
 	google.golang.org/genproto/googleapis/api v0.0.0-20260819154853-08b0e4226688
@@ -33,9 +37,7 @@ require (
 	cloud.google.com/go/auth v0.23.2 // indirect
 	cloud.google.com/go/auth/oauth2adapt v0.2.8 // indirect
 	cloud.google.com/go/compute/metadata v0.9.0 // indirect
-	cloud.google.com/go/iam v1.12.0 // indirect
 	cloud.google.com/go/longrunning v1.2.0 // indirect
-	cloud.google.com/go/monitoring v1.30.0 // indirect
 	github.com/GoogleCloudPlatform/opentelemetry-operations-go/detectors/gcp v1.33.0 // indirect
 	github.com/GoogleCloudPlatform/opentelemetry-operations-go/exporter/metric v0.57.0 // indirect
 	github.com/GoogleCloudPlatform/opentelemetry-operations-go/internal/resourcemapping v0.57.0 // indirect
@@ -56,7 +58,7 @@ require (
 	github.com/google/s2a-go v0.1.9 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/googleapis/enterprise-certificate-proxy v0.3.20 // indirect
-	github.com/googleapis/gax-go/v2 v2.24.0 // indirect
+	github.com/googleapis/gax-go/v2 v2.26.2 // indirect
 	github.com/moby/docker-image-spec v1.3.1 // indirect
 	github.com/opencontainers/go-digest v1.0.0 // indirect
 	github.com/opencontainers/image-spec v1.1.1 // indirect

@@ -78,7 +78,7 @@ func Sweep() int {
 	var removed int
 	for _, e := range entries {
 		pid, err := strconv.Atoi(e.Name())
-		if err != nil || pid == os.Getpid() || alive(pid) {
+		if err != nil || pid == os.Getpid() || Alive(pid) {
 			continue
 		}
 		if os.RemoveAll(filepath.Join(ParentDir(), e.Name())) == nil {
@@ -88,10 +88,10 @@ func Sweep() int {
 	return removed
 }
 
-// alive reports whether a process is still running. Anything that cannot be
-// answered counts as alive: leaving a directory behind costs a few kilobytes,
-// deleting a live emulator's uploads costs it the upload.
-func alive(pid int) bool {
+// Alive reports whether a process on this machine is still running. Anything
+// that cannot be answered counts as alive: leaving a directory behind costs a
+// few kilobytes, deleting a live emulator's uploads costs it the upload.
+func Alive(pid int) bool {
 	// Not real pids: signalling 0 reaches this process's whole group, and a
 	// negative one reaches a group too. Neither can own a root.
 	if pid <= 0 {

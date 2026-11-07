@@ -9,6 +9,7 @@ package storage
 import (
 	"context"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/monirz/cloudrig/core/clock"
@@ -29,6 +30,12 @@ type Service struct {
 	blobs *blob.Store
 	clk   clock.Clock
 	bus   *events.Bus
+
+	// folderMu orders a managed folder's create, policy writes and delete.
+	// Without it a policy write that read the folder just before a delete
+	// could store the policy after the delete removed it, and a later create
+	// under the same name would inherit it.
+	folderMu sync.Mutex
 }
 
 // New wires a service. The blob tree holds payloads; kv holds only metadata.
@@ -47,10 +54,11 @@ type Bucket struct {
 	StorageClass string `json:"storageClass"`
 	// Versioning off is the GCS default: an overwrite discards the previous
 	// generation and a delete removes it. On, both are kept.
-	Versioning     bool      `json:"versioning"`
-	Metageneration int64     `json:"metageneration"`
-	Created        time.Time `json:"timeCreated"`
-	Updated        time.Time `json:"updated"`
+	Versioning     bool              `json:"versioning"`
+	Labels         map[string]string `json:"labels,omitempty"`
+	Metageneration int64             `json:"metageneration"`
+	Created        time.Time         `json:"timeCreated"`
+	Updated        time.Time         `json:"updated"`
 }
 
 // Defaults applied when a caller does not say, matching what GCS assumes.
