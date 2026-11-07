@@ -72,7 +72,8 @@ func TestStartAndStop(t *testing.T) {
 		t.Fatal(err)
 	}
 	stopped = true
-	if _, err := http.Get("http://" + emu.RESTAddr + "/v1/projects/p/instanceConfigs"); err == nil {
+	if resp, err := http.Get("http://" + emu.RESTAddr + "/v1/projects/p/instanceConfigs"); err == nil {
+		resp.Body.Close()
 		t.Error("the emulator still answers after Stop")
 	}
 }

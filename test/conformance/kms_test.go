@@ -3,6 +3,7 @@ package conformance
 import (
 	"bytes"
 	"context"
+	"errors"
 	"hash/crc32"
 	"testing"
 
@@ -165,7 +166,7 @@ func TestKMSRotation(t *testing.T) {
 	it := c.ListCryptoKeyVersions(ctx, &kmspb.ListCryptoKeyVersionsRequest{Parent: key.GetName()})
 	for {
 		v, err := it.Next()
-		if err == iterator.Done {
+		if errors.Is(err, iterator.Done) {
 			break
 		}
 		if err != nil {

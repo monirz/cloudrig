@@ -2,6 +2,7 @@ package conformance
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -58,7 +59,7 @@ func listSeries(t *testing.T, c *monitoring.MetricClient, ctx context.Context, r
 	it := c.ListTimeSeries(ctx, req)
 	for {
 		ts, err := it.Next()
-		if err == iterator.Done {
+		if errors.Is(err, iterator.Done) {
 			return out
 		}
 		if err != nil {

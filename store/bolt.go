@@ -13,6 +13,7 @@ import (
 	"time"
 
 	bolt "go.etcd.io/bbolt"
+	bolterrors "go.etcd.io/bbolt/errors"
 )
 
 // Bolt is a Store kept on disk, used when cloudrig runs with --data-dir.
@@ -52,7 +53,7 @@ func OpenBolt(path string) (*Bolt, error) {
 		NoFreelistSync: true,
 		FreelistType:   bolt.FreelistMapType,
 	})
-	if errors.Is(err, bolt.ErrTimeout) {
+	if errors.Is(err, bolterrors.ErrTimeout) {
 		return nil, fmt.Errorf("store: %s is locked; is another cloudrig using this --data-dir?", path)
 	}
 	if err != nil {
