@@ -260,8 +260,17 @@ func (a *API) deleteManagedFolder(w http.ResponseWriter, r *http.Request, p tran
 	if err != nil {
 		return err
 	}
-	allow := r.URL.Query().Get("allowNonEmpty") == "true"
-	if err := a.svc.DeleteManagedFolder(r.Context(), project, p["bucket"], p["folder"], allow); err != nil {
+	q := r.URL.Query()
+	pre, err := preconditionsOf(q)
+	if err != nil {
+		return err
+	}
+	opts := DeleteFolderOptions{
+		AllowNonEmpty:            q.Get("allowNonEmpty") == "true",
+		IfMetagenerationMatch:    pre.IfMetagenerationMatch,
+		IfMetagenerationNotMatch: pre.IfMetagenerationNotMatch,
+	}
+	if err := a.svc.DeleteManagedFolder(r.Context(), project, p["bucket"], p["folder"], opts); err != nil {
 		return err
 	}
 	w.WriteHeader(http.StatusNoContent)

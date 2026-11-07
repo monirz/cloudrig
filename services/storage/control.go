@@ -67,13 +67,18 @@ func (c *Control) GetManagedFolder(ctx context.Context, req *controlpb.GetManage
 }
 
 // DeleteManagedFolder removes a folder and its policy. One with objects under
-// it needs allow_non_empty.
+// it needs allow_non_empty; the metageneration conditions are checked first.
 func (c *Control) DeleteManagedFolder(ctx context.Context, req *controlpb.DeleteManagedFolderRequest) (*emptypb.Empty, error) {
 	project, bucket, folder, err := c.parseFolder(ctx, req.GetName())
 	if err != nil {
 		return nil, err
 	}
-	if err := c.svc.DeleteManagedFolder(ctx, project, bucket, folder, req.GetAllowNonEmpty()); err != nil {
+	opts := DeleteFolderOptions{
+		AllowNonEmpty:            req.GetAllowNonEmpty(),
+		IfMetagenerationMatch:    req.IfMetagenerationMatch,
+		IfMetagenerationNotMatch: req.IfMetagenerationNotMatch,
+	}
+	if err := c.svc.DeleteManagedFolder(ctx, project, bucket, folder, opts); err != nil {
 		return nil, grpcError(err)
 	}
 	return &emptypb.Empty{}, nil

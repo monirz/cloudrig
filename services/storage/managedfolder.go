@@ -213,16 +213,32 @@ func concurrentPolicyChange() error {
 		WithHTTPStatus(http.StatusConflict)
 }
 
+// DeleteFolderOptions are a managed folder delete's conditions.
+type DeleteFolderOptions struct {
+	// AllowNonEmpty deletes a folder with objects or folders under it.
+	AllowNonEmpty bool
+	// With either set, the delete happens only if the folder's
+	// metageneration matches, or does not match, the value.
+	IfMetagenerationMatch    *int64
+	IfMetagenerationNotMatch *int64
+}
+
 // DeleteManagedFolder removes a folder and its policy. A folder with objects
-// or other managed folders under it is refused unless allowNonEmpty, as GCS
-// does; what is under it stays either way, since a managed folder never owned
-// it.
-func (s *Service) DeleteManagedFolder(ctx context.Context, project, bucket, id string, allowNonEmpty bool) error {
+// or other managed folders under it is refused unless opts.AllowNonEmpty, as
+// GCS does; what is under it stays either way, since a managed folder never
+// owned it.
+func (s *Service) DeleteManagedFolder(ctx context.Context, project, bucket, id string, opts DeleteFolderOptions) error {
 	f, err := s.GetManagedFolder(ctx, project, bucket, id)
 	if err != nil {
 		return err
 	}
-	if !allowNonEmpty {
+	if m := opts.IfMetagenerationMatch; m != nil && f.Metageneration != *m {
+		return folderConditionNotMet(f, "is not")
+	}
+	if m := opts.IfMetagenerationNotMatch; m != nil && f.Metageneration == *m {
+		return folderConditionNotMet(f, "is")
+	}
+	if !opts.AllowNonEmpty {
 		live, _, err := s.kv.List(ctx, resource.LivePrefix(project, bucket)+f.Name, 1, "")
 		if err != nil {
 			return gerr.Wrap(err, gerr.Internal, "checking whether the managed folder is empty")
@@ -258,6 +274,12 @@ func (s *Service) hasManagedFolders(ctx context.Context, project, bucket string)
 		return false, gerr.Wrap(err, gerr.Internal, "checking the bucket for managed folders")
 	}
 	return len(entries) > 0, nil
+}
+
+func folderConditionNotMet(f ManagedFolder, rel string) error {
+	return gerr.Newf(gerr.FailedPrecondition, "The managed folder's metageneration %d %s the one the request requires: %s", f.Metageneration, rel, f.Name).
+		WithHTTPStatus(http.StatusPreconditionFailed).
+		WithReason("conditionNotMet")
 }
 
 func badFolderName(id, why string) error {

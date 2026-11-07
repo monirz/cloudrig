@@ -219,6 +219,13 @@ func TestManagedFolderDelete(t *testing.T) {
 	if got := del("/storage/v1/b/bkt/managedFolders/tenants%2Facme%2F"); got != http.StatusNoContent {
 		t.Errorf("JSON delete = %d, want 204", got)
 	}
+	wrong := int64(7)
+	if err := c.DeleteManagedFolder(ctx, &controlpb.DeleteManagedFolderRequest{Name: bucketName + "/managedFolders/logs/", IfMetagenerationMatch: &wrong}); status.Code(err) != codes.FailedPrecondition {
+		t.Errorf("gRPC delete with a wrong metageneration: %v, want FailedPrecondition", err)
+	}
+	if got := del("/storage/v1/b/bkt/managedFolders/logs%2F?ifMetagenerationMatch=7"); got != http.StatusPreconditionFailed {
+		t.Errorf("JSON delete with a wrong metageneration = %d, want 412", got)
+	}
 	if err := c.DeleteManagedFolder(ctx, &controlpb.DeleteManagedFolderRequest{Name: bucketName + "/managedFolders/logs/"}); err != nil {
 		t.Errorf("gRPC delete: %v", err)
 	}

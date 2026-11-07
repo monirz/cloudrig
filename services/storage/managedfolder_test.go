@@ -46,7 +46,7 @@ func TestDeleteManagedFolderThenBucket(t *testing.T) {
 	if _, err := write(t, s, "a/x.txt", "x", storage.Preconditions{}); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.DeleteManagedFolder(ctx, "p", "bkt", "a", false); gerr.From(err).Code != gerr.FailedPrecondition {
+	if err := s.DeleteManagedFolder(ctx, "p", "bkt", "a", storage.DeleteFolderOptions{}); gerr.From(err).Code != gerr.FailedPrecondition {
 		t.Errorf("deleting a non-empty folder = %v, want FailedPrecondition", err)
 	}
 	if _, err := s.CreateManagedFolder(ctx, "p", "bkt", "b/"); err != nil {
@@ -55,21 +55,21 @@ func TestDeleteManagedFolderThenBucket(t *testing.T) {
 	if _, err := s.CreateManagedFolder(ctx, "p", "bkt", "b/c/"); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.DeleteManagedFolder(ctx, "p", "bkt", "b/", false); gerr.From(err).Code != gerr.FailedPrecondition {
+	if err := s.DeleteManagedFolder(ctx, "p", "bkt", "b/", storage.DeleteFolderOptions{}); gerr.From(err).Code != gerr.FailedPrecondition {
 		t.Errorf("deleting a folder with one nested in it = %v, want FailedPrecondition", err)
 	}
 	for _, f := range []string{"b/c/", "b/"} { // innermost first, as gcloud does
-		if err := s.DeleteManagedFolder(ctx, "p", "bkt", f, false); err != nil {
+		if err := s.DeleteManagedFolder(ctx, "p", "bkt", f, storage.DeleteFolderOptions{}); err != nil {
 			t.Errorf("deleting %s: %v", f, err)
 		}
 	}
-	if err := s.DeleteManagedFolder(ctx, "p", "bkt", "a", true); err != nil {
+	if err := s.DeleteManagedFolder(ctx, "p", "bkt", "a", storage.DeleteFolderOptions{AllowNonEmpty: true}); err != nil {
 		t.Fatalf("deleting with allowNonEmpty: %v", err)
 	}
 	if _, err := s.GetManagedFolder(ctx, "p", "bkt", "a/"); gerr.From(err).Code != gerr.NotFound {
 		t.Errorf("get after delete = %v, want NotFound", err)
 	}
-	if err := s.DeleteManagedFolder(ctx, "p", "bkt", "a", true); gerr.From(err).Code != gerr.NotFound {
+	if err := s.DeleteManagedFolder(ctx, "p", "bkt", "a", storage.DeleteFolderOptions{AllowNonEmpty: true}); gerr.From(err).Code != gerr.NotFound {
 		t.Errorf("second delete = %v, want NotFound", err)
 	}
 
@@ -107,7 +107,7 @@ func TestPolicyEtagSurvivesRecreate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.DeleteManagedFolder(ctx, "p", "bkt", "x/", false); err != nil {
+	if err := s.DeleteManagedFolder(ctx, "p", "bkt", "x/", storage.DeleteFolderOptions{}); err != nil {
 		t.Fatal(err)
 	}
 	mk()
@@ -118,5 +118,32 @@ func TestPolicyEtagSurvivesRecreate(t *testing.T) {
 	_, fresh, _ := s.ManagedFolderPolicy(ctx, "p", "bkt", "x/")
 	if _, err := s.SetManagedFolderPolicy(ctx, "p", "bkt", "x/", []byte("w"), fresh); err != nil {
 		t.Errorf("set with the current etag: %v", err)
+	}
+}
+
+// A delete's metageneration conditions are checked before anything goes.
+func TestDeleteManagedFolderConditions(t *testing.T) {
+	s, _ := newService(t)
+	ctx := context.Background()
+	if _, err := s.CreateBucket(ctx, storage.Bucket{Name: "bkt", Project: "p"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.CreateManagedFolder(ctx, "p", "bkt", "a/"); err != nil {
+		t.Fatal(err)
+	}
+	one, two := int64(1), int64(2)
+	for _, opts := range []storage.DeleteFolderOptions{
+		{IfMetagenerationMatch: &two},
+		{IfMetagenerationNotMatch: &one},
+	} {
+		if err := s.DeleteManagedFolder(ctx, "p", "bkt", "a/", opts); gerr.From(err).Code != gerr.FailedPrecondition {
+			t.Errorf("delete with an unmet condition = %v, want FailedPrecondition", err)
+		}
+	}
+	if _, err := s.GetManagedFolder(ctx, "p", "bkt", "a/"); err != nil {
+		t.Fatalf("folder gone after a refused delete: %v", err)
+	}
+	if err := s.DeleteManagedFolder(ctx, "p", "bkt", "a/", storage.DeleteFolderOptions{IfMetagenerationMatch: &one, IfMetagenerationNotMatch: &two}); err != nil {
+		t.Errorf("delete with met conditions: %v", err)
 	}
 }
