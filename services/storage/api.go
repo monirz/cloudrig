@@ -407,7 +407,11 @@ func (a *API) copy(r *http.Request, p transport.Params) (Object, error) {
 	}
 
 	q := r.URL.Query()
-	pre, err := destinationPreconditions(q)
+	pre, err := preconditionsOf(q)
+	if err != nil {
+		return Object{}, err
+	}
+	srcPre, err := sourcePreconditions(q)
 	if err != nil {
 		return Object{}, err
 	}
@@ -417,7 +421,7 @@ func (a *API) copy(r *http.Request, p transport.Params) (Object, error) {
 	}
 
 	return a.svc.CopyObject(r.Context(), project,
-		Source{Bucket: p["bucket"], Name: p["object"], Generation: generation},
+		Source{Bucket: p["bucket"], Name: p["object"], Generation: generation, Preconditions: srcPre},
 		Write{
 			Bucket:        p["dstBucket"],
 			Name:          p["dstObject"],
@@ -438,7 +442,20 @@ func (a *API) composeObject(w http.ResponseWriter, r *http.Request, p transport.
 	if err := decodeJSON(r, &body); err != nil {
 		return err
 	}
-	pre, err := destinationPreconditions(r.URL.Query())
+	q := r.URL.Query()
+	// Compose has no ifSource* parameters: each part carries its own
+	// condition in the body. Refused rather than ignored, so a caller who
+	// meant one learns where it goes.
+	for _, name := range sourceParams {
+		if q.Get(name) != "" {
+			return gerr.Newf(gerr.InvalidArgument,
+				"compose does not take %s; set sourceObjects[].objectPreconditions.ifGenerationMatch instead", name).
+				WithHTTPStatus(http.StatusBadRequest).
+				WithReason("invalid").
+				WithLocation(name, "parameter")
+		}
+	}
+	pre, err := preconditionsOf(q)
 	if err != nil {
 		return err
 	}
@@ -447,8 +464,12 @@ func (a *API) composeObject(w http.ResponseWriter, r *http.Request, p transport.
 	for i, src := range body.SourceObjects {
 		sources[i] = Source{Bucket: p["bucket"], Name: src.Name}
 		if src.Generation != 0 {
-			generation := src.Generation
+			generation := int64(src.Generation)
 			sources[i].Generation = &generation
+		}
+		if c := src.ObjectPreconditions; c != nil && c.IfGenerationMatch != nil {
+			match := int64(*c.IfGenerationMatch)
+			sources[i].Preconditions.IfGenerationMatch = &match
 		}
 	}
 
@@ -465,19 +486,27 @@ func (a *API) composeObject(w http.ResponseWriter, r *http.Request, p transport.
 	return writeJSON(w, http.StatusOK, toAPIObject(obj, baseURL(r)))
 }
 
-// destinationPreconditions reads the conditions that apply to the object being
-// written. Copy and compose also accept ifSource* conditions, which are not
-// implemented and would be wrong to silently ignore.
-func destinationPreconditions(q url.Values) (Preconditions, error) {
-	for _, unsupported := range []string{
-		"ifSourceGenerationMatch", "ifSourceGenerationNotMatch",
-		"ifSourceMetagenerationMatch", "ifSourceMetagenerationNotMatch",
+// sourceParams are the conditions a copy puts on its source object.
+var sourceParams = []string{
+	"ifSourceGenerationMatch", "ifSourceGenerationNotMatch",
+	"ifSourceMetagenerationMatch", "ifSourceMetagenerationNotMatch",
+}
+
+// sourcePreconditions reads a copy's ifSource* parameters into the same
+// conditions a write takes, to be checked against the source object.
+func sourcePreconditions(q url.Values) (Preconditions, error) {
+	var p Preconditions
+	for i, dst := range []**int64{
+		&p.IfGenerationMatch, &p.IfGenerationNotMatch,
+		&p.IfMetagenerationMatch, &p.IfMetagenerationNotMatch,
 	} {
-		if q.Get(unsupported) != "" {
-			return Preconditions{}, gerr.NewUnimplemented("storage.objects.copy with " + unsupported)
+		n, err := optionalNamed(q, sourceParams[i])
+		if err != nil {
+			return Preconditions{}, err
 		}
+		*dst = n
 	}
-	return preconditionsOf(q)
+	return p, nil
 }
 
 func optionalNamed(q url.Values, name string) (*int64, error) {

@@ -765,6 +765,68 @@ func TestCopyAndCompose(t *testing.T) {
 		}
 	})
 
+	// The client sends a source handle's conditions as ifSource* on rewriteTo,
+	// and as each part's objectPreconditions on compose.
+	t.Run("copy checks source conditions", func(t *testing.T) {
+		put(t, "cond-src.txt", "guarded")
+		src := b.Object("cond-src.txt")
+		attrs, err := src.Attrs(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		cases := []struct {
+			name string
+			cond storage.Conditions
+			want int
+		}{
+			{"generation match", storage.Conditions{GenerationMatch: attrs.Generation}, 200},
+			{"generation mismatch", storage.Conditions{GenerationMatch: attrs.Generation + 1}, 412},
+			{"generation not match holds", storage.Conditions{GenerationNotMatch: attrs.Generation}, 412},
+			{"metageneration match", storage.Conditions{MetagenerationMatch: attrs.Metageneration}, 200},
+			{"metageneration not match holds", storage.Conditions{MetagenerationNotMatch: attrs.Metageneration}, 412},
+		}
+		for _, tc := range cases {
+			_, err := b.Object("cond-dst.txt").CopierFrom(src.If(tc.cond)).Run(ctx)
+			got := 200
+			if err != nil {
+				got = statusOf(t, err)
+			}
+			if got != tc.want {
+				t.Errorf("%s: status = %d, want %d (%v)", tc.name, got, tc.want, err)
+			}
+		}
+	})
+
+	t.Run("compose checks each part's condition", func(t *testing.T) {
+		put(t, "cond-a", "one ")
+		put(t, "cond-b", "two")
+		attrs, err := b.Object("cond-b").Attrs(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		_, err = b.Object("cond-whole").ComposerFrom(
+			b.Object("cond-a"),
+			b.Object("cond-b").If(storage.Conditions{GenerationMatch: attrs.Generation + 1}),
+		).Run(ctx)
+		if got := statusOf(t, err); got != 412 {
+			t.Errorf("stale part: status = %d, want 412", got)
+		}
+
+		// A part named by generation, which the client sends as a string.
+		whole, err := b.Object("cond-whole").ComposerFrom(
+			b.Object("cond-a"),
+			b.Object("cond-b").Generation(attrs.Generation).If(storage.Conditions{GenerationMatch: attrs.Generation}),
+		).Run(ctx)
+		if err != nil {
+			t.Fatalf("current part: %v", err)
+		}
+		if got := read(t, whole.Name); got != "one two" {
+			t.Errorf("composed content = %q", got)
+		}
+	})
+
 	t.Run("compose a missing part is 404", func(t *testing.T) {
 		_, err := b.Object("bad.txt").ComposerFrom(b.Object("part-a"), b.Object("absent")).Run(ctx)
 		if got := statusOf(t, err); got != 404 {

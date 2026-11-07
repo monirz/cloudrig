@@ -2,6 +2,7 @@ package storage
 
 import (
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -115,6 +116,25 @@ type composeRequest struct {
 }
 
 type composeSource struct {
-	Name       string `json:"name"`
-	Generation int64  `json:"generation,omitempty"`
+	Name                string               `json:"name"`
+	Generation          wireInt64            `json:"generation,omitempty"`
+	ObjectPreconditions *composePrecondition `json:"objectPreconditions,omitempty"`
+}
+
+// composePrecondition is the one condition GCS lets a compose part carry.
+type composePrecondition struct {
+	IfGenerationMatch *wireInt64 `json:"ifGenerationMatch,omitempty"`
+}
+
+// wireInt64 is an int64 the JSON API may spell as a string, as Google's client
+// does for generation, or as a number, as a hand-written request may.
+type wireInt64 int64
+
+func (n *wireInt64) UnmarshalJSON(b []byte) error {
+	v, err := strconv.ParseInt(strings.Trim(string(b), `"`), 10, 64)
+	if err != nil {
+		return err
+	}
+	*n = wireInt64(v)
+	return nil
 }

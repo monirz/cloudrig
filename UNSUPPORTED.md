@@ -29,9 +29,6 @@ Cloud Storage:
   clock every real signed URL looks issued in the future. An expired URL
   therefore still works.
 - `GenerateSignedPostPolicyV4` — the form-upload flow is not routed.
-- `ifSource*` preconditions on copy and compose. They return 501 naming the
-  parameter rather than being ignored: a condition silently dropped is worse
-  than one refused.
 - Resumable sessions live in memory and in a temp directory, so one interrupted
   by a restart cannot be resumed. Real GCS keeps a session usable for a week.
 - Any chunk size is accepted. Real GCS requires non-final chunks to be a

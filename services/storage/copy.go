@@ -9,11 +9,27 @@ import (
 	"github.com/monirz/cloudrig/core/gerr"
 )
 
-// Source names an object to read from.
+// Source names an object to read from, and the conditions it must meet: the
+// ifSource* parameters of a copy, or a compose part's objectPreconditions.
 type Source struct {
-	Bucket     string
-	Name       string
-	Generation *int64
+	Bucket        string
+	Name          string
+	Generation    *int64
+	Preconditions Preconditions
+}
+
+// source reads a source object's metadata and checks its conditions. They are
+// checked as a mutation's are, so a NotMatch that holds is 412, not the 304 a
+// plain read would get.
+func (s *Service) source(ctx context.Context, project string, src Source) (Object, error) {
+	obj, err := s.GetObject(ctx, project, src.Bucket, src.Name, src.Generation)
+	if err != nil {
+		return Object{}, err
+	}
+	if err := checkPreconditions(src.Preconditions, &obj, src.Bucket, src.Name, false); err != nil {
+		return Object{}, err
+	}
+	return obj, nil
 }
 
 // CopyObject writes an existing object's content under a new name.
@@ -22,7 +38,7 @@ type Source struct {
 // same file and only the reference count changes — a copy of a gibibyte costs
 // what a copy of a byte costs.
 func (s *Service) CopyObject(ctx context.Context, project string, src Source, dst Write) (Object, error) {
-	from, err := s.GetObject(ctx, project, src.Bucket, src.Name, src.Generation)
+	from, err := s.source(ctx, project, src)
 	if err != nil {
 		return Object{}, err
 	}
@@ -78,13 +94,16 @@ func (s *Service) ComposeObject(ctx context.Context, project string, sources []S
 	}()
 
 	for _, src := range sources {
-		bucket := src.Bucket
-		if bucket == "" {
-			bucket = dst.Bucket
+		if src.Bucket == "" {
+			src.Bucket = dst.Bucket
 		}
-		_, f, err := s.OpenObject(ctx, project, bucket, src.Name, src.Generation, Preconditions{})
+		obj, err := s.source(ctx, project, src)
 		if err != nil {
 			return Object{}, err
+		}
+		f, err := s.blobs.Open(obj.Blob)
+		if err != nil {
+			return Object{}, gerr.Wrap(err, gerr.Internal, "opening object content")
 		}
 		open = append(open, f)
 		readers = append(readers, f)
