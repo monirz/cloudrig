@@ -280,6 +280,12 @@ func (s *Service) CreateCryptoKey(ctx context.Context, req *kmspb.CreateCryptoKe
 	// caller asked to add versions themselves.
 	if !req.GetSkipInitialVersionCreation() {
 		if _, err := s.addVersion(ctx, key.Name, true); err != nil {
+			// A key left without its first version could not encrypt, and a
+			// retry would be AlreadyExists, so the create is undone whole.
+			// Without the request's cancellation, which may be the failure.
+			undo := context.WithoutCancel(ctx)
+			_ = s.kv.Reset(undo, versionPrefix(key.Name))
+			_ = s.kv.Delete(undo, keyKey(key.Name), 0)
 			return nil, err
 		}
 	}
