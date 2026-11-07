@@ -39,6 +39,9 @@ one service behind both.
 **Cloud KMS** — key rings, symmetric keys, versions and rotation, encrypt and
 decrypt with additional data and checksums, over gRPC.
 
+**Cloud Monitoring** — time-series writes stored and read back by filter and
+interval, so a test can check the metrics code reported, over gRPC.
+
 **Cloud Run** — deploy an image and it runs as a container through Docker,
 driven by real `gcloud run`. A source directory runs as a process instead.
 
@@ -567,6 +570,39 @@ clear: a stand-in for local runs, not a place for a real secret.
 Not supported: asymmetric, MAC and raw keys, import jobs, key destruction and
 version state changes, Autokey, IAM, and the REST API, so `gcloud kms` does not
 reach it.
+
+---
+
+## Cloud Monitoring
+
+gRPC, on the same port. `CreateTimeSeries` stores each point and
+`ListTimeSeries` reads them back, so code that reports metrics can be checked
+rather than stubbed:
+
+```python
+import grpc
+from google.cloud import monitoring_v3
+from google.cloud.monitoring_v3.services.metric_service.transports import MetricServiceGrpcTransport
+
+channel = grpc.insecure_channel("localhost:4599")
+client = monitoring_v3.MetricServiceClient(transport=MetricServiceGrpcTransport(channel=channel))
+
+client.create_time_series(name="projects/cloudrig-local", time_series=[series])
+client.list_time_series(request={
+    "name": "projects/cloudrig-local",
+    "filter": 'metric.type = "custom.googleapis.com/files_done" AND metric.labels.step = "resize"',
+    "interval": interval,
+})
+```
+
+The write rules are the real API's: one point per series per call, points in
+time order, a start before the end for CUMULATIVE and DELTA. A list returns
+each series with its points newest first, in the window (start, end].
+
+The filter reads `field = "value"` clauses joined by `AND`, on `metric.type`
+(required), `resource.type`, `metric.labels.*` and `resource.labels.*`. Any
+other filter, aggregation and `orderBy` answer Unimplemented, as do metric
+descriptors, alerting and dashboards.
 
 ---
 

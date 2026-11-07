@@ -152,6 +152,18 @@ Cloud KMS:
   gRPC.
 - filter and orderBy on the lists. Each list answers in one page.
 
+Cloud Monitoring:
+
+- Everything but CreateTimeSeries, CreateServiceTimeSeries and ListTimeSeries:
+  metric and monitored-resource descriptors, alerting, uptime checks,
+  dashboards and the query language.
+- On ListTimeSeries: aggregation, orderBy, and filters beyond `field =
+  "value"` clauses joined by AND on metric.type, resource.type,
+  metric.labels.* and resource.labels.*. Each list answers in one page.
+- The REST API.
+- The real API's limit of one point per series every 5 seconds is not
+  enforced; points only have to arrive in time order.
+
 Cloud Tasks:
 
 - App Engine task targets; only http_request is dispatched.
