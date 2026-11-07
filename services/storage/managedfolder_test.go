@@ -49,6 +49,20 @@ func TestDeleteManagedFolderThenBucket(t *testing.T) {
 	if err := s.DeleteManagedFolder(ctx, "p", "bkt", "a", false); gerr.From(err).Code != gerr.FailedPrecondition {
 		t.Errorf("deleting a non-empty folder = %v, want FailedPrecondition", err)
 	}
+	if _, err := s.CreateManagedFolder(ctx, "p", "bkt", "b/"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.CreateManagedFolder(ctx, "p", "bkt", "b/c/"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.DeleteManagedFolder(ctx, "p", "bkt", "b/", false); gerr.From(err).Code != gerr.FailedPrecondition {
+		t.Errorf("deleting a folder with one nested in it = %v, want FailedPrecondition", err)
+	}
+	for _, f := range []string{"b/c/", "b/"} { // innermost first, as gcloud does
+		if err := s.DeleteManagedFolder(ctx, "p", "bkt", f, false); err != nil {
+			t.Errorf("deleting %s: %v", f, err)
+		}
+	}
 	if err := s.DeleteManagedFolder(ctx, "p", "bkt", "a", true); err != nil {
 		t.Fatalf("deleting with allowNonEmpty: %v", err)
 	}
