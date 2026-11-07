@@ -15,6 +15,7 @@ import (
 	"github.com/monirz/cloudrig"
 	"github.com/monirz/cloudrig/core/clock"
 	"github.com/monirz/cloudrig/core/tmp"
+	"github.com/monirz/cloudrig/services/spanner"
 )
 
 // version is stamped at build time:
@@ -97,6 +98,20 @@ func run(args []string, env lookupEnv, stdout, stderr *os.File) error {
 		fmt.Fprintf(stdout, "persisting storage under %s\n", cfg.dataDir)
 	}
 	fmt.Fprintf(stdout, "health: %s/_emu/health\n", emu.BaseURL())
+
+	if cfg.withSpanner {
+		fmt.Fprintf(stdout, "starting the Spanner emulator (%s)\n", spanner.DefaultImage)
+		sp, err := spanner.Start(ctx, spanner.Options{GRPCPort: cfg.spannerPort, RESTPort: cfg.spannerPort + 10})
+		if err != nil {
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownGrace)
+			defer cancel()
+			_ = emu.Shutdown(shutdownCtx)
+			return err
+		}
+		// Removed on the way out, however the run ends.
+		defer func() { _ = sp.Stop(context.Background()) }()
+		fmt.Fprintf(stdout, "spanner: SPANNER_EMULATOR_HOST=%s (gcloud: http://%s/)\n", sp.GRPCAddr, sp.RESTAddr)
+	}
 
 	<-ctx.Done()
 	stop()

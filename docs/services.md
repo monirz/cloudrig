@@ -42,6 +42,9 @@ decrypt with additional data and checksums, over gRPC.
 **Cloud Monitoring** — time-series writes stored and read back by filter and
 interval, so a test can check the metrics code reported, over gRPC.
 
+**Spanner** — not emulated: `cloudrig start --with-spanner` runs Google's own
+emulator in Docker beside cloudrig and removes it on shutdown.
+
 **Cloud Run** — deploy an image and it runs as a container through Docker,
 driven by real `gcloud run`. A source directory runs as a process instead.
 
@@ -603,6 +606,32 @@ The filter reads `field = "value"` clauses joined by `AND`, on `metric.type`
 (required), `resource.type`, `metric.labels.*` and `resource.labels.*`. Any
 other filter, aggregation and `orderBy` answer Unimplemented, as do metric
 descriptors, alerting and dashboards.
+
+---
+
+## Spanner
+
+Spanner's SQL, schema changes and transactions are beyond what cloudrig should
+guess at, and Google ships an emulator for them. cloudrig runs it for you, so
+one command brings up everything and one Ctrl-C takes it down:
+
+```sh
+cloudrig start --with-spanner
+# spanner: SPANNER_EMULATOR_HOST=localhost:9010 (gcloud: http://localhost:9020/)
+
+. ./cloudrig-env.sh        # sets SPANNER_EMULATOR_HOST and gcloud's Spanner endpoint
+gcloud spanner instances create test --config=emulator-config --description=test --nodes=1
+```
+
+The client libraries find it through `SPANNER_EMULATOR_HOST`, as they do with
+the emulator alone. It needs Docker, and runs the pinned
+`gcr.io/cloud-spanner-emulator/emulator:1.5.59`, pulled on first use.
+`--spanner-port` moves it; REST is always ten above gRPC.
+
+The emulator keeps everything in memory, so a restart starts it empty, and it
+allows one read-write transaction at a time. If cloudrig is killed rather than
+stopped, the container stays behind:
+`docker rm -f $(docker ps -q --filter label=cloudrig.role=spanner-emulator)`.
 
 ---
 

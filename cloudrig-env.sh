@@ -24,6 +24,12 @@ export PUBSUB_EMULATOR_HOST="${PUBSUB_EMULATOR_HOST:-${CLOUDRIG_ENDPOINT#http://
 # 127.0.0.1, so the prefixed name still reaches this machine.
 export CLOUDSDK_API_ENDPOINT_OVERRIDES_RUN="${CLOUDSDK_API_ENDPOINT_OVERRIDES_RUN:-http://127.0.0.1.nip.io:${CLOUDRIG_ENDPOINT##*:}/}"
 
+# Spanner is Google's emulator, which cloudrig start --with-spanner runs on
+# its usual ports. Pointed there even when it is not running: a client then
+# fails to connect instead of reaching a real instance.
+export SPANNER_EMULATOR_HOST="${SPANNER_EMULATOR_HOST:-localhost:9010}"
+export CLOUDSDK_API_ENDPOINT_OVERRIDES_SPANNER="${CLOUDSDK_API_ENDPOINT_OVERRIDES_SPANNER:-http://localhost:9020/}"
+
 export CLOUDSDK_API_ENDPOINT_OVERRIDES_SECRETMANAGER="$CLOUDRIG_ENDPOINT/"
 export CLOUDSDK_API_ENDPOINT_OVERRIDES_CLOUDTASKS="$CLOUDRIG_ENDPOINT/"
 export CLOUDSDK_API_ENDPOINT_OVERRIDES_CLOUDSCHEDULER="$CLOUDRIG_ENDPOINT/"
@@ -35,6 +41,7 @@ export CLOUDSDK_API_ENDPOINT_OVERRIDES_FIRESTORE="$CLOUDRIG_ENDPOINT/"
 echo "gcloud -> $CLOUDRIG_ENDPOINT (project $CLOUDSDK_CORE_PROJECT)"
 echo "run    -> $CLOUDSDK_API_ENDPOINT_OVERRIDES_RUN"
 echo "pubsub -> $PUBSUB_EMULATOR_HOST"
+echo "spanner -> $SPANNER_EMULATOR_HOST (cloudrig start --with-spanner)"
 # This shell now answers every gcloud call from the emulator, so a lookup meant
 # for a real project comes back empty rather than failing. Say how to undo it.
 echo "back to real GCP: . ./cloudrig-env-off.sh"

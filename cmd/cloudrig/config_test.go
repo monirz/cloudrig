@@ -307,3 +307,61 @@ func TestParseFnRun(t *testing.T) {
 		})
 	}
 }
+
+func TestParseConfigSpanner(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		args     []string
+		env      map[string]string
+		wantOn   bool
+		wantPort int
+		wantErr  string
+	}{
+		{name: "off by default, on the emulator's own port", args: []string{"start"}, wantPort: 9010},
+		{name: "the flag", args: []string{"start", "--with-spanner", "--spanner-port", "19010"}, wantOn: true, wantPort: 19010},
+		{
+			name:   "the environment",
+			args:   []string{"start"},
+			env:    map[string]string{"CLOUDRIG_WITH_SPANNER": "true", "CLOUDRIG_SPANNER_PORT": "19010"},
+			wantOn: true, wantPort: 19010,
+		},
+		{
+			name:     "an explicit flag beats the environment",
+			args:     []string{"start", "--with-spanner=false"},
+			env:      map[string]string{"CLOUDRIG_WITH_SPANNER": "true"},
+			wantPort: 9010,
+		},
+		{
+			name:    "a bad boolean",
+			args:    []string{"start"},
+			env:     map[string]string{"CLOUDRIG_WITH_SPANNER": "maybe"},
+			wantErr: "CLOUDRIG_WITH_SPANNER",
+		},
+		{
+			// REST sits ten above gRPC, so that must fit too.
+			name:    "a port with no room for REST",
+			args:    []string{"start", "--with-spanner", "--spanner-port", "65530"},
+			wantErr: "--spanner-port",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			cfg, err := parseConfig(tc.args, env(tc.env), io.Discard)
+			if tc.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("err = %v, want one naming %s", err, tc.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if cfg.withSpanner != tc.wantOn || cfg.spannerPort != tc.wantPort {
+				t.Errorf("spanner = %v on %d, want %v on %d", cfg.withSpanner, cfg.spannerPort, tc.wantOn, tc.wantPort)
+			}
+		})
+	}
+}
