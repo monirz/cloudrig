@@ -35,3 +35,6 @@ export CLOUDSDK_API_ENDPOINT_OVERRIDES_FIRESTORE="$CLOUDRIG_ENDPOINT/"
 echo "gcloud -> $CLOUDRIG_ENDPOINT (project $CLOUDSDK_CORE_PROJECT)"
 echo "run    -> $CLOUDSDK_API_ENDPOINT_OVERRIDES_RUN"
 echo "pubsub -> $PUBSUB_EMULATOR_HOST"
+# This shell now answers every gcloud call from the emulator, so a lookup meant
+# for a real project comes back empty rather than failing. Say how to undo it.
+echo "back to real GCP: . ./cloudrig-env-off.sh"
