@@ -10,6 +10,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/emptypb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/monirz/cloudrig/core/gerr"
@@ -19,8 +20,8 @@ import (
 // google.storage.control.v2.StorageControl, which is the transport Google's
 // StorageControlClient uses by default.
 //
-// Folders, storage layout and caches answer Unimplemented, as does every
-// managed-folder call other than create, get and the IAM pair.
+// Folders, storage layout and caches answer Unimplemented, as do listing and
+// updating managed folders over gRPC.
 type Control struct {
 	controlpb.UnimplementedStorageControlServer
 	svc *Service
@@ -64,6 +65,19 @@ func (c *Control) GetManagedFolder(ctx context.Context, req *controlpb.GetManage
 		return nil, status.Errorf(codes.FailedPrecondition, "metageneration is %d", f.Metageneration)
 	}
 	return toProtoFolder(f), nil
+}
+
+// DeleteManagedFolder removes a folder and its policy. One with objects under
+// it needs allow_non_empty.
+func (c *Control) DeleteManagedFolder(ctx context.Context, req *controlpb.DeleteManagedFolderRequest) (*emptypb.Empty, error) {
+	project, bucket, folder, err := c.parseFolder(ctx, req.GetName())
+	if err != nil {
+		return nil, err
+	}
+	if err := c.svc.DeleteManagedFolder(ctx, project, bucket, folder, req.GetAllowNonEmpty()); err != nil {
+		return nil, grpcError(err)
+	}
+	return &emptypb.Empty{}, nil
 }
 
 // GetIamPolicy returns a folder's policy as stored, or an empty one. The

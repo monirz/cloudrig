@@ -182,17 +182,18 @@ func (s *Service) DeleteBucket(ctx context.Context, project, name string) error 
 	if len(live) > 0 {
 		return conflict("The bucket you tried to delete is not empty.", name)
 	}
+	// Managed folders count too: gcloud storage rm -r deletes them first.
+	if has, err := s.hasManagedFolders(ctx, project, name); err != nil {
+		return err
+	} else if has {
+		return conflict("The bucket you tried to delete is not empty: it holds managed folders.", name)
+	}
 
 	if err := s.kv.Delete(ctx, resource.Bucket(project, name), 0); err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			return notFoundBucket(name)
 		}
 		return gerr.Wrap(err, gerr.Internal, "deleting bucket metadata")
-	}
-	// GCS refuses to delete a bucket that still holds managed folders, but
-	// cloudrig cannot delete one, so it drops them with the bucket instead.
-	if err := s.dropManagedFolders(ctx, project, name); err != nil {
-		return err
 	}
 	// The name is released last: while the metadata exists the claim must
 	// stand, or a concurrent create could take a name still in use.

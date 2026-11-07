@@ -192,3 +192,40 @@ func TestStorageControlOutOfScope(t *testing.T) {
 		t.Errorf("GetStorageLayout: %v, want Unimplemented", err)
 	}
 }
+
+// gcloud storage rm -r lists a bucket's managed folders, deletes each over the
+// JSON API, then deletes the bucket; the Python client deletes over gRPC.
+func TestManagedFolderDelete(t *testing.T) {
+	c, ctx, base := controlClient(t)
+	for _, id := range []string{"tenants/acme/", "logs/"} {
+		if _, err := c.CreateManagedFolder(ctx, &controlpb.CreateManagedFolderRequest{Parent: bucketName, ManagedFolderId: id}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	del := func(path string) int {
+		t.Helper()
+		req, _ := http.NewRequest(http.MethodDelete, base+path, nil)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		return resp.StatusCode
+	}
+
+	if got := del("/storage/v1/b/bkt"); got != http.StatusConflict {
+		t.Errorf("deleting a bucket holding folders = %d, want 409", got)
+	}
+	if got := del("/storage/v1/b/bkt/managedFolders/tenants%2Facme%2F"); got != http.StatusNoContent {
+		t.Errorf("JSON delete = %d, want 204", got)
+	}
+	if err := c.DeleteManagedFolder(ctx, &controlpb.DeleteManagedFolderRequest{Name: bucketName + "/managedFolders/logs/"}); err != nil {
+		t.Errorf("gRPC delete: %v", err)
+	}
+	if err := c.DeleteManagedFolder(ctx, &controlpb.DeleteManagedFolderRequest{Name: bucketName + "/managedFolders/logs/"}); status.Code(err) != codes.NotFound {
+		t.Errorf("second delete: %v, want NotFound", err)
+	}
+	if got := del("/storage/v1/b/bkt"); got != http.StatusNoContent {
+		t.Errorf("deleting the emptied bucket = %d, want 204", got)
+	}
+}
