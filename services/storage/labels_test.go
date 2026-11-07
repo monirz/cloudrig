@@ -21,7 +21,7 @@ import (
 func TestBucketLabelsArePersisted(t *testing.T) {
 	t.Parallel()
 
-	path := filepath.Join(t.TempDir(), "metadata.json")
+	path := filepath.Join(t.TempDir(), "metadata.db")
 	blobs, err := blob.NewTemp()
 	if err != nil {
 		t.Fatal(err)
@@ -30,9 +30,9 @@ func TestBucketLabelsArePersisted(t *testing.T) {
 	clk := clock.NewFake(epoch)
 
 	// start opens the store at path and serves the JSON API over it. stop
-	// closes both, flushing the snapshot as a daemon shutdown would.
+	// closes both, as a daemon shutdown would.
 	start := func() (url string, stop func()) {
-		kv, err := store.OpenPersistent(path, clk)
+		kv, err := store.OpenBolt(path)
 		if err != nil {
 			t.Fatal(err)
 		}
