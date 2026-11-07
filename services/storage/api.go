@@ -209,13 +209,34 @@ func (a *API) storageLayout(w http.ResponseWriter, r *http.Request, p transport.
 	})
 }
 
-// listManagedFolders answers empty: managed folders are not modelled, and
+// listManagedFolders lists the folders created through Storage Control.
 // gcloud storage rm -r lists them before deleting a bucket.
 func (a *API) listManagedFolders(w http.ResponseWriter, r *http.Request, p transport.Params) error {
-	if _, err := a.svc.ProjectOf(r.Context(), p["bucket"]); err != nil {
+	project, err := a.svc.ProjectOf(r.Context(), p["bucket"])
+	if err != nil {
 		return err
 	}
-	return writeJSON(w, http.StatusOK, map[string]any{"kind": "storage#managedFolders"})
+	q := r.URL.Query()
+	maxResults, err := optionalInt(q, "maxResults")
+	if err != nil {
+		return err
+	}
+	folders, next, err := a.svc.ListManagedFolders(r.Context(), project, p["bucket"], q.Get("prefix"), int(maxResults), q.Get("pageToken"))
+	if err != nil {
+		return err
+	}
+	resp := map[string]any{"kind": "storage#managedFolders"}
+	if len(folders) > 0 {
+		items := make([]apiManagedFolder, len(folders))
+		for i, f := range folders {
+			items[i] = toAPIManagedFolder(f, baseURL(r))
+		}
+		resp["items"] = items
+	}
+	if next != "" {
+		resp["nextPageToken"] = next
+	}
+	return writeJSON(w, http.StatusOK, resp)
 }
 
 func (a *API) listObjects(w http.ResponseWriter, r *http.Request, p transport.Params) error {

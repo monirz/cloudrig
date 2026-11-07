@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -137,4 +138,28 @@ func (n *wireInt64) UnmarshalJSON(b []byte) error {
 	}
 	*n = wireInt64(v)
 	return nil
+}
+
+type apiManagedFolder struct {
+	Kind           string `json:"kind"`
+	ID             string `json:"id"`
+	Name           string `json:"name"`
+	Bucket         string `json:"bucket"`
+	Metageneration string `json:"metageneration"`
+	CreateTime     string `json:"createTime"`
+	UpdateTime     string `json:"updateTime"`
+	SelfLink       string `json:"selfLink,omitempty"`
+}
+
+func toAPIManagedFolder(f ManagedFolder, base string) apiManagedFolder {
+	return apiManagedFolder{
+		Kind:           "storage#managedFolder",
+		ID:             f.Bucket + "/" + f.Name,
+		Name:           f.Name,
+		Bucket:         f.Bucket,
+		Metageneration: strconv.FormatInt(f.Metageneration, 10),
+		CreateTime:     rfc3339(f.Created),
+		UpdateTime:     rfc3339(f.Updated),
+		SelfLink:       base + "/storage/v1/b/" + f.Bucket + "/managedFolders/" + url.PathEscape(f.Name),
+	}
 }

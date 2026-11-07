@@ -11,6 +11,7 @@ require (
 	cloud.google.com/go/cloudtasks v1.19.0
 	cloud.google.com/go/container v1.54.0
 	cloud.google.com/go/firestore v1.25.0
+	cloud.google.com/go/iam v1.12.0
 	cloud.google.com/go/kms v1.36.0
 	cloud.google.com/go/logging v1.19.1
 	cloud.google.com/go/monitoring v1.30.0
@@ -36,7 +37,6 @@ require (
 	cloud.google.com/go/auth v0.23.2 // indirect
 	cloud.google.com/go/auth/oauth2adapt v0.2.8 // indirect
 	cloud.google.com/go/compute/metadata v0.9.0 // indirect
-	cloud.google.com/go/iam v1.12.0 // indirect
 	cloud.google.com/go/longrunning v1.2.0 // indirect
 	github.com/GoogleCloudPlatform/opentelemetry-operations-go/detectors/gcp v1.33.0 // indirect
 	github.com/GoogleCloudPlatform/opentelemetry-operations-go/exporter/metric v0.57.0 // indirect

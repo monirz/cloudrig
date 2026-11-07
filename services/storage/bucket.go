@@ -189,6 +189,11 @@ func (s *Service) DeleteBucket(ctx context.Context, project, name string) error 
 		}
 		return gerr.Wrap(err, gerr.Internal, "deleting bucket metadata")
 	}
+	// GCS refuses to delete a bucket that still holds managed folders, but
+	// cloudrig cannot delete one, so it drops them with the bucket instead.
+	if err := s.dropManagedFolders(ctx, project, name); err != nil {
+		return err
+	}
 	// The name is released last: while the metadata exists the claim must
 	// stand, or a concurrent create could take a name still in use.
 	if err := s.kv.Delete(ctx, resource.BucketIndex(name), 0); err != nil && !errors.Is(err, store.ErrNotFound) {

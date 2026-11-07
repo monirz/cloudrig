@@ -32,6 +32,7 @@ import (
 	"cloud.google.com/go/pubsub/v2/apiv1/pubsubpb"
 	"cloud.google.com/go/scheduler/apiv1/schedulerpb"
 	"cloud.google.com/go/secretmanager/apiv1/secretmanagerpb"
+	"cloud.google.com/go/storage/control/apiv2/controlpb"
 	"google.golang.org/grpc"
 
 	"github.com/monirz/cloudrig/core/clock"
@@ -183,7 +184,7 @@ func Start(ctx context.Context, o Options) (*Emulator, error) {
 	// have run.
 	drain := func() { drainAsync(cssvc, bus, ctsvc) }
 	snap := stateSnapshot{kv: stack.kvStore, blobs: stack.blobs, faults: flt, clk: clk, pubsub: psvc}
-	handler, closeAPIs := newHandler(clk, o, reg, runReg, stack.svc, psvc, smsvc, ctsvc, cssvc, susvc, gksvc, lgsvc, newGRPC(clk, flt, psvc, fsvc, smsvc, kmsvc, mnsvc, ctsvc, cssvc, gksvc, lgsvc), flt, snap, drain)
+	handler, closeAPIs := newHandler(clk, o, reg, runReg, stack.svc, psvc, smsvc, ctsvc, cssvc, susvc, gksvc, lgsvc, newGRPC(clk, flt, stack.svc, psvc, fsvc, smsvc, kmsvc, mnsvc, ctsvc, cssvc, gksvc, lgsvc), flt, snap, drain)
 	srv := &http.Server{
 		Handler:   handler,
 		Protocols: transport.Protocols(), // HTTP/1.1 and h2c on one port
@@ -439,7 +440,7 @@ func serveForTest(t testing.TB, o Options, stack storageStack) *Emulator {
 	t.Cleanup(runReg.StopAll)
 	drain := func() { drainAsync(cssvc, bus, ctsvc) }
 	snap := stateSnapshot{kv: stack.kvStore, blobs: stack.blobs, faults: flt, clk: o.Clock, pubsub: psvc}
-	handler, closeAPIs := newHandler(o.Clock, o, reg, runReg, stack.svc, psvc, smsvc, ctsvc, cssvc, susvc, gksvc, lgsvc, newGRPC(o.Clock, flt, psvc, fsvc, smsvc, kmsvc, mnsvc, ctsvc, cssvc, gksvc, lgsvc), flt, snap, drain)
+	handler, closeAPIs := newHandler(o.Clock, o, reg, runReg, stack.svc, psvc, smsvc, ctsvc, cssvc, susvc, gksvc, lgsvc, newGRPC(o.Clock, flt, stack.svc, psvc, fsvc, smsvc, kmsvc, mnsvc, ctsvc, cssvc, gksvc, lgsvc), flt, snap, drain)
 	t.Cleanup(closeAPIs)
 
 	srv := httptest.NewUnstartedServer(handler)
@@ -541,7 +542,7 @@ func publishTo(ps *pubsub.Service) cloudscheduler.PublishFunc {
 //
 // Requests reach it through the transport's h2c dispatch, so gRPC and REST
 // share the one port.
-func newGRPC(clk clock.Clock, flt *faults.Set, ps *pubsub.Service, fs *firestore.Service, sm *secretmanager.Service, km *kms.Service, mn *monitoring.Service, ct *cloudtasks.Service, cs *cloudscheduler.Service, gk *gke.Service, lg *cloudlogging.Service) *grpc.Server {
+func newGRPC(clk clock.Clock, flt *faults.Set, gcs *storage.Service, ps *pubsub.Service, fs *firestore.Service, sm *secretmanager.Service, km *kms.Service, mn *monitoring.Service, ct *cloudtasks.Service, cs *cloudscheduler.Service, gk *gke.Service, lg *cloudlogging.Service) *grpc.Server {
 	// The fault interceptor applies the same rules to unary gRPC calls that the
 	// REST path applies to HTTP, so cloudrig fault reaches gRPC-first services.
 	srv := grpc.NewServer(grpc.UnaryInterceptor(flt.UnaryServerInterceptor(clk)))
@@ -555,6 +556,7 @@ func newGRPC(clk clock.Clock, flt *faults.Set, ps *pubsub.Service, fs *firestore
 	schedulerpb.RegisterCloudSchedulerServer(srv, cs)
 	containerpb.RegisterClusterManagerServer(srv, gk)
 	loggingpb.RegisterLoggingServiceV2Server(srv, lg)
+	controlpb.RegisterStorageControlServer(srv, storage.NewControl(gcs))
 	return srv
 }
 

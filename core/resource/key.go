@@ -146,3 +146,28 @@ func pad(generation int64) string {
 	}
 	return strings.Repeat("0", genDigits-len(s)) + s
 }
+
+// ManagedFolder is the key holding a managed folder's metadata. The name ends
+// in a slash, so "a/" and "a/b/" are distinct keys and a prefix scan for "a/"
+// finds both.
+//
+//	p/{project}/b/{bucket}/mf/{name}
+func ManagedFolder(project, bucket, name string) string {
+	return ManagedFolderPrefix(project, bucket) + name
+}
+
+// ManagedFolderPrefix covers every managed folder in a bucket.
+func ManagedFolderPrefix(project, bucket string) string {
+	return Bucket(project, bucket) + "/mf/"
+}
+
+// ManagedFolderIAM is the key holding a managed folder's IAM policy. It sits
+// outside ManagedFolderPrefix so listing folders never meets a policy.
+func ManagedFolderIAM(project, bucket, name string) string {
+	return ManagedFolderIAMPrefix(project, bucket) + name
+}
+
+// ManagedFolderIAMPrefix covers every managed folder policy in a bucket.
+func ManagedFolderIAMPrefix(project, bucket string) string {
+	return Bucket(project, bucket) + "/mfiam/"
+}
