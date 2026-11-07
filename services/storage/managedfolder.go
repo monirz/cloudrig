@@ -2,6 +2,8 @@ package storage
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -27,6 +29,11 @@ type ManagedFolder struct {
 	Metageneration int64     `json:"metageneration"`
 	Created        time.Time `json:"createTime"`
 	Updated        time.Time `json:"updateTime"`
+
+	// Incarnation is drawn at random on create. It goes into the policy etag,
+	// so an etag read before a folder was deleted and created again never
+	// matches the new folder's policy, whose store version starts over.
+	Incarnation uint64 `json:"incarnation"`
 }
 
 // ManagedFolderName normalises a folder id as GCS does: a leading slash is
@@ -60,8 +67,15 @@ func (s *Service) CreateManagedFolder(ctx context.Context, project, bucket, id s
 		return ManagedFolder{}, err
 	}
 
+	var nonce [8]byte
+	if _, err := rand.Read(nonce[:]); err != nil {
+		return ManagedFolder{}, gerr.Wrap(err, gerr.Internal, "drawing the folder's incarnation")
+	}
 	now := s.clk.Now().UTC()
-	f := ManagedFolder{Bucket: bucket, Name: name, Metageneration: 1, Created: now, Updated: now}
+	f := ManagedFolder{
+		Bucket: bucket, Name: name, Metageneration: 1, Created: now, Updated: now,
+		Incarnation: binary.BigEndian.Uint64(nonce[:]),
+	}
 	raw, err := json.Marshal(f)
 	if err != nil {
 		return ManagedFolder{}, gerr.Wrap(err, gerr.Internal, "encoding the managed folder")
@@ -124,39 +138,79 @@ func (s *Service) ListManagedFolders(ctx context.Context, project, bucket, prefi
 }
 
 // ManagedFolderPolicy returns a folder's stored policy, opaque to this layer,
-// and the store version it is at. With no policy set it returns nil and 0.
-func (s *Service) ManagedFolderPolicy(ctx context.Context, project, bucket, id string) ([]byte, uint64, error) {
+// and its etag. With no policy set the policy is nil.
+func (s *Service) ManagedFolderPolicy(ctx context.Context, project, bucket, id string) (policy, etag []byte, err error) {
 	f, err := s.GetManagedFolder(ctx, project, bucket, id)
 	if err != nil {
-		return nil, 0, err
+		return nil, nil, err
 	}
 	raw, version, err := s.kv.Get(ctx, resource.ManagedFolderIAM(project, bucket, f.Name))
 	if errors.Is(err, store.ErrNotFound) {
-		return nil, 0, nil
+		return nil, policyEtag(f, 0), nil
 	}
 	if err != nil {
-		return nil, 0, gerr.Wrap(err, gerr.Internal, "reading the managed folder's IAM policy")
+		return nil, nil, gerr.Wrap(err, gerr.Internal, "reading the managed folder's IAM policy")
 	}
-	return raw, version, nil
+	return raw, policyEtag(f, version), nil
 }
 
-// SetManagedFolderPolicy stores a folder's policy if it is still at
-// ifVersion (0: none set yet), and returns the new version. A policy changed
-// in between is Aborted, which is what IAM answers to a stale etag.
-func (s *Service) SetManagedFolderPolicy(ctx context.Context, project, bucket, id string, policy []byte, ifVersion uint64) (uint64, error) {
+// SetManagedFolderPolicy stores a folder's policy and returns its new etag.
+// With ifEtag set, the write happens only if the policy is still the one that
+// etag was read from; a policy changed in between is Aborted, which is what
+// IAM answers. A nil ifEtag overwrites whatever is there.
+func (s *Service) SetManagedFolderPolicy(ctx context.Context, project, bucket, id string, policy, ifEtag []byte) ([]byte, error) {
 	f, err := s.GetManagedFolder(ctx, project, bucket, id)
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
-	version, err := s.kv.Put(ctx, resource.ManagedFolderIAM(project, bucket, f.Name), policy, ifVersion)
+	key := resource.ManagedFolderIAM(project, bucket, f.Name)
+
+	var ifVersion uint64
+	if ifEtag != nil {
+		incarnation, version, ok := parsePolicyEtag(ifEtag)
+		if !ok {
+			return nil, gerr.New(gerr.InvalidArgument, "The etag was not issued by this server.").
+				WithHTTPStatus(http.StatusBadRequest)
+		}
+		if incarnation != f.Incarnation {
+			return nil, concurrentPolicyChange()
+		}
+		ifVersion = version
+	} else {
+		_, current, err := s.kv.Get(ctx, key)
+		if err != nil && !errors.Is(err, store.ErrNotFound) {
+			return nil, gerr.Wrap(err, gerr.Internal, "reading the managed folder's IAM policy")
+		}
+		ifVersion = current
+	}
+
+	version, err := s.kv.Put(ctx, key, policy, ifVersion)
 	if errors.Is(err, store.ErrVersionMismatch) {
-		return 0, gerr.New(gerr.Aborted, "There were concurrent policy changes. Please retry the whole read-modify-write with exponential backoff.").
-			WithHTTPStatus(http.StatusConflict)
+		return nil, concurrentPolicyChange()
 	}
 	if err != nil {
-		return 0, gerr.Wrap(err, gerr.Internal, "storing the managed folder's IAM policy")
+		return nil, gerr.Wrap(err, gerr.Internal, "storing the managed folder's IAM policy")
 	}
-	return version, nil
+	return policyEtag(f, version), nil
+}
+
+// policyEtag is the folder's incarnation and the policy's store version. The
+// version moves on every write; the incarnation keeps a deleted and re-created
+// folder, whose versions start over, from matching an old etag.
+func policyEtag(f ManagedFolder, version uint64) []byte {
+	return binary.BigEndian.AppendUint64(binary.BigEndian.AppendUint64(nil, f.Incarnation), version)
+}
+
+func parsePolicyEtag(etag []byte) (incarnation, version uint64, ok bool) {
+	if len(etag) != 16 {
+		return 0, 0, false
+	}
+	return binary.BigEndian.Uint64(etag[:8]), binary.BigEndian.Uint64(etag[8:]), true
+}
+
+func concurrentPolicyChange() error {
+	return gerr.New(gerr.Aborted, "There were concurrent policy changes. Please retry the whole read-modify-write with exponential backoff.").
+		WithHTTPStatus(http.StatusConflict)
 }
 
 // DeleteManagedFolder removes a folder and its policy. A folder with objects

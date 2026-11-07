@@ -36,7 +36,7 @@ func TestDeleteManagedFolderThenBucket(t *testing.T) {
 	if _, err := s.CreateManagedFolder(ctx, "p", "bkt", "a/"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.SetManagedFolderPolicy(ctx, "p", "bkt", "a/", []byte("policy"), 0); err != nil {
+	if _, err := s.SetManagedFolderPolicy(ctx, "p", "bkt", "a/", []byte("policy"), nil); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.DeleteBucket(ctx, "p", "bkt"); gerr.From(err).Code != gerr.AlreadyExists {
@@ -68,5 +68,41 @@ func TestDeleteManagedFolderThenBucket(t *testing.T) {
 	}
 	if _, err := s.CreateManagedFolder(ctx, "p", "bkt", "a"); gerr.From(err).Code != gerr.AlreadyExists {
 		t.Errorf("repeat create = %v, want AlreadyExists", err)
+	}
+}
+
+// An etag read before a folder is deleted and created again must not match
+// the new folder's policy, even though its store version starts over.
+func TestPolicyEtagSurvivesRecreate(t *testing.T) {
+	s, _ := newService(t)
+	ctx := context.Background()
+	if _, err := s.CreateBucket(ctx, storage.Bucket{Name: "bkt", Project: "p"}); err != nil {
+		t.Fatal(err)
+	}
+	mk := func() {
+		t.Helper()
+		if _, err := s.CreateManagedFolder(ctx, "p", "bkt", "x/"); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.SetManagedFolderPolicy(ctx, "p", "bkt", "x/", []byte("v"), nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mk()
+	_, stale, err := s.ManagedFolderPolicy(ctx, "p", "bkt", "x/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.DeleteManagedFolder(ctx, "p", "bkt", "x/", false); err != nil {
+		t.Fatal(err)
+	}
+	mk()
+
+	if _, err := s.SetManagedFolderPolicy(ctx, "p", "bkt", "x/", []byte("w"), stale); gerr.From(err).Code != gerr.Aborted {
+		t.Errorf("set with an etag from the deleted folder = %v, want Aborted", err)
+	}
+	_, fresh, _ := s.ManagedFolderPolicy(ctx, "p", "bkt", "x/")
+	if _, err := s.SetManagedFolderPolicy(ctx, "p", "bkt", "x/", []byte("w"), fresh); err != nil {
+		t.Errorf("set with the current etag: %v", err)
 	}
 }
