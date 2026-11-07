@@ -11,6 +11,7 @@ require (
 	cloud.google.com/go/cloudtasks v1.19.0
 	cloud.google.com/go/container v1.54.0
 	cloud.google.com/go/firestore v1.25.0
+	cloud.google.com/go/kms v1.36.0
 	cloud.google.com/go/logging v1.19.1
 	cloud.google.com/go/pubsub/v2 v2.7.0
 	cloud.google.com/go/scheduler v1.16.0
@@ -57,7 +58,7 @@ require (
 	github.com/google/s2a-go v0.1.9 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/googleapis/enterprise-certificate-proxy v0.3.20 // indirect
-	github.com/googleapis/gax-go/v2 v2.24.0 // indirect
+	github.com/googleapis/gax-go/v2 v2.26.2 // indirect
 	github.com/moby/docker-image-spec v1.3.1 // indirect
 	github.com/opencontainers/go-digest v1.0.0 // indirect
 	github.com/opencontainers/image-spec v1.1.1 // indirect

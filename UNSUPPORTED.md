@@ -141,6 +141,17 @@ Secret Manager:
   empty policy and testIamPermissions grants whatever is asked for, so a
   command that only wanted to read a policy is not blocked.
 
+Cloud KMS:
+
+- Every key purpose but ENCRYPT_DECRYPT, and every algorithm but
+  GOOGLE_SYMMETRIC_ENCRYPTION: asymmetric sign and decrypt, MAC, raw
+  encryption, and GetPublicKey.
+- Import jobs, key and version destruction, changing a version's state, key
+  updates, Autokey, EKM and IAM.
+- The REST API, so `gcloud kms` does not reach it; the client libraries use
+  gRPC.
+- filter and orderBy on the lists. Each list answers in one page.
+
 Cloud Tasks:
 
 - App Engine task targets; only http_request is dispatched.

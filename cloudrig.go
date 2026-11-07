@@ -26,6 +26,7 @@ import (
 	"cloud.google.com/go/cloudtasks/apiv2/cloudtaskspb"
 	"cloud.google.com/go/container/apiv1/containerpb"
 	"cloud.google.com/go/firestore/apiv1/firestorepb"
+	"cloud.google.com/go/kms/apiv1/kmspb"
 	"cloud.google.com/go/logging/apiv2/loggingpb"
 	"cloud.google.com/go/pubsub/v2/apiv1/pubsubpb"
 	"cloud.google.com/go/scheduler/apiv1/schedulerpb"
@@ -45,6 +46,7 @@ import (
 	"github.com/monirz/cloudrig/services/cloudtasks"
 	"github.com/monirz/cloudrig/services/firestore"
 	"github.com/monirz/cloudrig/services/gke"
+	"github.com/monirz/cloudrig/services/kms"
 	"github.com/monirz/cloudrig/services/pubsub"
 	"github.com/monirz/cloudrig/services/secretmanager"
 	"github.com/monirz/cloudrig/services/serviceusage"
@@ -167,6 +169,7 @@ func Start(ctx context.Context, o Options) (*Emulator, error) {
 	psvc := pubsub.New(stack.kvStore, clk, bus)
 	fsvc := firestore.New(stack.kvStore, clk)
 	smsvc := secretmanager.New(stack.kvStore, clk)
+	kmsvc := kms.New(stack.kvStore, clk)
 	ctsvc := cloudtasks.New(stack.kvStore, clk)
 	cssvc := cloudscheduler.New(stack.kvStore, clk, publishTo(psvc))
 	susvc := serviceusage.New(stack.kvStore)
@@ -177,7 +180,7 @@ func Start(ctx context.Context, o Options) (*Emulator, error) {
 	// have run.
 	drain := func() { drainAsync(cssvc, bus, ctsvc) }
 	snap := stateSnapshot{kv: stack.kvStore, blobs: stack.blobs, faults: flt, clk: clk, pubsub: psvc}
-	handler, closeAPIs := newHandler(clk, o, reg, runReg, stack.svc, psvc, smsvc, ctsvc, cssvc, susvc, gksvc, lgsvc, newGRPC(clk, flt, psvc, fsvc, smsvc, ctsvc, cssvc, gksvc, lgsvc), flt, snap, drain)
+	handler, closeAPIs := newHandler(clk, o, reg, runReg, stack.svc, psvc, smsvc, ctsvc, cssvc, susvc, gksvc, lgsvc, newGRPC(clk, flt, psvc, fsvc, smsvc, kmsvc, ctsvc, cssvc, gksvc, lgsvc), flt, snap, drain)
 	srv := &http.Server{
 		Handler:   handler,
 		Protocols: transport.Protocols(), // HTTP/1.1 and h2c on one port
@@ -423,6 +426,7 @@ func serveForTest(t testing.TB, o Options, stack storageStack) *Emulator {
 	psvc := pubsub.New(stack.kvStore, o.Clock, bus)
 	fsvc := firestore.New(stack.kvStore, o.Clock)
 	smsvc := secretmanager.New(stack.kvStore, o.Clock)
+	kmsvc := kms.New(stack.kvStore, o.Clock)
 	ctsvc := cloudtasks.New(stack.kvStore, o.Clock)
 	cssvc := cloudscheduler.New(stack.kvStore, o.Clock, publishTo(psvc))
 	susvc := serviceusage.New(stack.kvStore)
@@ -431,7 +435,7 @@ func serveForTest(t testing.TB, o Options, stack storageStack) *Emulator {
 	t.Cleanup(runReg.StopAll)
 	drain := func() { drainAsync(cssvc, bus, ctsvc) }
 	snap := stateSnapshot{kv: stack.kvStore, blobs: stack.blobs, faults: flt, clk: o.Clock, pubsub: psvc}
-	handler, closeAPIs := newHandler(o.Clock, o, reg, runReg, stack.svc, psvc, smsvc, ctsvc, cssvc, susvc, gksvc, lgsvc, newGRPC(o.Clock, flt, psvc, fsvc, smsvc, ctsvc, cssvc, gksvc, lgsvc), flt, snap, drain)
+	handler, closeAPIs := newHandler(o.Clock, o, reg, runReg, stack.svc, psvc, smsvc, ctsvc, cssvc, susvc, gksvc, lgsvc, newGRPC(o.Clock, flt, psvc, fsvc, smsvc, kmsvc, ctsvc, cssvc, gksvc, lgsvc), flt, snap, drain)
 	t.Cleanup(closeAPIs)
 
 	srv := httptest.NewUnstartedServer(handler)
@@ -533,7 +537,7 @@ func publishTo(ps *pubsub.Service) cloudscheduler.PublishFunc {
 //
 // Requests reach it through the transport's h2c dispatch, so gRPC and REST
 // share the one port.
-func newGRPC(clk clock.Clock, flt *faults.Set, ps *pubsub.Service, fs *firestore.Service, sm *secretmanager.Service, ct *cloudtasks.Service, cs *cloudscheduler.Service, gk *gke.Service, lg *cloudlogging.Service) *grpc.Server {
+func newGRPC(clk clock.Clock, flt *faults.Set, ps *pubsub.Service, fs *firestore.Service, sm *secretmanager.Service, km *kms.Service, ct *cloudtasks.Service, cs *cloudscheduler.Service, gk *gke.Service, lg *cloudlogging.Service) *grpc.Server {
 	// The fault interceptor applies the same rules to unary gRPC calls that the
 	// REST path applies to HTTP, so cloudrig fault reaches gRPC-first services.
 	srv := grpc.NewServer(grpc.UnaryInterceptor(flt.UnaryServerInterceptor(clk)))
@@ -541,6 +545,7 @@ func newGRPC(clk clock.Clock, flt *faults.Set, ps *pubsub.Service, fs *firestore
 	pubsubpb.RegisterSubscriberServer(srv, pubsub.NewSubscriber(ps))
 	firestorepb.RegisterFirestoreServer(srv, fs)
 	secretmanagerpb.RegisterSecretManagerServiceServer(srv, sm)
+	kmspb.RegisterKeyManagementServiceServer(srv, km)
 	cloudtaskspb.RegisterCloudTasksServer(srv, ct)
 	schedulerpb.RegisterCloudSchedulerServer(srv, cs)
 	containerpb.RegisterClusterManagerServer(srv, gk)
