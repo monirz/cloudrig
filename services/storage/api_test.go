@@ -1,6 +1,8 @@
 package storage_test
 
 import (
+	"encoding/json"
+	"fmt"
 	"io"
 	"maps"
 	"net/http"
@@ -280,4 +282,77 @@ func do(t *testing.T, base string, s step) (int, string) {
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(resp.Body)
 	return resp.StatusCode, string(body)
+}
+
+// TestComposeWithNullGeneration holds the body the Python client sends when it
+// composes parts made with bucket.blob(name): each source spells its unknown
+// generation as null. The body must decode, the source conditions must still
+// be checked, and copy and rewrite must take the same nulls.
+func TestComposeWithNullGeneration(t *testing.T) {
+	t.Parallel()
+
+	svc, _ := newService(t)
+	api := storage.NewAPI(svc)
+	t.Cleanup(func() { _ = api.Close() })
+	srv := httptest.NewServer(api)
+	t.Cleanup(srv.Close)
+
+	call := func(method, path, body string) (int, map[string]any) {
+		t.Helper()
+		req, err := http.NewRequest(method, srv.URL+path, strings.NewReader(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		var out map[string]any
+		_ = json.NewDecoder(resp.Body).Decode(&out)
+		return resp.StatusCode, out
+	}
+
+	if code, _ := call("POST", "/storage/v1/b?project=p", `{"name":"bkt"}`); code != http.StatusOK {
+		t.Fatalf("create bucket: %d", code)
+	}
+	gens := make([]string, 2)
+	for i := range gens {
+		code, out := call("POST", fmt.Sprintf("/upload/storage/v1/b/bkt/o?uploadType=media&name=part-%d", i), "data")
+		if code != http.StatusOK {
+			t.Fatalf("upload part-%d: %d", i, code)
+		}
+		gens[i], _ = out["generation"].(string)
+	}
+
+	compose := func(g0, g1 string) int {
+		t.Helper()
+		src := func(i int, g string) string {
+			return fmt.Sprintf(`{"name":"part-%d","generation":null,"objectPreconditions":{"ifGenerationMatch":%s}}`, i, g)
+		}
+		code, out := call("POST", "/storage/v1/b/bkt/o/whole/compose?ifGenerationMatch=0",
+			`{"sourceObjects":[`+src(0, g0)+`,`+src(1, g1)+`],"destination":{"name":"whole","contentType":null}}`)
+		if code != http.StatusOK && code != http.StatusPreconditionFailed {
+			t.Errorf("compose: %d %v", code, out)
+		}
+		return code
+	}
+	stale := gens[1] + "1"
+	if code := compose(gens[0], stale); code != http.StatusPreconditionFailed {
+		t.Errorf("compose with a stale source generation = %d, want 412", code)
+	}
+	if code := compose(gens[0], gens[1]); code != http.StatusOK {
+		t.Errorf("compose with the right source generations = %d, want 200", code)
+	}
+
+	nulls := `{"name":null,"contentType":null,"metadata":null,"generation":null}`
+	for _, path := range []string{
+		"/storage/v1/b/bkt/o/part-0/copyTo/b/bkt/o/copied?ifSourceGenerationMatch=" + gens[0],
+		"/storage/v1/b/bkt/o/part-0/rewriteTo/b/bkt/o/rewritten?ifSourceGenerationMatch=" + gens[0],
+	} {
+		if code, out := call("POST", path, nulls); code != http.StatusOK {
+			t.Errorf("POST %s with null fields = %d, want 200: %v", path, code, out)
+		}
+	}
 }
