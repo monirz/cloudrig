@@ -142,10 +142,15 @@ type composePrecondition struct {
 }
 
 // wireInt64 is an int64 the JSON API may spell as a string, as Google's client
-// does for generation, or as a number, as a hand-written request may.
+// does for generation, or as a number, as a hand-written request may. A null,
+// which the Python client sends for a source made with bucket.blob(name),
+// leaves it unset.
 type wireInt64 int64
 
 func (n *wireInt64) UnmarshalJSON(b []byte) error {
+	if string(b) == "null" {
+		return nil
+	}
 	v, err := strconv.ParseInt(strings.Trim(string(b), `"`), 10, 64)
 	if err != nil {
 		return err
